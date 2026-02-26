@@ -16,6 +16,7 @@
   import { EventsOn, EventsOff } from '../../../../wailsjs/runtime/runtime'
   import { getMessageListDensity, getMessageListSortOrder, setMessageListSortOrder } from '$lib/stores/settings.svelte'
   import { accountStore } from '$lib/stores/accounts.svelte'
+  import { getLayoutMode, hideViewer } from '$lib/stores/layout.svelte'
 
   interface Props {
     accountId?: string | null
@@ -24,6 +25,7 @@
     folderType?: string
     onConversationSelect?: (threadId: string, folderId: string, accountId: string) => void
     onReply?: (mode: 'reply' | 'reply-all' | 'forward', messageId: string) => void
+    onRowActionComplete?: () => void
     isFocused?: boolean
     isFlashing?: boolean
     showFolderToggle?: boolean
@@ -37,6 +39,7 @@
     folderType = 'inbox',
     onConversationSelect,
     onReply,
+    onRowActionComplete,
     isFocused = false,
     isFlashing = false,
     showFolderToggle = false,
@@ -742,6 +745,7 @@
   }
 
   export function handleActionComplete(autoSelectNext: boolean = false) {
+    onRowActionComplete?.()
     // Get current selection index BEFORE reload (for auto-select after delete/archive/spam)
     const currentIndex = getSelectedIndex()
     const scrollTop = listContainerRef?.scrollTop ?? 0
@@ -757,11 +761,22 @@
         }
 
         // Auto-select next message if requested
-        if (autoSelectNext && currentIndex >= 0 && searchResults.length > 0) {
-          const newIndex = Math.min(currentIndex, searchResults.length - 1)
-          const conv = searchResults[newIndex]
-          if (conv) {
-            selectConversation(conv.threadId, newIndex)
+        if (autoSelectNext) {
+          const isNarrow = getLayoutMode() === 'narrow'
+          if (isNarrow) {
+            hideViewer()
+          }
+          if (currentIndex >= 0 && searchResults.length > 0) {
+            const newIndex = Math.min(currentIndex, searchResults.length - 1)
+            const conv = searchResults[newIndex]
+            if (conv) {
+              if (isNarrow) {
+                selectedThreadId = conv.threadId
+              }
+              if (!isNarrow) {
+                selectConversation(conv.threadId, newIndex)
+              }
+            }
           }
         }
       })
@@ -783,13 +798,25 @@
 
       // Auto-select next message if requested (for delete/archive/spam actions)
       // After reload, the same index now points to what was the "next" message
-      if (autoSelectNext && currentIndex >= 0 && conversations.length > 0) {
-        const newIndex = Math.min(currentIndex, conversations.length - 1)
-        const conv = conversations[newIndex]
-        if (conv) {
-          selectConversation(conv.threadId, newIndex)
+      if (autoSelectNext) {
+        const isNarrow = getLayoutMode() === 'narrow'
+        if (isNarrow) {
+          hideViewer()
+        }
+        if (currentIndex >= 0 && conversations.length > 0) {
+          const newIndex = Math.min(currentIndex, conversations.length - 1)
+          const conv = conversations[newIndex]
+          if (conv) {
+            if (isNarrow) {
+              selectedThreadId = conv.threadId
+            }
+            if (!isNarrow) {
+              selectConversation(conv.threadId, newIndex)
+            }
+          }
         }
       }
+
     })
   }
 

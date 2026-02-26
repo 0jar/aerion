@@ -807,13 +807,13 @@ func (s *Store) GetHighestUID(folderID string) (uint32, error) {
 }
 
 // UpdateBody updates the body content of a message and marks it as fetched
-func (s *Store) UpdateBody(messageID, bodyHTML, bodyText, snippet string) error {
+func (s *Store) UpdateBody(messageID, bodyHTML, bodyText, snippet string, hasAttachments bool) error {
 	query := `
-		UPDATE messages 
-		SET body_html = ?, body_text = ?, snippet = ?, body_fetched = 1
+		UPDATE messages
+		SET body_html = ?, body_text = ?, snippet = ?, body_fetched = 1, has_attachments = ?
 		WHERE id = ?
 	`
-	_, err := s.db.Exec(query, nullString(bodyHTML), nullString(bodyText), nullString(snippet), messageID)
+	_, err := s.db.Exec(query, nullString(bodyHTML), nullString(bodyText), nullString(snippet), hasAttachments, messageID)
 	if err != nil {
 		return fmt.Errorf("failed to update body: %w", err)
 	}
@@ -1065,6 +1065,7 @@ type BodyUpdate struct {
 	BodyHTML           string
 	BodyText           string
 	Snippet            string
+	HasAttachments     bool
 	SMIMEStatus        string
 	SMIMESignerEmail   string
 	SMIMESignerSubject string
@@ -1089,6 +1090,7 @@ func (s *Store) UpdateBodiesBatch(updates []BodyUpdate) error {
 	stmt, err := tx.Prepare(`
 		UPDATE messages
 		SET body_html = ?, body_text = ?, snippet = ?, body_fetched = 1,
+		    has_attachments = ?,
 		    smime_status = ?, smime_signer_email = ?, smime_signer_subject = ?,
 		    smime_raw_body = ?, smime_encrypted = ?,
 		    pgp_raw_body = ?, pgp_encrypted = ?
@@ -1110,6 +1112,7 @@ func (s *Store) UpdateBodiesBatch(updates []BodyUpdate) error {
 		}
 		_, err := stmt.Exec(
 			nullString(u.BodyHTML), nullString(u.BodyText), nullString(u.Snippet),
+			u.HasAttachments,
 			nullString(u.SMIMEStatus), nullString(u.SMIMESignerEmail), nullString(u.SMIMESignerSubject),
 			smimeRawBody, u.SMIMEEncrypted,
 			pgpRawBody, u.PGPEncrypted,

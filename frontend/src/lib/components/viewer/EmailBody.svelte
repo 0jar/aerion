@@ -6,6 +6,7 @@
   import { setFocusedPane, focusPreviousPane, focusNextPane } from '$lib/stores/keyboard.svelte'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import { _ } from '$lib/i18n'
+  import { toasts } from '$lib/stores/toast'
 
   interface Props {
     messageId: string
@@ -299,11 +300,13 @@ ${processedHtml}
       // Use our backend OpenURL function which properly handles shell escaping
       try {
         await OpenURL(url)
+        toasts.info($_('toast.linkOpened'))
       } catch (err) {
         console.error('[EmailBody] OpenURL failed:', err)
         // Fallback to direct BrowserOpenURL
         try {
           BrowserOpenURL(url)
+          toasts.info($_('toast.linkOpened'))
         } catch (err2) {
           console.error('[EmailBody] BrowserOpenURL also failed:', err2)
         }
@@ -314,6 +317,9 @@ ${processedHtml}
   }
 
   function handleIframeMessage(event: MessageEvent) {
+    // Only handle messages from this component's iframe
+    if (event.source !== iframeElement?.contentWindow) return
+
     if (event.data?.type === 'iframe-height' && iframeElement) {
       iframeElement.style.height = `${event.data.height + 20}px`
     } else if (event.data?.type === 'iframe-ready') {

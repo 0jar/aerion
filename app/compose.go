@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,10 +13,16 @@ import (
 	goImap "github.com/emersion/go-imap/v2"
 	"github.com/hkdb/aerion/internal/account"
 	"github.com/hkdb/aerion/internal/certificate"
+	"github.com/hkdb/aerion/internal/contact"
+	"github.com/hkdb/aerion/internal/credentials"
+	"github.com/hkdb/aerion/internal/draft"
 	"github.com/hkdb/aerion/internal/folder"
 	"github.com/hkdb/aerion/internal/imap"
 	"github.com/hkdb/aerion/internal/logging"
 	"github.com/hkdb/aerion/internal/message"
+	"github.com/hkdb/aerion/internal/oauth2"
+	"github.com/hkdb/aerion/internal/pgp"
+	"github.com/hkdb/aerion/internal/smime"
 	"github.com/hkdb/aerion/internal/smtp"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -27,14 +35,241 @@ type ComposerAttachment struct {
 	Data        string `json:"data"` // Base64 encoded
 }
 
-// ============================================================================
-// Compose API - Exposed to frontend via Wails bindings
-// ============================================================================
+// composeOps holds shared dependencies for compose-related operations
+// used by both App and ComposerApp.
+type composeOps struct {
+	accountStore   *account.Store
+	folderStore    *folder.Store
+	credStore      *credentials.Store
+	certStore      *certificate.Store
+	contactStore   *contact.Store
+	oauth2Manager  *oauth2.Manager
+	smimeStore     *smime.Store
+	smimeSigner    *smime.Signer
+	smimeEncryptor *smime.Encryptor
+	pgpStore       *pgp.Store
+	pgpSigner      *pgp.Signer
+	pgpEncryptor   *pgp.Encryptor
+	draftOps       *draftOps // for draft cleanup on send
+}
 
-// SendMessage sends an email via SMTP.
-// The message is composed in the frontend and sent to the backend.
-func (a *App) SendMessage(accountID string, msg smtp.ComposeMessage) error {
-	log := logging.WithComponent("app")
+// getValidOAuthToken returns a valid OAuth token, refreshing if needed.
+// ctx is the caller's Wails context (for EventsEmit on reauth).
+func (ops *composeOps) getValidOAuthToken(ctx context.Context, accountID string) (*credentials.OAuthTokens, error) {
+	log := logging.WithComponent("composeOps")
+
+	tokens, err := ops.credStore.GetOAuthTokens(accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get OAuth tokens: %w", err)
+	}
+
+	// Check if token expires within 5 minutes
+	if !tokens.IsExpiringSoon(5 * time.Minute) {
+		return tokens, nil
+	}
+
+	log.Debug().
+		Str("account_id", accountID).
+		Time("expires_at", tokens.ExpiresAt).
+		Msg("OAuth token expiring soon, refreshing")
+
+	// Refresh the token
+	newTokenResp, err := ops.oauth2Manager.RefreshToken(tokens.Provider, tokens.RefreshToken)
+	if err != nil {
+		log.Error().Err(err).
+			Str("account_id", accountID).
+			Msg("OAuth token refresh failed")
+
+		// Emit event for frontend to prompt re-authorization
+		wailsRuntime.EventsEmit(ctx, "oauth:reauth-required", map[string]interface{}{
+			"accountId": accountID,
+			"provider":  tokens.Provider,
+			"error":     err.Error(),
+		})
+
+		return nil, fmt.Errorf("OAuth token refresh failed, re-authorization required: %w", err)
+	}
+
+	// Calculate new expiry time
+	expiresAt := time.Now().Add(time.Duration(newTokenResp.ExpiresIn) * time.Second)
+
+	// Update tokens in store
+	tokens.AccessToken = newTokenResp.AccessToken
+	tokens.ExpiresAt = expiresAt
+	if newTokenResp.RefreshToken != "" {
+		tokens.RefreshToken = newTokenResp.RefreshToken
+	}
+
+	if err := ops.credStore.SetOAuthTokens(accountID, tokens); err != nil {
+		log.Warn().Err(err).Msg("Failed to save refreshed OAuth tokens")
+		// Continue anyway - we have valid tokens in memory
+	}
+
+	log.Info().
+		Str("account_id", accountID).
+		Time("new_expires_at", expiresAt).
+		Msg("OAuth token refreshed successfully")
+
+	return tokens, nil
+}
+
+// getIMAPCredentials returns IMAP credentials for an account.
+// Handles both password and OAuth2 authentication.
+func (ops *composeOps) getIMAPCredentials(ctx context.Context, accountID string) (*imap.ClientConfig, error) {
+	acc, err := ops.accountStore.Get(accountID)
+	if err != nil {
+		return nil, err
+	}
+	if acc == nil {
+		return nil, fmt.Errorf("account not found: %s", accountID)
+	}
+
+	config := imap.DefaultConfig()
+	config.Host = acc.IMAPHost
+	config.Port = acc.IMAPPort
+	config.Security = imap.SecurityType(acc.IMAPSecurity)
+	config.Username = acc.Username
+	config.TLSConfig = certificate.BuildTLSConfig(acc.IMAPHost, ops.certStore)
+
+	switch acc.AuthType {
+	case account.AuthOAuth2:
+		tokens, err := ops.getValidOAuthToken(ctx, accountID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get OAuth token: %w", err)
+		}
+		config.AuthType = imap.AuthTypeOAuth2
+		config.AccessToken = tokens.AccessToken
+	default:
+		password, err := ops.credStore.GetPassword(accountID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get password: %w", err)
+		}
+		config.AuthType = imap.AuthTypePassword
+		config.Password = password
+	}
+
+	return &config, nil
+}
+
+// saveToSentFolder appends the sent message to the Sent folder via IMAP.
+func (ops *composeOps) saveToSentFolder(ctx context.Context, accountID string, acc *account.Account, rawMsg []byte) error {
+	log := logging.WithComponent("composeOps")
+
+	// Get the Sent folder path (mapping-aware: check account mapping first, then auto-detect)
+	var sentPath string
+	if acc.SentFolderPath != "" {
+		sentPath = acc.SentFolderPath
+	}
+	if sentPath == "" {
+		sentFolder, err := ops.folderStore.GetByType(accountID, folder.TypeSent)
+		if err != nil || sentFolder == nil {
+			return fmt.Errorf("no Sent folder configured or detected")
+		}
+		sentPath = sentFolder.Path
+	}
+
+	log.Debug().
+		Str("account_id", accountID).
+		Str("sent_path", sentPath).
+		Msg("Saving sent message to folder via IMAP APPEND")
+
+	// Create IMAP client
+	clientConfig, err := ops.getIMAPCredentials(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to get IMAP credentials: %w", err)
+	}
+
+	imapClient := imap.NewClient(*clientConfig)
+	if err := imapClient.Connect(); err != nil {
+		return fmt.Errorf("failed to connect to IMAP: %w", err)
+	}
+	defer imapClient.Close()
+
+	if err := imapClient.Login(); err != nil {
+		return fmt.Errorf("failed to login to IMAP: %w", err)
+	}
+
+	// Append message with \Seen flag
+	flags := []goImap.Flag{goImap.FlagSeen}
+	_, err = imapClient.AppendMessage(sentPath, flags, time.Now(), rawMsg)
+	if err != nil {
+		return fmt.Errorf("failed to append to Sent folder: %w", err)
+	}
+
+	log.Info().
+		Str("account_id", accountID).
+		Str("sent_path", sentPath).
+		Msg("Message saved to Sent folder")
+
+	return nil
+}
+
+// hasSMIMECertificate returns whether the account has a valid default S/MIME certificate.
+func (ops *composeOps) hasSMIMECertificate(accountID string) bool {
+	cert, _, err := ops.smimeStore.GetDefaultCertificate(accountID)
+	return err == nil && cert != nil && !cert.IsExpired
+}
+
+// hasPGPKey returns whether the account has a valid default PGP key.
+func (ops *composeOps) hasPGPKey(accountID string) bool {
+	key, _, err := ops.pgpStore.GetDefaultKey(accountID)
+	return err == nil && key != nil && !key.IsExpired
+}
+
+// shouldSignMessage determines whether a message should be S/MIME signed.
+func (ops *composeOps) shouldSignMessage(accountID string, perMessageOverride bool) bool {
+	if perMessageOverride {
+		return ops.hasSMIMECertificate(accountID)
+	}
+	policy, err := ops.smimeStore.GetSignPolicy(accountID)
+	if err != nil || policy != "always" {
+		return false
+	}
+	return ops.hasSMIMECertificate(accountID)
+}
+
+// shouldEncryptMessage determines whether a message should be S/MIME encrypted.
+func (ops *composeOps) shouldEncryptMessage(accountID string, perMessageOverride bool) bool {
+	if perMessageOverride {
+		return ops.hasSMIMECertificate(accountID)
+	}
+	policy, err := ops.smimeStore.GetEncryptPolicy(accountID)
+	if err != nil || policy != "always" {
+		return false
+	}
+	return ops.hasSMIMECertificate(accountID)
+}
+
+// shouldPGPSignMessage determines whether a message should be PGP signed.
+func (ops *composeOps) shouldPGPSignMessage(accountID string, perMessageOverride bool) bool {
+	if perMessageOverride {
+		return ops.hasPGPKey(accountID)
+	}
+	policy, err := ops.pgpStore.GetSignPolicy(accountID)
+	if err != nil || policy != "always" {
+		return false
+	}
+	return ops.hasPGPKey(accountID)
+}
+
+// shouldPGPEncryptMessage determines whether a message should be PGP encrypted.
+func (ops *composeOps) shouldPGPEncryptMessage(accountID string, perMessageOverride bool) bool {
+	if perMessageOverride {
+		return ops.hasPGPKey(accountID)
+	}
+	policy, err := ops.pgpStore.GetEncryptPolicy(accountID)
+	if err != nil || policy != "always" {
+		return false
+	}
+	return ops.hasPGPKey(accountID)
+}
+
+// sendMessage performs the full send flow: build RFC822, sign, encrypt, SMTP send,
+// save to Sent folder, add recipients to contacts, and optionally delete a draft.
+// When d is non-nil, the draft is fully cleaned up (IMAP + message row + DB) after
+// a successful send. Returns the account for callers that need it post-send.
+func (ops *composeOps) sendMessage(ctx context.Context, accountID string, msg smtp.ComposeMessage, d *draft.Draft) (*account.Account, error) {
+	log := logging.WithComponent("composeOps")
 
 	log.Info().
 		Str("accountID", accountID).
@@ -44,58 +279,57 @@ func (a *App) SendMessage(accountID string, msg smtp.ComposeMessage) error {
 		Msg("Sending message")
 
 	// Get account
-	acc, err := a.accountStore.Get(accountID)
+	acc, err := ops.accountStore.Get(accountID)
 	if err != nil {
-		return fmt.Errorf("failed to get account: %w", err)
+		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
 	if acc == nil {
-		return fmt.Errorf("account not found: %s", accountID)
+		return nil, fmt.Errorf("account not found: %s", accountID)
 	}
 
 	// Build RFC822 message
 	rawMsg, err := msg.ToRFC822()
 	if err != nil {
-		return fmt.Errorf("failed to build message: %w", err)
+		return nil, fmt.Errorf("failed to build message: %w", err)
 	}
 
-	// The sender's email determines which cert/key to use
 	fromEmail := msg.From.Address
 
 	// S/MIME signing (if configured for this account/message)
-	if a.shouldSignMessage(accountID, msg.SignMessage) {
-		signedMsg, signErr := a.smimeSigner.SignMessage(accountID, fromEmail, rawMsg)
+	if ops.shouldSignMessage(accountID, msg.SignMessage) {
+		signedMsg, signErr := ops.smimeSigner.SignMessage(accountID, fromEmail, rawMsg)
 		if signErr != nil {
-			return fmt.Errorf("failed to sign message: %w", signErr)
+			return nil, fmt.Errorf("failed to sign message: %w", signErr)
 		}
 		rawMsg = signedMsg
 		log.Info().Str("accountID", accountID).Msg("Message signed with S/MIME")
 	}
 
-	// S/MIME encryption (if configured for this account/message) — sign-then-encrypt per RFC 5751
-	if a.shouldEncryptMessage(accountID, msg.EncryptMessage) {
-		encryptedMsg, encErr := a.smimeEncryptor.EncryptMessage(accountID, fromEmail, msg.AllRecipients(), rawMsg)
+	// S/MIME encryption (if configured) — sign-then-encrypt per RFC 5751
+	if ops.shouldEncryptMessage(accountID, msg.EncryptMessage) {
+		encryptedMsg, encErr := ops.smimeEncryptor.EncryptMessage(accountID, fromEmail, msg.AllRecipients(), rawMsg)
 		if encErr != nil {
-			return fmt.Errorf("failed to encrypt message: %w", encErr)
+			return nil, fmt.Errorf("failed to encrypt message: %w", encErr)
 		}
 		rawMsg = encryptedMsg
 		log.Info().Str("accountID", accountID).Msg("Message encrypted with S/MIME")
 	}
 
 	// PGP signing (mutually exclusive with S/MIME — only if S/MIME sign was not applied)
-	if !msg.SignMessage && a.shouldPGPSignMessage(accountID, msg.PGPSignMessage) {
-		signedMsg, signErr := a.pgpSigner.SignMessage(accountID, fromEmail, rawMsg)
+	if !msg.SignMessage && ops.shouldPGPSignMessage(accountID, msg.PGPSignMessage) {
+		signedMsg, signErr := ops.pgpSigner.SignMessage(accountID, fromEmail, rawMsg)
 		if signErr != nil {
-			return fmt.Errorf("failed to PGP sign message: %w", signErr)
+			return nil, fmt.Errorf("failed to PGP sign message: %w", signErr)
 		}
 		rawMsg = signedMsg
 		log.Info().Str("accountID", accountID).Msg("Message signed with PGP")
 	}
 
 	// PGP encryption (mutually exclusive with S/MIME — only if S/MIME encrypt was not applied)
-	if !msg.EncryptMessage && a.shouldPGPEncryptMessage(accountID, msg.PGPEncryptMessage) {
-		encryptedMsg, encErr := a.pgpEncryptor.EncryptMessage(accountID, fromEmail, msg.AllRecipients(), rawMsg)
+	if !msg.EncryptMessage && ops.shouldPGPEncryptMessage(accountID, msg.PGPEncryptMessage) {
+		encryptedMsg, encErr := ops.pgpEncryptor.EncryptMessage(accountID, fromEmail, msg.AllRecipients(), rawMsg)
 		if encErr != nil {
-			return fmt.Errorf("failed to PGP encrypt message: %w", encErr)
+			return nil, fmt.Errorf("failed to PGP encrypt message: %w", encErr)
 		}
 		rawMsg = encryptedMsg
 		log.Info().Str("accountID", accountID).Msg("Message encrypted with PGP")
@@ -107,22 +341,21 @@ func (a *App) SendMessage(accountID string, msg smtp.ComposeMessage) error {
 	smtpConfig.Port = acc.SMTPPort
 	smtpConfig.Security = smtp.SecurityType(acc.SMTPSecurity)
 	smtpConfig.Username = acc.Username
-	smtpConfig.TLSConfig = certificate.BuildTLSConfig(acc.SMTPHost, a.certStore)
+	smtpConfig.TLSConfig = certificate.BuildTLSConfig(acc.SMTPHost, ops.certStore)
 
 	// Handle authentication based on auth type
-	if acc.AuthType == account.AuthOAuth2 {
-		// Get valid OAuth token (refreshing if needed)
-		tokens, err := a.getValidOAuthToken(accountID)
-		if err != nil {
-			return fmt.Errorf("failed to get OAuth token: %w", err)
+	switch acc.AuthType {
+	case account.AuthOAuth2:
+		tokens, tokenErr := ops.getValidOAuthToken(ctx, accountID)
+		if tokenErr != nil {
+			return nil, fmt.Errorf("failed to get OAuth token: %w", tokenErr)
 		}
 		smtpConfig.AuthType = smtp.AuthTypeOAuth2
 		smtpConfig.AccessToken = tokens.AccessToken
-	} else {
-		// Default to password authentication
-		password, err := a.credStore.GetPassword(accountID)
-		if err != nil {
-			return fmt.Errorf("failed to get password: %w", err)
+	default:
+		password, passErr := ops.credStore.GetPassword(accountID)
+		if passErr != nil {
+			return nil, fmt.Errorf("failed to get password: %w", passErr)
 		}
 		smtpConfig.AuthType = smtp.AuthTypePassword
 		smtpConfig.Password = password
@@ -130,51 +363,152 @@ func (a *App) SendMessage(accountID string, msg smtp.ComposeMessage) error {
 
 	client := smtp.NewClient(smtpConfig)
 
-	// Connect
 	if err := client.Connect(); err != nil {
-		return fmt.Errorf("failed to connect to SMTP server: %w", err)
+		return nil, fmt.Errorf("failed to connect to SMTP server: %w", err)
 	}
 	defer client.Close()
 
-	// Login
 	if err := client.Login(); err != nil {
-		return fmt.Errorf("failed to login to SMTP server: %w", err)
+		return nil, fmt.Errorf("failed to login to SMTP server: %w", err)
 	}
 
-	// Send
 	recipients := msg.AllRecipients()
 	if len(recipients) == 0 {
-		return fmt.Errorf("no recipients specified")
+		return nil, fmt.Errorf("no recipients specified")
 	}
 
 	if err := client.SendMail(msg.From.Address, recipients, rawMsg); err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
+		return nil, fmt.Errorf("failed to send message: %w", err)
 	}
 
 	// Save to Sent folder (using IMAP APPEND) if provider doesn't auto-save
 	if !providerAutoSavesSentMail(acc.IMAPHost) {
 		log.Debug().Str("host", acc.IMAPHost).Msg("Provider doesn't auto-save, using IMAP APPEND")
-		if err := a.saveToSentFolder(accountID, acc, rawMsg); err != nil {
+		if err := ops.saveToSentFolder(ctx, accountID, acc, rawMsg); err != nil {
 			log.Warn().Err(err).Msg("Failed to save message to Sent folder")
 			// Don't fail the send operation if saving fails
 		}
-	} else {
-		log.Debug().Str("host", acc.IMAPHost).Msg("Provider auto-saves sent mail, skipping manual save")
 	}
 
 	// Add recipients to local contacts
 	for _, to := range msg.To {
-		a.contactStore.AddOrUpdate(to.Address, to.Name)
+		ops.contactStore.AddOrUpdate(to.Address, to.Name)
 	}
 	for _, cc := range msg.Cc {
-		a.contactStore.AddOrUpdate(cc.Address, cc.Name)
+		ops.contactStore.AddOrUpdate(cc.Address, cc.Name)
 	}
 
-	// Sync sent folder to get the sent message
-	go a.syncSentFolder(accountID)
+	// Delete draft if one was provided (send already succeeded — log errors, don't fail)
+	if d != nil && ops.draftOps != nil {
+		if _, delErr := ops.draftOps.deleteDraftCore(ctx, d); delErr != nil {
+			log.Warn().Err(delErr).Str("draftID", d.ID).Msg("Failed to delete draft after send")
+		}
+	}
 
 	log.Info().Str("accountID", accountID).Msg("Message sent successfully")
+	return acc, nil
+}
+
+// readFileAsAttachment reads a file and creates a ComposerAttachment.
+func readFileAsAttachment(filePath string) (*ComposerAttachment, error) {
+	log := logging.WithComponent("compose")
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	filename := filepath.Base(filePath)
+	contentType := detectContentType(filename)
+	encoded := base64.StdEncoding.EncodeToString(content)
+
+	log.Debug().
+		Str("filename", filename).
+		Str("contentType", contentType).
+		Int("size", len(content)).
+		Msg("File read as attachment")
+
+	return &ComposerAttachment{
+		Filename:    filename,
+		ContentType: contentType,
+		Size:        len(content),
+		Data:        encoded,
+	}, nil
+}
+
+// pickAttachmentFiles opens a file picker dialog and returns the selected files as attachments.
+func pickAttachmentFiles(ctx context.Context) ([]ComposerAttachment, error) {
+	log := logging.WithComponent("compose")
+
+	files, err := wailsRuntime.OpenMultipleFilesDialog(ctx, wailsRuntime.OpenDialogOptions{
+		Title: "Select Attachments",
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to show file picker dialog")
+		return nil, fmt.Errorf("failed to show file picker: %w", err)
+	}
+
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	var attachments []ComposerAttachment
+	for _, filePath := range files {
+		att, err := readFileAsAttachment(filePath)
+		if err != nil {
+			log.Warn().Err(err).Str("path", filePath).Msg("Failed to read file as attachment")
+			continue
+		}
+		attachments = append(attachments, *att)
+	}
+
+	log.Info().Int("count", len(attachments)).Msg("Files picked for attachment")
+	return attachments, nil
+}
+
+// ============================================================================
+// Compose API - Exposed to frontend via Wails bindings
+// ============================================================================
+
+// SendMessage sends an email via SMTP.
+// The message is composed in the frontend and sent to the backend.
+func (a *App) SendMessage(accountID string, msg smtp.ComposeMessage) error {
+	_, err := a.composeOps.sendMessage(a.ctx, accountID, msg, nil)
+	if err != nil {
+		return err
+	}
+	go a.syncSentFolder(accountID)
 	return nil
+}
+
+// handleExternalMailto handles a mailto URL received from a second instance.
+// Routes to inline or detached composer based on the mailto_mode setting.
+func (a *App) handleExternalMailto(rawURL string) {
+	log := logging.WithComponent("app")
+
+	mailtoData := ParseMailtoURL(rawURL)
+	if mailtoData == nil {
+		log.Warn().Str("url", rawURL).Msg("Invalid mailto URL from second instance")
+		return
+	}
+
+	mailtoMode, _ := a.settingsStore.GetMailtoMode()
+	log.Info().Str("mode", mailtoMode).Msg("Handling external mailto")
+
+	if mailtoMode == "detached" {
+		// Pick first account for detached composer
+		accounts, err := a.accountStore.List()
+		if err != nil || len(accounts) == 0 {
+			log.Warn().Msg("No accounts available for mailto")
+			return
+		}
+		a.OpenComposerWindow(accounts[0].ID, "new", "", "", rawURL)
+		return
+	}
+
+	// Inline mode: show window and emit event for frontend
+	a.ShowWindow()
+	wailsRuntime.EventsEmit(a.ctx, "mailto:external", mailtoData)
 }
 
 // syncSentFolder syncs the Sent folder for an account after sending a message
@@ -220,75 +554,7 @@ func (a *App) syncSentFolder(accountID string) error {
 
 // saveToSentFolder appends the sent message to the Sent folder via IMAP
 func (a *App) saveToSentFolder(accountID string, acc *account.Account, rawMsg []byte) error {
-	log := logging.WithComponent("app")
-
-	// Get the Sent folder path (from account mapping or auto-detected)
-	sentFolder, err := a.GetSpecialFolder(accountID, folder.TypeSent)
-	if err != nil || sentFolder == nil {
-		// Fall back to account's configured sent folder path
-		if acc.SentFolderPath == "" {
-			return fmt.Errorf("no Sent folder configured or detected")
-		}
-	}
-
-	sentPath := acc.SentFolderPath
-	if sentPath == "" && sentFolder != nil {
-		sentPath = sentFolder.Path
-	}
-
-	log.Debug().
-		Str("account_id", accountID).
-		Str("sent_path", sentPath).
-		Msg("Saving sent message to folder via IMAP APPEND")
-
-	// Create IMAP client
-	clientConfig := imap.DefaultConfig()
-	clientConfig.Host = acc.IMAPHost
-	clientConfig.Port = acc.IMAPPort
-	clientConfig.Security = imap.SecurityType(acc.IMAPSecurity)
-	clientConfig.Username = acc.Username
-	clientConfig.TLSConfig = certificate.BuildTLSConfig(acc.IMAPHost, a.certStore)
-
-	// Handle authentication based on auth type
-	if acc.AuthType == account.AuthOAuth2 {
-		tokens, err := a.getValidOAuthToken(accountID)
-		if err != nil {
-			return fmt.Errorf("failed to get OAuth token: %w", err)
-		}
-		clientConfig.AuthType = imap.AuthTypeOAuth2
-		clientConfig.AccessToken = tokens.AccessToken
-	} else {
-		password, err := a.credStore.GetPassword(accountID)
-		if err != nil {
-			return fmt.Errorf("failed to get password: %w", err)
-		}
-		clientConfig.AuthType = imap.AuthTypePassword
-		clientConfig.Password = password
-	}
-
-	imapClient := imap.NewClient(clientConfig)
-	if err := imapClient.Connect(); err != nil {
-		return fmt.Errorf("failed to connect to IMAP: %w", err)
-	}
-	defer imapClient.Close()
-
-	if err := imapClient.Login(); err != nil {
-		return fmt.Errorf("failed to login to IMAP: %w", err)
-	}
-
-	// Append message with \Seen flag
-	flags := []goImap.Flag{goImap.FlagSeen}
-	_, err = imapClient.AppendMessage(sentPath, flags, time.Now(), rawMsg)
-	if err != nil {
-		return fmt.Errorf("failed to append to Sent folder: %w", err)
-	}
-
-	log.Info().
-		Str("account_id", accountID).
-		Str("sent_path", sentPath).
-		Msg("Message saved to Sent folder")
-
-	return nil
+	return a.composeOps.saveToSentFolder(a.ctx, accountID, acc, rawMsg)
 }
 
 // PrepareReply prepares a reply message structure from an existing message.
@@ -399,6 +665,17 @@ func (a *App) PrepareReply(messageID, mode string) (*smtp.ComposeMessage, error)
 		// Leave To empty for user to fill in
 	}
 
+	// If body hasn't been fetched yet, fetch it on-demand
+	if !msg.BodyFetched {
+		log.Debug().Str("messageID", messageID).Msg("Body not yet fetched, fetching on-demand for reply")
+		updatedMsg, fetchErr := a.syncEngine.FetchMessageBody(a.ctx, msg.AccountID, messageID)
+		if fetchErr != nil {
+			log.Warn().Err(fetchErr).Msg("Failed to fetch body on-demand, reply will have empty quote")
+		} else if updatedMsg != nil {
+			msg = updatedMsg
+		}
+	}
+
 	// Build the quoted body
 	dateStr := msg.Date.Format("Mon, Jan 2 2006 at 3:04:05 PM MST")
 	sender := msg.FromEmail
@@ -406,17 +683,23 @@ func (a *App) PrepareReply(messageID, mode string) (*smtp.ComposeMessage, error)
 		sender = msg.FromName + " <" + msg.FromEmail + ">"
 	}
 
+	// For plain-text-only emails, convert text to HTML for quoting
+	quotedHTML := msg.BodyHTML
+	if quotedHTML == "" && msg.BodyText != "" {
+		quotedHTML = "<p>" + strings.ReplaceAll(escapeHTML(msg.BodyText), "\n", "<br>") + "</p>"
+	}
+
 	var htmlBody, textBody string
 	if mode == "forward" {
 		// Forward format
 		htmlBody = fmt.Sprintf("<p></p><p></p><p>---------- Forwarded message ----------<br>From: %s<br>Subject: %s<br>Date: %s<br>To: %s</p><p></p>%s",
-			escapeHTML(sender), escapeHTML(msg.Subject), escapeHTML(dateStr), escapeHTML(msg.ToList), msg.BodyHTML)
+			escapeHTML(sender), escapeHTML(msg.Subject), escapeHTML(dateStr), escapeHTML(msg.ToList), quotedHTML)
 		textBody = fmt.Sprintf("\n\n---------- Forwarded message ----------\nFrom: %s\nSubject: %s\nDate: %s\nTo: %s\n\n%s",
 			sender, msg.Subject, dateStr, msg.ToList, msg.BodyText)
 	} else {
 		// Reply format
 		citation := fmt.Sprintf("On %s, %s wrote:", dateStr, sender)
-		htmlBody = fmt.Sprintf("<p></p><p></p><p>%s</p><blockquote type=\"cite\">%s</blockquote>", escapeHTML(citation), msg.BodyHTML)
+		htmlBody = fmt.Sprintf("<p></p><p></p><p>%s</p><blockquote type=\"cite\">%s</blockquote>", escapeHTML(citation), quotedHTML)
 		textBody = fmt.Sprintf("\n\n%s\n%s", citation, quoteText(msg.BodyText))
 	}
 
@@ -491,72 +774,12 @@ func (a *App) TestSMTPConnection(host string, port int, security, username, pass
 
 // PickAttachmentFiles opens a file picker dialog and returns the selected files as attachments
 func (a *App) PickAttachmentFiles() ([]ComposerAttachment, error) {
-	log := logging.WithComponent("app")
-
-	// Show multi-file picker dialog
-	files, err := wailsRuntime.OpenMultipleFilesDialog(a.ctx, wailsRuntime.OpenDialogOptions{
-		Title: "Select Attachments",
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to show file picker dialog")
-		return nil, fmt.Errorf("failed to show file picker: %w", err)
-	}
-
-	// User cancelled
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	var attachments []ComposerAttachment
-	for _, filePath := range files {
-		att, err := a.readFileAsAttachment(filePath)
-		if err != nil {
-			log.Warn().Err(err).Str("path", filePath).Msg("Failed to read file as attachment")
-			continue
-		}
-		attachments = append(attachments, *att)
-	}
-
-	log.Info().Int("count", len(attachments)).Msg("Files picked for attachment")
-	return attachments, nil
+	return pickAttachmentFiles(a.ctx)
 }
 
 // ReadFileAsAttachment reads a file and creates a ComposerAttachment
 func (a *App) ReadFileAsAttachment(filePath string) (*ComposerAttachment, error) {
-	return a.readFileAsAttachment(filePath)
-}
-
-// readFileAsAttachment is the internal implementation
-func (a *App) readFileAsAttachment(filePath string) (*ComposerAttachment, error) {
-	log := logging.WithComponent("app")
-
-	// Read file content
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	// Get filename
-	filename := filepath.Base(filePath)
-
-	// Detect content type from extension
-	contentType := detectContentType(filename)
-
-	// Encode to base64 for JSON transport
-	encoded := encodeBase64(content)
-
-	log.Debug().
-		Str("filename", filename).
-		Str("contentType", contentType).
-		Int("size", len(content)).
-		Msg("File read as attachment")
-
-	return &ComposerAttachment{
-		Filename:    filename,
-		ContentType: contentType,
-		Size:        len(content),
-		Data:        encoded,
-	}, nil
+	return readFileAsAttachment(filePath)
 }
 
 // ============================================================================
@@ -781,41 +1004,3 @@ func detectContentType(filename string) string {
 	}
 }
 
-// encodeBase64 encodes bytes to base64 string
-func encodeBase64(data []byte) string {
-	return fmt.Sprintf("%s",
-		func() string {
-			encoded := make([]byte, (len(data)+2)/3*4)
-			base64Encode(encoded, data)
-			return string(encoded[:base64EncodedLen(len(data))])
-		}())
-}
-
-// base64 encoding table
-const base64Table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-
-func base64Encode(dst, src []byte) {
-	for len(src) >= 3 {
-		dst[0] = base64Table[src[0]>>2]
-		dst[1] = base64Table[(src[0]&0x03)<<4|src[1]>>4]
-		dst[2] = base64Table[(src[1]&0x0f)<<2|src[2]>>6]
-		dst[3] = base64Table[src[2]&0x3f]
-		src = src[3:]
-		dst = dst[4:]
-	}
-	if len(src) > 0 {
-		dst[0] = base64Table[src[0]>>2]
-		if len(src) == 1 {
-			dst[1] = base64Table[(src[0]&0x03)<<4]
-			dst[2] = '='
-		} else {
-			dst[1] = base64Table[(src[0]&0x03)<<4|src[1]>>4]
-			dst[2] = base64Table[(src[1]&0x0f)<<2]
-		}
-		dst[3] = '='
-	}
-}
-
-func base64EncodedLen(n int) int {
-	return (n + 2) / 3 * 4
-}

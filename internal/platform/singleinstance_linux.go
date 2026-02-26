@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 type linuxSingleInstanceLock struct {
 	listener   net.Listener
 	socketPath string
-	onShow     func()
+	onShow     func(data string)
 	mu         sync.Mutex
 	done       chan struct{}
 }
@@ -30,7 +31,8 @@ func NewSingleInstanceLock() SingleInstanceLock {
 }
 
 // TryLock attempts to acquire the single-instance lock.
-func (l *linuxSingleInstanceLock) TryLock() (bool, error) {
+// activateMsg is the command to send to an existing instance (e.g. "show" or "mailto:...").
+func (l *linuxSingleInstanceLock) TryLock(activateMsg string) (bool, error) {
 	log := logging.WithComponent("singleinstance")
 
 	socketPath, err := l.buildSocketPath()
@@ -52,10 +54,10 @@ func (l *linuxSingleInstanceLock) TryLock() (bool, error) {
 	// Listen failed — try to activate the existing instance
 	conn, dialErr := net.DialTimeout("unix", socketPath, 2*time.Second)
 	if dialErr == nil {
-		// Existing instance is alive — send show command
-		_, _ = conn.Write([]byte("show\n"))
+		// Existing instance is alive — send activation command
+		_, _ = conn.Write([]byte(activateMsg + "\n"))
 		conn.Close()
-		log.Info().Msg("Activated existing instance")
+		log.Info().Str("command", activateMsg).Msg("Activated existing instance")
 		return false, nil
 	}
 
@@ -74,8 +76,8 @@ func (l *linuxSingleInstanceLock) TryLock() (bool, error) {
 	return true, nil
 }
 
-// SetOnShow sets the callback invoked when a second instance requests window show.
-func (l *linuxSingleInstanceLock) SetOnShow(fn func()) {
+// SetOnShow sets the callback invoked when a second instance sends a command.
+func (l *linuxSingleInstanceLock) SetOnShow(fn func(data string)) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.onShow = fn
@@ -118,12 +120,16 @@ func (l *linuxSingleInstanceLock) handleConnection(conn net.Conn) {
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	scanner := bufio.NewScanner(conn)
+	// Limit scanner buffer to 2KB — no legitimate command exceeds this
+	scanner.Buffer(make([]byte, 2048), 2048)
 	if !scanner.Scan() {
 		return
 	}
 
 	cmd := scanner.Text()
-	if cmd != "show" {
+	// Command allowlist: only accept "show" or "mailto:..." — reject everything else
+	if cmd != "show" && !strings.HasPrefix(cmd, "mailto:") {
+		log.Warn().Str("cmd", cmd).Msg("Rejected unknown command from second instance")
 		return
 	}
 
@@ -135,8 +141,8 @@ func (l *linuxSingleInstanceLock) handleConnection(conn net.Conn) {
 		return
 	}
 
-	log.Info().Msg("Show requested by second instance")
-	fn()
+	log.Info().Str("command", cmd).Msg("Command received from second instance")
+	fn(cmd)
 }
 
 // buildSocketPath returns the path for the instance lock socket.

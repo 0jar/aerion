@@ -151,3 +151,23 @@ export function textMentionsAttachment(text: string): boolean {
   const lowerText = text.toLowerCase()
   return ATTACHMENT_KEYWORDS.some(keyword => lowerText.includes(keyword.toLowerCase()))
 }
+
+/**
+ * Parse file URIs from drag-and-drop data (text/uri-list or text/plain).
+ * Handles file:// URIs and absolute paths. Skips non-file URIs (http://, etc.)
+ * and RFC 2483 comment lines (starting with #).
+ */
+export function parseFileUris(data: string): string[] {
+  return data
+    .split(/[\r\n]+/)
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'))
+    .map(line => {
+      if (line.startsWith('file://')) {
+        return decodeURIComponent(line.slice(7))
+      }
+      if (line.startsWith('/')) return line
+      return ''
+    })
+    .filter(Boolean)
+}

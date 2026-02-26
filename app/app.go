@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"runtime"
+	"strings"
 	goSync "sync"
 	"time"
 
@@ -39,6 +41,123 @@ type MailtoData struct {
 	Bcc     []string `json:"bcc"`
 	Subject string   `json:"subject"`
 	Body    string   `json:"body"`
+}
+
+// maxMailtoURLLength is the maximum allowed length for a mailto URL (2KB)
+const maxMailtoURLLength = 2048
+
+// maxEmailLength is the maximum allowed length for an email address (RFC 5321)
+const maxEmailLength = 254
+
+// maxSubjectLength is the maximum allowed length for a subject (RFC 5322 line length)
+const maxSubjectLength = 998
+
+// maxBodyLength is the maximum allowed body length (64KB)
+const maxBodyLength = 64 * 1024
+
+// ParseMailtoURL parses a mailto: URL and extracts email data with input validation.
+// Returns nil if the URL is invalid or doesn't start with "mailto:".
+func ParseMailtoURL(rawURL string) *MailtoData {
+	if len(rawURL) > maxMailtoURLLength {
+		return nil
+	}
+	if !strings.HasPrefix(strings.ToLower(rawURL), "mailto:") {
+		return nil
+	}
+
+	data := &MailtoData{}
+
+	// Remove mailto: prefix
+	rest := rawURL[7:]
+
+	// Split into address part and query part
+	addrPart := rest
+	queryPart := ""
+	if queryStart := strings.Index(rest, "?"); queryStart != -1 {
+		addrPart = rest[:queryStart]
+		queryPart = rest[queryStart+1:]
+	}
+
+	// Parse To addresses (comma-separated, URL-encoded)
+	if addrPart != "" {
+		decoded, err := url.QueryUnescape(addrPart)
+		if err == nil {
+			addrPart = decoded
+		}
+		for _, addr := range strings.Split(addrPart, ",") {
+			addr = sanitizeField(strings.TrimSpace(addr))
+			if addr == "" || !isValidEmail(addr) {
+				continue
+			}
+			data.To = append(data.To, addr)
+		}
+	}
+
+	// Parse query parameters
+	if queryPart == "" {
+		return data
+	}
+
+	params, err := url.ParseQuery(queryPart)
+	if err != nil {
+		return data
+	}
+
+	if subject := params.Get("subject"); subject != "" {
+		subject = sanitizeField(subject)
+		if len(subject) > maxSubjectLength {
+			subject = subject[:maxSubjectLength]
+		}
+		data.Subject = subject
+	}
+	if body := params.Get("body"); body != "" {
+		body = sanitizeField(body)
+		if len(body) > maxBodyLength {
+			body = body[:maxBodyLength]
+		}
+		data.Body = body
+	}
+	if cc := params.Get("cc"); cc != "" {
+		for _, addr := range strings.Split(cc, ",") {
+			addr = sanitizeField(strings.TrimSpace(addr))
+			if addr == "" || !isValidEmail(addr) {
+				continue
+			}
+			data.Cc = append(data.Cc, addr)
+		}
+	}
+	if bcc := params.Get("bcc"); bcc != "" {
+		for _, addr := range strings.Split(bcc, ",") {
+			addr = sanitizeField(strings.TrimSpace(addr))
+			if addr == "" || !isValidEmail(addr) {
+				continue
+			}
+			data.Bcc = append(data.Bcc, addr)
+		}
+	}
+
+	return data
+}
+
+// sanitizeField strips CR and LF characters to prevent header injection.
+func sanitizeField(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	return s
+}
+
+// isValidEmail performs basic email validation: must contain @, non-empty local-part
+// and domain, and total length ≤ 254 chars (RFC 5321).
+func isValidEmail(email string) bool {
+	if len(email) > maxEmailLength {
+		return false
+	}
+	at := strings.LastIndex(email, "@")
+	if at <= 0 {
+		return false
+	}
+	domain := email[at+1:]
+	return len(domain) > 0
 }
 
 // App struct holds the application state and dependencies
@@ -95,6 +214,12 @@ type App struct {
 	pgpEncryptor *pgp.Encryptor
 	pgpDecryptor *pgp.Decryptor
 
+	// Shared draft operations (used by both App and ComposerApp)
+	draftOps draftOps
+
+	// Shared compose operations (used by both App and ComposerApp)
+	composeOps composeOps
+
 	// Undo system
 	undoStack *undo.Stack
 
@@ -129,6 +254,10 @@ type App struct {
 	syncCancelled   bool                          // set by CancelAllSyncs to stop SyncAllComplete loop
 	wakeSyncing     bool                          // guards syncAfterWake against concurrent calls
 	syncMu          goSync.Mutex                  // protects sync maps
+
+	// Draft IMAP sync goroutine tracking — cancel in-flight syncDraftToIMAP
+	draftSyncContexts map[string]context.CancelFunc // keyed by draft ID
+	draftSyncDone     map[string]chan struct{}       // closed when goroutine exits
 
 	// Sleep/wake detection for auto-sync on wake
 	sleepWakeMonitor platform.SleepWakeMonitor
@@ -177,7 +306,11 @@ func (a *App) Startup(ctx context.Context) {
 	// potentially-blocking D-Bus calls (theme monitor, sleep/wake, network)
 	// that could delay the rest of Startup.
 	if a.SingleInstanceLock != nil {
-		a.SingleInstanceLock.SetOnShow(func() {
+		a.SingleInstanceLock.SetOnShow(func(data string) {
+			if strings.HasPrefix(data, "mailto:") {
+				a.handleExternalMailto(data)
+				return
+			}
 			a.ShowWindow()
 		})
 	}
@@ -276,6 +409,21 @@ func (a *App) Startup(ctx context.Context) {
 	poolConfig := imap.DefaultPoolConfig()
 	a.imapPool = imap.NewPool(poolConfig, a.getIMAPCredentials)
 
+	// Initialize shared draft operations (used by both App and ComposerApp)
+	a.draftOps = draftOps{
+		accountStore:   a.accountStore,
+		folderStore:    a.folderStore,
+		messageStore:   a.messageStore,
+		draftStore:     a.draftStore,
+		imapPool:       a.imapPool,
+		smimeSigner:    a.smimeSigner,
+		smimeEncryptor: a.smimeEncryptor,
+		smimeDecryptor: a.smimeDecryptor,
+		pgpSigner:      a.pgpSigner,
+		pgpEncryptor:   a.pgpEncryptor,
+		pgpDecryptor:   a.pgpDecryptor,
+	}
+
 	// Initialize sync engine
 	a.syncEngine = sync.NewEngine(a.imapPool, a.accountStore, a.folderStore, a.messageStore, a.attachmentStore)
 
@@ -351,6 +499,23 @@ func (a *App) Startup(ctx context.Context) {
 	// Initialize OAuth2 manager for token refresh
 	a.oauth2Manager = oauth2.NewManager()
 
+	// Initialize shared compose operations (used by both App and ComposerApp)
+	a.composeOps = composeOps{
+		accountStore:   a.accountStore,
+		folderStore:    a.folderStore,
+		credStore:      a.credStore,
+		certStore:      a.certStore,
+		contactStore:   a.contactStore,
+		oauth2Manager:  a.oauth2Manager,
+		smimeStore:     a.smimeStore,
+		smimeSigner:    a.smimeSigner,
+		smimeEncryptor: a.smimeEncryptor,
+		pgpStore:       a.pgpStore,
+		pgpSigner:      a.pgpSigner,
+		pgpEncryptor:   a.pgpEncryptor,
+		draftOps:       &a.draftOps,
+	}
+
 	// Initialize Google Contacts client for OAuth account contact search
 	a.googleContactsClient = contact.NewGoogleContactsClient()
 
@@ -374,6 +539,8 @@ func (a *App) Startup(ctx context.Context) {
 	// Initialize sync context tracking for cancel-and-restart
 	a.syncContexts = make(map[string]context.CancelFunc)
 	a.syncLastRequest = make(map[string]time.Time)
+	a.draftSyncContexts = make(map[string]context.CancelFunc)
+	a.draftSyncDone = make(map[string]chan struct{})
 
 	// Initialize desktop notifications with click handling
 	a.initNotifications(ctx)
@@ -632,127 +799,16 @@ func (a *App) updateDBConnectionPool() {
 	a.db.UpdateIdleConns(len(accounts))
 }
 
-// getIMAPCredentials returns IMAP credentials for an account
-// Handles both password and OAuth2 authentication
+// getIMAPCredentials returns IMAP credentials for an account.
+// Handles both password and OAuth2 authentication.
 func (a *App) getIMAPCredentials(accountID string) (*imap.ClientConfig, error) {
-	log := logging.WithComponent("app.credentials")
-
-	acc, err := a.accountStore.Get(accountID)
-	if err != nil {
-		log.Error().Err(err).Str("accountID", accountID).Msg("Failed to get account")
-		return nil, err
-	}
-	if acc == nil {
-		log.Error().Str("accountID", accountID).Msg("Account not found")
-		return nil, fmt.Errorf("account not found: %s", accountID)
-	}
-
-	log.Debug().
-		Str("accountID", accountID).
-		Str("email", acc.Email).
-		Str("authType", string(acc.AuthType)).
-		Str("imapHost", acc.IMAPHost).
-		Msg("Getting IMAP credentials")
-
-	config := imap.DefaultConfig()
-	config.Host = acc.IMAPHost
-	config.Port = acc.IMAPPort
-	config.Security = imap.SecurityType(acc.IMAPSecurity)
-	config.Username = acc.Username
-	config.TLSConfig = certificate.BuildTLSConfig(acc.IMAPHost, a.certStore)
-
-	// Handle authentication based on auth type
-	if acc.AuthType == account.AuthOAuth2 {
-		log.Debug().Str("accountID", accountID).Msg("Using OAuth2 authentication")
-		// Get valid OAuth token (refreshing if needed)
-		tokens, err := a.getValidOAuthToken(accountID)
-		if err != nil {
-			log.Error().Err(err).Str("accountID", accountID).Msg("Failed to get OAuth token")
-			return nil, fmt.Errorf("failed to get OAuth token: %w", err)
-		}
-		log.Debug().
-			Str("accountID", accountID).
-			Time("expiresAt", tokens.ExpiresAt).
-			Int("tokenLen", len(tokens.AccessToken)).
-			Msg("OAuth token retrieved successfully")
-		config.AuthType = imap.AuthTypeOAuth2
-		config.AccessToken = tokens.AccessToken
-	} else {
-		log.Debug().Str("accountID", accountID).Msg("Using password authentication")
-		// Default to password authentication
-		password, err := a.credStore.GetPassword(accountID)
-		if err != nil {
-			log.Error().Err(err).Str("accountID", accountID).Msg("Failed to get password")
-			return nil, fmt.Errorf("failed to get password: %w", err)
-		}
-		config.AuthType = imap.AuthTypePassword
-		config.Password = password
-	}
-
-	log.Debug().
-		Str("accountID", accountID).
-		Str("authType", string(config.AuthType)).
-		Msg("IMAP credentials prepared")
-
-	return &config, nil
+	return a.composeOps.getIMAPCredentials(a.ctx, accountID)
 }
 
-// getValidOAuthToken returns a valid OAuth token, refreshing if needed
-// If refresh fails, emits an event for the frontend to prompt re-authorization
+// getValidOAuthToken returns a valid OAuth token, refreshing if needed.
+// If refresh fails, emits an event for the frontend to prompt re-authorization.
 func (a *App) getValidOAuthToken(accountID string) (*credentials.OAuthTokens, error) {
-	log := logging.WithComponent("app")
-
-	tokens, err := a.credStore.GetOAuthTokens(accountID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get OAuth tokens: %w", err)
-	}
-
-	// Check if token expires within 5 minutes
-	if tokens.IsExpiringSoon(5 * time.Minute) {
-		log.Debug().
-			Str("account_id", accountID).
-			Time("expires_at", tokens.ExpiresAt).
-			Msg("OAuth token expiring soon, refreshing")
-
-		// Refresh the token
-		newTokenResp, err := a.oauth2Manager.RefreshToken(tokens.Provider, tokens.RefreshToken)
-		if err != nil {
-			log.Error().Err(err).
-				Str("account_id", accountID).
-				Msg("OAuth token refresh failed")
-
-			// Emit event for frontend to prompt re-authorization
-			wailsRuntime.EventsEmit(a.ctx, "oauth:reauth-required", map[string]interface{}{
-				"accountId": accountID,
-				"provider":  tokens.Provider,
-				"error":     err.Error(),
-			})
-
-			return nil, fmt.Errorf("OAuth token refresh failed, re-authorization required: %w", err)
-		}
-
-		// Calculate new expiry time
-		expiresAt := time.Now().Add(time.Duration(newTokenResp.ExpiresIn) * time.Second)
-
-		// Update tokens in store
-		tokens.AccessToken = newTokenResp.AccessToken
-		tokens.ExpiresAt = expiresAt
-		if newTokenResp.RefreshToken != "" {
-			tokens.RefreshToken = newTokenResp.RefreshToken
-		}
-
-		if err := a.credStore.SetOAuthTokens(accountID, tokens); err != nil {
-			log.Warn().Err(err).Msg("Failed to save refreshed OAuth tokens")
-			// Continue anyway - we have valid tokens in memory
-		}
-
-		log.Info().
-			Str("account_id", accountID).
-			Time("new_expires_at", expiresAt).
-			Msg("OAuth token refreshed successfully")
-	}
-
-	return tokens, nil
+	return a.composeOps.getValidOAuthToken(a.ctx, accountID)
 }
 
 // GetContext returns the app context

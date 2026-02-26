@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+**v0.1.29 - 02-26-2026**
+---
+
+- Toast message to provide feedback for successful link clicks
+- Cross accounts from field
+- Handle external mailto calls
+- Added composer tab in settings 
+- Allow setting detached composer as default
+- Choose default or detached composer to handle mailto links
+- Allow setting plaintext as default
+- Moved read receipt setting to composer tab
+- Cross account from field
+- Fixed drag and drop inline images and attachments - [#41](https://github.com/hkdb/aerion/issues/41)
+- Fixed star buttons and states - [#42](https://github.com/hkdb/aerion/issues/42)
+- Fixed links in threads [#48](https://github.com/hkdb/aerion/issues/48)
+- Fixed attachment logic and extraction for non-text parts - needs a force resync to apply
+- Fixed orphaned drafts - [#47](https://github.com/hkdb/aerion/issues/47)
+- Fixed flatpak attachment download - [#51](https://github.com/hkdb/aerion/issues/51)
+- Consolidated duplicate code between composer and detached composer
+- Close conversation viewer if deleted
+- Don't auto-open next message if in vertical mobile layout - [#30](https://github.com/hkdb/aerion/issues/30)
+- Fixed empty from field - [#39](https://github.com/hkdb/aerion/issues/39)
+
+
 **v0.1.28 - 02-24-2026**
 ---
 

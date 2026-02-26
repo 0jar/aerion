@@ -18,8 +18,12 @@ export function DeleteDraft(arg1) {
   return window['go']['app']['ComposerApp']['DeleteDraft'](arg1);
 }
 
-export function GetAccount() {
-  return window['go']['app']['ComposerApp']['GetAccount']();
+export function GetAccount(arg1) {
+  return window['go']['app']['ComposerApp']['GetAccount'](arg1);
+}
+
+export function GetAllAccountIdentities() {
+  return window['go']['app']['ComposerApp']['GetAllAccountIdentities']();
 }
 
 export function GetComposeMode() {
@@ -30,36 +34,36 @@ export function GetDraft() {
   return window['go']['app']['ComposerApp']['GetDraft']();
 }
 
-export function GetIdentities() {
-  return window['go']['app']['ComposerApp']['GetIdentities']();
+export function GetIdentities(arg1) {
+  return window['go']['app']['ComposerApp']['GetIdentities'](arg1);
 }
 
 export function GetOriginalMessage() {
   return window['go']['app']['ComposerApp']['GetOriginalMessage']();
 }
 
-export function GetPGPEncryptPolicy() {
-  return window['go']['app']['ComposerApp']['GetPGPEncryptPolicy']();
+export function GetPGPEncryptPolicy(arg1) {
+  return window['go']['app']['ComposerApp']['GetPGPEncryptPolicy'](arg1);
 }
 
-export function GetPGPKeyForEmail(arg1) {
-  return window['go']['app']['ComposerApp']['GetPGPKeyForEmail'](arg1);
+export function GetPGPKeyForEmail(arg1, arg2) {
+  return window['go']['app']['ComposerApp']['GetPGPKeyForEmail'](arg1, arg2);
 }
 
-export function GetPGPSignPolicy() {
-  return window['go']['app']['ComposerApp']['GetPGPSignPolicy']();
+export function GetPGPSignPolicy(arg1) {
+  return window['go']['app']['ComposerApp']['GetPGPSignPolicy'](arg1);
 }
 
-export function GetSMIMECertificateForEmail(arg1) {
-  return window['go']['app']['ComposerApp']['GetSMIMECertificateForEmail'](arg1);
+export function GetSMIMECertificateForEmail(arg1, arg2) {
+  return window['go']['app']['ComposerApp']['GetSMIMECertificateForEmail'](arg1, arg2);
 }
 
-export function GetSMIMEEncryptPolicy() {
-  return window['go']['app']['ComposerApp']['GetSMIMEEncryptPolicy']();
+export function GetSMIMEEncryptPolicy(arg1) {
+  return window['go']['app']['ComposerApp']['GetSMIMEEncryptPolicy'](arg1);
 }
 
-export function GetSMIMESignPolicy() {
-  return window['go']['app']['ComposerApp']['GetSMIMESignPolicy']();
+export function GetSMIMESignPolicy(arg1) {
+  return window['go']['app']['ComposerApp']['GetSMIMESignPolicy'](arg1);
 }
 
 export function GetSystemTheme() {
@@ -70,12 +74,12 @@ export function GetThemeMode() {
   return window['go']['app']['ComposerApp']['GetThemeMode']();
 }
 
-export function HasPGPKey() {
-  return window['go']['app']['ComposerApp']['HasPGPKey']();
+export function HasPGPKey(arg1) {
+  return window['go']['app']['ComposerApp']['HasPGPKey'](arg1);
 }
 
-export function HasSMIMECertificate() {
-  return window['go']['app']['ComposerApp']['HasSMIMECertificate']();
+export function HasSMIMECertificate(arg1) {
+  return window['go']['app']['ComposerApp']['HasSMIMECertificate'](arg1);
 }
 
 export function ImportRecipientCert(arg1, arg2) {
@@ -84,6 +88,10 @@ export function ImportRecipientCert(arg1, arg2) {
 
 export function ImportRecipientPGPKey(arg1, arg2) {
   return window['go']['app']['ComposerApp']['ImportRecipientPGPKey'](arg1, arg2);
+}
+
+export function IsFlatpak() {
+  return window['go']['app']['ComposerApp']['IsFlatpak']();
 }
 
 export function LookupHKP(arg1) {
@@ -114,20 +122,24 @@ export function PrepareReply() {
   return window['go']['app']['ComposerApp']['PrepareReply']();
 }
 
+export function ReadFileAsAttachment(arg1) {
+  return window['go']['app']['ComposerApp']['ReadFileAsAttachment'](arg1);
+}
+
 export function RefreshWindowConstraints() {
   return window['go']['app']['ComposerApp']['RefreshWindowConstraints']();
 }
 
-export function SaveDraft(arg1, arg2) {
-  return window['go']['app']['ComposerApp']['SaveDraft'](arg1, arg2);
+export function SaveDraft(arg1, arg2, arg3) {
+  return window['go']['app']['ComposerApp']['SaveDraft'](arg1, arg2, arg3);
 }
 
 export function SearchContacts(arg1, arg2) {
   return window['go']['app']['ComposerApp']['SearchContacts'](arg1, arg2);
 }
 
-export function SendMessage(arg1) {
-  return window['go']['app']['ComposerApp']['SendMessage'](arg1);
+export function SendMessage(arg1, arg2) {
+  return window['go']['app']['ComposerApp']['SendMessage'](arg1, arg2);
 }
 
 export function Shutdown(arg1) {

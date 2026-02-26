@@ -2,17 +2,15 @@ package app
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
+	goSync "sync"
 	"time"
 
-	goImap "github.com/emersion/go-imap/v2"
 	"github.com/hkdb/aerion/internal/account"
+	"github.com/hkdb/aerion/internal/carddav"
 	"github.com/hkdb/aerion/internal/certificate"
 	"github.com/hkdb/aerion/internal/contact"
 	"github.com/hkdb/aerion/internal/credentials"
@@ -39,6 +37,7 @@ type ComposerConfig struct {
 	Mode       string // "new", "reply", "reply-all", "forward"
 	MessageID  string // Original message ID (for reply/forward)
 	DraftID    string // Draft ID to resume editing
+	MailtoURL  string // External mailto: URL to pre-fill (detached mode)
 }
 
 // ComposeMode represents the compose mode data returned to the frontend.
@@ -91,8 +90,19 @@ type ComposerApp struct {
 	pgpEncryptor *pgp.Encryptor
 	pgpDecryptor *pgp.Decryptor
 
+	// Shared draft operations
+	draftOps draftOps
+
+	// Shared compose operations
+	composeOps composeOps
+
 	// Paths
 	paths *platform.Paths
+
+	// Draft IMAP sync goroutine tracking
+	draftSyncCancel context.CancelFunc
+	draftSyncDone   chan struct{}
+	draftSyncMu     goSync.Mutex
 
 	// Composer state
 	originalMessage *message.Message     // For reply/forward
@@ -148,6 +158,30 @@ func (c *ComposerApp) Startup(ctx context.Context) {
 	c.folderStore = folder.NewStore(db)
 	c.messageStore = message.NewStore(db)
 	c.contactStore = contact.NewStore(db.DB)
+
+	// Initialize vCard scanner for contact autocomplete (shared .vcf files)
+	vcardScanner := contact.NewVCardScanner(contact.DefaultVCardPaths(), 20*time.Minute)
+	c.contactStore.SetVCardScanner(vcardScanner)
+	go vcardScanner.Scan()
+
+	// Initialize CardDAV search for contact autocomplete (reads from shared DB)
+	carddavStore := carddav.NewStore(db.DB)
+	c.contactStore.SetCardDAVSearchFunc(func(query string, limit int) ([]*contact.Contact, error) {
+		contacts, err := carddavStore.SearchContacts(query, limit)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]*contact.Contact, len(contacts))
+		for i, cdContact := range contacts {
+			result[i] = &contact.Contact{
+				Email:       cdContact.Email,
+				DisplayName: cdContact.DisplayName,
+				Source:      "carddav",
+			}
+		}
+		return result, nil
+	})
+
 	c.draftStore = draft.NewStore(db)
 	c.settingsStore = settings.NewStore(db)
 
@@ -178,8 +212,40 @@ func (c *ComposerApp) Startup(ctx context.Context) {
 	poolConfig.MaxConnections = 1 // Composer only needs 1 connection
 	c.imapPool = imap.NewPool(poolConfig, c.getIMAPCredentials)
 
+	// Initialize shared draft operations
+	c.draftOps = draftOps{
+		accountStore:   c.accountStore,
+		folderStore:    c.folderStore,
+		messageStore:   c.messageStore,
+		draftStore:     c.draftStore,
+		imapPool:       c.imapPool,
+		smimeSigner:    c.smimeSigner,
+		smimeEncryptor: c.smimeEncryptor,
+		smimeDecryptor: c.smimeDecryptor,
+		pgpSigner:      c.pgpSigner,
+		pgpEncryptor:   c.pgpEncryptor,
+		pgpDecryptor:   c.pgpDecryptor,
+	}
+
 	// Initialize OAuth2 manager for token refresh
 	c.oauth2Manager = oauth2.NewManager()
+
+	// Initialize shared compose operations
+	c.composeOps = composeOps{
+		accountStore:   c.accountStore,
+		folderStore:    c.folderStore,
+		credStore:      c.credStore,
+		certStore:      c.certStore,
+		contactStore:   c.contactStore,
+		oauth2Manager:  c.oauth2Manager,
+		smimeStore:     c.smimeStore,
+		smimeSigner:    c.smimeSigner,
+		smimeEncryptor: c.smimeEncryptor,
+		pgpStore:       c.pgpStore,
+		pgpSigner:      c.pgpSigner,
+		pgpEncryptor:   c.pgpEncryptor,
+		draftOps:       &c.draftOps,
+	}
 
 	// Connect to main window's IPC server
 	if err := c.connectIPC(ctx); err != nil {
@@ -275,10 +341,8 @@ func (c *ComposerApp) handleIPCMessage(msg ipc.Message) {
 	case ipc.TypeAccountUpdated:
 		var payload ipc.AccountUpdatedPayload
 		if err := msg.ParsePayload(&payload); err == nil {
-			// Reload account data if it's our account
-			if payload.AccountID == c.config.AccountID {
-				wailsRuntime.EventsEmit(c.ctx, "account:updated", payload.AccountID)
-			}
+			// Forward account updates for any account (composer supports cross-account)
+			wailsRuntime.EventsEmit(c.ctx, "account:updated", payload.AccountID)
 		}
 
 	case ipc.TypeContactsUpdated:
@@ -377,13 +441,13 @@ func (c *ComposerApp) notifyClosed() {
 }
 
 // notifyMessageSent sends a message-sent notification to the main window.
-func (c *ComposerApp) notifyMessageSent(folderID int64) {
+func (c *ComposerApp) notifyMessageSent(accountID string, folderID int64) {
 	if c.ipcClient == nil {
 		return
 	}
 
 	msg, err := ipc.NewMessage(ipc.TypeMessageSent, ipc.MessageSentPayload{
-		AccountID: c.config.AccountID,
+		AccountID: accountID,
 		FolderID:  folderID,
 	})
 	if err != nil {
@@ -393,13 +457,13 @@ func (c *ComposerApp) notifyMessageSent(folderID int64) {
 }
 
 // notifyDraftSaved sends a draft-saved notification to the main window.
-func (c *ComposerApp) notifyDraftSaved(draftID string) {
+func (c *ComposerApp) notifyDraftSaved(accountID string, draftID string) {
 	if c.ipcClient == nil {
 		return
 	}
 
 	msg, err := ipc.NewMessage(ipc.TypeDraftSaved, ipc.DraftSavedPayload{
-		AccountID: c.config.AccountID,
+		AccountID: accountID,
 		DraftID:   draftID,
 	})
 	if err != nil {
@@ -409,13 +473,13 @@ func (c *ComposerApp) notifyDraftSaved(draftID string) {
 }
 
 // notifyDraftDeleted sends a draft-deleted notification to the main window.
-func (c *ComposerApp) notifyDraftDeleted() {
+func (c *ComposerApp) notifyDraftDeleted(accountID string) {
 	if c.ipcClient == nil {
 		return
 	}
 
 	msg, err := ipc.NewMessage(ipc.TypeDraftDeleted, ipc.DraftDeletedPayload{
-		AccountID: c.config.AccountID,
+		AccountID: accountID,
 	})
 	if err != nil {
 		return
@@ -426,112 +490,50 @@ func (c *ComposerApp) notifyDraftDeleted() {
 // getIMAPCredentials returns IMAP credentials for an account.
 // Handles both password and OAuth2 authentication.
 func (c *ComposerApp) getIMAPCredentials(accountID string) (*imap.ClientConfig, error) {
-	acc, err := c.accountStore.Get(accountID)
-	if err != nil {
-		return nil, err
-	}
-	if acc == nil {
-		return nil, fmt.Errorf("account not found: %s", accountID)
-	}
-
-	config := imap.DefaultConfig()
-	config.Host = acc.IMAPHost
-	config.Port = acc.IMAPPort
-	config.Security = imap.SecurityType(acc.IMAPSecurity)
-	config.Username = acc.Username
-	config.TLSConfig = certificate.BuildTLSConfig(acc.IMAPHost, c.certStore)
-
-	// Handle authentication based on auth type
-	if acc.AuthType == account.AuthOAuth2 {
-		// Get valid OAuth token (refreshing if needed)
-		tokens, err := c.getValidOAuthToken(accountID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get OAuth token: %w", err)
-		}
-		config.AuthType = imap.AuthTypeOAuth2
-		config.AccessToken = tokens.AccessToken
-	} else {
-		// Default to password authentication
-		password, err := c.credStore.GetPassword(accountID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get password: %w", err)
-		}
-		config.AuthType = imap.AuthTypePassword
-		config.Password = password
-	}
-
-	return &config, nil
+	return c.composeOps.getIMAPCredentials(c.ctx, accountID)
 }
 
 // getValidOAuthToken returns a valid OAuth token, refreshing if needed.
 func (c *ComposerApp) getValidOAuthToken(accountID string) (*credentials.OAuthTokens, error) {
-	log := logging.WithComponent("composer")
-
-	tokens, err := c.credStore.GetOAuthTokens(accountID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get OAuth tokens: %w", err)
-	}
-
-	// Check if token expires within 5 minutes
-	if tokens.IsExpiringSoon(5 * time.Minute) {
-		log.Debug().
-			Str("account_id", accountID).
-			Time("expires_at", tokens.ExpiresAt).
-			Msg("OAuth token expiring soon, refreshing")
-
-		// Refresh the token
-		newTokenResp, err := c.oauth2Manager.RefreshToken(tokens.Provider, tokens.RefreshToken)
-		if err != nil {
-			log.Error().Err(err).
-				Str("account_id", accountID).
-				Msg("OAuth token refresh failed")
-
-			// Emit event for frontend to prompt re-authorization
-			wailsRuntime.EventsEmit(c.ctx, "oauth:reauth-required", map[string]interface{}{
-				"accountId": accountID,
-				"provider":  tokens.Provider,
-				"error":     err.Error(),
-			})
-
-			return nil, fmt.Errorf("OAuth token refresh failed, re-authorization required: %w", err)
-		}
-
-		// Calculate new expiry time
-		expiresAt := time.Now().Add(time.Duration(newTokenResp.ExpiresIn) * time.Second)
-
-		// Update tokens in store
-		tokens.AccessToken = newTokenResp.AccessToken
-		tokens.ExpiresAt = expiresAt
-		if newTokenResp.RefreshToken != "" {
-			tokens.RefreshToken = newTokenResp.RefreshToken
-		}
-
-		if err := c.credStore.SetOAuthTokens(accountID, tokens); err != nil {
-			log.Warn().Err(err).Msg("Failed to save refreshed OAuth tokens")
-			// Continue anyway - we have valid tokens in memory
-		}
-
-		log.Info().
-			Str("account_id", accountID).
-			Time("new_expires_at", expiresAt).
-			Msg("OAuth token refreshed successfully")
-	}
-
-	return tokens, nil
+	return c.composeOps.getValidOAuthToken(c.ctx, accountID)
 }
 
 // ============================================================================
 // Wails-bound methods (exposed to frontend)
 // ============================================================================
 
-// GetAccount returns the account for this composer.
-func (c *ComposerApp) GetAccount() (*account.Account, error) {
-	return c.accountStore.Get(c.config.AccountID)
+// GetAccount returns the account for the given account ID.
+func (c *ComposerApp) GetAccount(accountID string) (*account.Account, error) {
+	return c.accountStore.Get(accountID)
 }
 
-// GetIdentities returns all identities for the account.
-func (c *ComposerApp) GetIdentities() ([]*account.Identity, error) {
-	return c.accountStore.GetIdentities(c.config.AccountID)
+// GetIdentities returns all identities for the given account.
+func (c *ComposerApp) GetIdentities(accountID string) ([]*account.Identity, error) {
+	return c.accountStore.GetIdentities(accountID)
+}
+
+// GetAllAccountIdentities returns all enabled accounts with their identities.
+// Used by the detached composer to populate the cross-account From dropdown.
+func (c *ComposerApp) GetAllAccountIdentities() ([]AccountIdentityGroup, error) {
+	accounts, err := c.accountStore.List()
+	if err != nil {
+		return nil, err
+	}
+	var groups []AccountIdentityGroup
+	for _, acc := range accounts {
+		if !acc.Enabled {
+			continue
+		}
+		identities, err := c.accountStore.GetIdentities(acc.ID)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, AccountIdentityGroup{
+			Account:    acc,
+			Identities: identities,
+		})
+	}
+	return groups, nil
 }
 
 // GetComposeMode returns the compose mode and related data.
@@ -553,6 +555,11 @@ func (c *ComposerApp) GetThemeMode() (string, error) {
 // the XDG Settings Portal on Linux. Returns "light", "dark", or "" if not available.
 func (c *ComposerApp) GetSystemTheme() string {
 	return platform.ReadSystemTheme()
+}
+
+// IsFlatpak returns true if the application is running inside a Flatpak sandbox.
+func (c *ComposerApp) IsFlatpak() bool {
+	return platform.IsFlatpak()
 }
 
 // GetOriginalMessage returns the original message for reply/forward.
@@ -577,7 +584,7 @@ func (c *ComposerApp) GetDraft() (*smtp.ComposeMessage, error) {
 // PrepareReply builds a ComposeMessage for the current mode.
 func (c *ComposerApp) PrepareReply() (*smtp.ComposeMessage, error) {
 	if c.config.Mode == "new" || c.config.MessageID == "" {
-		// New message - return empty compose
+		// New message - return compose, optionally pre-filled from mailto URL
 		acc, err := c.accountStore.Get(c.config.AccountID)
 		if err != nil {
 			return nil, err
@@ -600,9 +607,29 @@ func (c *ComposerApp) PrepareReply() (*smtp.ComposeMessage, error) {
 			from = smtp.Address{Address: fromIdentity.Email, Name: fromIdentity.Name}
 		}
 
-		return &smtp.ComposeMessage{
+		msg := &smtp.ComposeMessage{
 			From: from,
-		}, nil
+		}
+
+		// Pre-fill from mailto URL if provided
+		if c.config.MailtoURL != "" {
+			mailtoData := ParseMailtoURL(c.config.MailtoURL)
+			if mailtoData != nil {
+				for _, addr := range mailtoData.To {
+					msg.To = append(msg.To, smtp.Address{Address: addr})
+				}
+				for _, addr := range mailtoData.Cc {
+					msg.Cc = append(msg.Cc, smtp.Address{Address: addr})
+				}
+				for _, addr := range mailtoData.Bcc {
+					msg.Bcc = append(msg.Bcc, smtp.Address{Address: addr})
+				}
+				msg.Subject = mailtoData.Subject
+				msg.TextBody = mailtoData.Body
+			}
+		}
+
+		return msg, nil
 	}
 
 	// For reply/forward, use the same logic as main app
@@ -626,230 +653,63 @@ func (c *ComposerApp) SearchContacts(query string, limit int) ([]*contact.Contac
 }
 
 // SendMessage sends the composed email.
-func (c *ComposerApp) SendMessage(msg smtp.ComposeMessage) error {
-	log := logging.WithComponent("composer")
-
-	log.Info().
-		Str("from", msg.From.Address).
-		Int("toCount", len(msg.To)).
-		Str("subject", msg.Subject).
-		Msg("Sending message")
-
-	// Get account for SMTP settings
-	acc, err := c.accountStore.Get(c.config.AccountID)
-	if err != nil {
-		return fmt.Errorf("failed to get account: %w", err)
-	}
-
-	// Build RFC822 message
-	rawMsg, err := msg.ToRFC822()
-	if err != nil {
-		return fmt.Errorf("failed to build message: %w", err)
-	}
-
-	// The sender's email determines which cert/key to use
-	fromEmail := msg.From.Address
-
-	// S/MIME signing (if configured for this account/message)
-	if c.shouldSignMessage(msg.SignMessage) {
-		signedMsg, signErr := c.smimeSigner.SignMessage(c.config.AccountID, fromEmail, rawMsg)
-		if signErr != nil {
-			return fmt.Errorf("failed to sign message: %w", signErr)
-		}
-		rawMsg = signedMsg
-		log.Info().Str("accountID", c.config.AccountID).Msg("Message signed with S/MIME")
-	}
-
-	// S/MIME encryption (if configured for this account/message)
-	if c.shouldEncryptMessage(msg.EncryptMessage) {
-		encryptedMsg, encErr := c.smimeEncryptor.EncryptMessage(c.config.AccountID, fromEmail, msg.AllRecipients(), rawMsg)
-		if encErr != nil {
-			return fmt.Errorf("failed to encrypt message: %w", encErr)
-		}
-		rawMsg = encryptedMsg
-		log.Info().Str("accountID", c.config.AccountID).Msg("Message encrypted with S/MIME")
-	}
-
-	// PGP signing (mutually exclusive with S/MIME)
-	if !msg.SignMessage && c.shouldPGPSignMessage(msg.PGPSignMessage) {
-		signedMsg, signErr := c.pgpSigner.SignMessage(c.config.AccountID, fromEmail, rawMsg)
-		if signErr != nil {
-			return fmt.Errorf("failed to PGP sign message: %w", signErr)
-		}
-		rawMsg = signedMsg
-		log.Info().Str("accountID", c.config.AccountID).Msg("Message signed with PGP")
-	}
-
-	// PGP encryption (mutually exclusive with S/MIME)
-	if !msg.EncryptMessage && c.shouldPGPEncryptMessage(msg.PGPEncryptMessage) {
-		encryptedMsg, encErr := c.pgpEncryptor.EncryptMessage(c.config.AccountID, fromEmail, msg.AllRecipients(), rawMsg)
-		if encErr != nil {
-			return fmt.Errorf("failed to PGP encrypt message: %w", encErr)
-		}
-		rawMsg = encryptedMsg
-		log.Info().Str("accountID", c.config.AccountID).Msg("Message encrypted with PGP")
-	}
-
-	// Create SMTP client config
-	smtpConfig := smtp.DefaultConfig()
-	smtpConfig.Host = acc.SMTPHost
-	smtpConfig.Port = acc.SMTPPort
-	smtpConfig.Security = smtp.SecurityType(acc.SMTPSecurity)
-	smtpConfig.Username = acc.Username
-	smtpConfig.TLSConfig = certificate.BuildTLSConfig(acc.SMTPHost, c.certStore)
-
-	// Handle authentication based on auth type
-	if acc.AuthType == account.AuthOAuth2 {
-		// Get valid OAuth token (refreshing if needed)
-		tokens, err := c.getValidOAuthToken(c.config.AccountID)
-		if err != nil {
-			return fmt.Errorf("failed to get OAuth token: %w", err)
-		}
-		smtpConfig.AuthType = smtp.AuthTypeOAuth2
-		smtpConfig.AccessToken = tokens.AccessToken
-	} else {
-		// Default to password authentication
-		password, err := c.credStore.GetPassword(c.config.AccountID)
-		if err != nil {
-			return fmt.Errorf("failed to get password: %w", err)
-		}
-		smtpConfig.AuthType = smtp.AuthTypePassword
-		smtpConfig.Password = password
-	}
-
-	client := smtp.NewClient(smtpConfig)
-
-	if err := client.Connect(); err != nil {
-		return fmt.Errorf("failed to connect to SMTP: %w", err)
-	}
-	defer client.Close()
-
-	if err := client.Login(); err != nil {
-		return fmt.Errorf("failed to login to SMTP: %w", err)
-	}
-
-	recipients := msg.AllRecipients()
-	if len(recipients) == 0 {
-		return fmt.Errorf("no recipients")
-	}
-
-	if err := client.SendMail(msg.From.Address, recipients, rawMsg); err != nil {
-		return fmt.Errorf("failed to send: %w", err)
-	}
-
-	// Save to Sent folder if provider doesn't auto-save
-	if !providerAutoSavesSentMail(acc.IMAPHost) {
-		log.Debug().Str("host", acc.IMAPHost).Msg("Provider doesn't auto-save, using IMAP APPEND")
-		if err := c.saveToSentFolder(acc, rawMsg); err != nil {
-			log.Warn().Err(err).Msg("Failed to save message to Sent folder")
-		}
-	} else {
-		log.Debug().Str("host", acc.IMAPHost).Msg("Provider auto-saves sent mail")
-	}
-
-	// Add recipients to contacts
-	for _, to := range msg.To {
-		c.contactStore.AddOrUpdate(to.Address, to.Name)
-	}
-	for _, cc := range msg.Cc {
-		c.contactStore.AddOrUpdate(cc.Address, cc.Name)
-	}
-
-	// Delete draft if we were editing one
+func (c *ComposerApp) SendMessage(accountID string, msg smtp.ComposeMessage) error {
+	// Cancel in-flight draft sync before send+delete
 	if c.currentDraft != nil {
-		c.draftStore.Delete(c.currentDraft.ID)
+		c.cancelDraftSync()
+	}
+
+	_, err := c.composeOps.sendMessage(c.ctx, accountID, msg, c.currentDraft)
+	if err != nil {
+		return err
+	}
+
+	// Post-send: IPC notification + state cleanup
+	if c.currentDraft != nil {
+		c.notifyDraftDeleted(accountID)
+		c.currentDraft = nil
 	}
 
 	// Get sent folder ID for notification
-	sentFolder, _ := c.folderStore.GetByType(c.config.AccountID, folder.TypeSent)
+	sentFolder, _ := c.folderStore.GetByType(accountID, folder.TypeSent)
 	var sentFolderID int64
 	if sentFolder != nil {
 		sentFolderID, _ = parseIntID(sentFolder.ID)
 	}
 
 	// Notify main window
-	c.notifyMessageSent(sentFolderID)
+	c.notifyMessageSent(accountID, sentFolderID)
 
-	log.Info().Msg("Message sent successfully")
 	return nil
 }
 
 // saveToSentFolder appends the sent message to the Sent folder via IMAP.
-// Used for providers that don't automatically save sent messages.
-func (c *ComposerApp) saveToSentFolder(acc *account.Account, rawMsg []byte) error {
-	log := logging.WithComponent("composer")
+func (c *ComposerApp) saveToSentFolder(accountID string, acc *account.Account, rawMsg []byte) error {
+	return c.composeOps.saveToSentFolder(c.ctx, accountID, acc, rawMsg)
+}
 
-	// Get the Sent folder path
-	sentFolder, err := c.folderStore.GetByType(acc.ID, folder.TypeSent)
-	if err != nil || sentFolder == nil {
-		if acc.SentFolderPath == "" {
-			return fmt.Errorf("no Sent folder configured or detected")
-		}
+// cancelDraftSync cancels any in-flight syncDraftToIMAP goroutine and waits for
+// it to finish. This prevents the race where DeleteDraft runs while a background
+// goroutine is still uploading the draft to IMAP.
+func (c *ComposerApp) cancelDraftSync() {
+	c.draftSyncMu.Lock()
+	cancel := c.draftSyncCancel
+	done := c.draftSyncDone
+	c.draftSyncMu.Unlock()
+
+	if cancel == nil {
+		return
 	}
-
-	sentPath := acc.SentFolderPath
-	if sentPath == "" && sentFolder != nil {
-		sentPath = sentFolder.Path
+	cancel()
+	if done == nil {
+		return
 	}
-
-	log.Debug().
-		Str("account_id", acc.ID).
-		Str("sent_path", sentPath).
-		Msg("Saving sent message to folder via IMAP APPEND")
-
-	// Create IMAP client
-	clientConfig := imap.DefaultConfig()
-	clientConfig.Host = acc.IMAPHost
-	clientConfig.Port = acc.IMAPPort
-	clientConfig.Security = imap.SecurityType(acc.IMAPSecurity)
-	clientConfig.Username = acc.Username
-	clientConfig.TLSConfig = certificate.BuildTLSConfig(acc.IMAPHost, c.certStore)
-
-	// Handle authentication
-	if acc.AuthType == account.AuthOAuth2 {
-		tokens, err := c.getValidOAuthToken(acc.ID)
-		if err != nil {
-			return fmt.Errorf("failed to get OAuth token: %w", err)
-		}
-		clientConfig.AuthType = imap.AuthTypeOAuth2
-		clientConfig.AccessToken = tokens.AccessToken
-	} else {
-		password, err := c.credStore.GetPassword(acc.ID)
-		if err != nil {
-			return fmt.Errorf("failed to get password: %w", err)
-		}
-		clientConfig.AuthType = imap.AuthTypePassword
-		clientConfig.Password = password
-	}
-
-	imapClient := imap.NewClient(clientConfig)
-	if err := imapClient.Connect(); err != nil {
-		return fmt.Errorf("failed to connect to IMAP: %w", err)
-	}
-	defer imapClient.Close()
-
-	if err := imapClient.Login(); err != nil {
-		return fmt.Errorf("failed to login to IMAP: %w", err)
-	}
-
-	// Append message with \Seen flag
-	flags := []goImap.Flag{goImap.FlagSeen}
-	_, err = imapClient.AppendMessage(sentPath, flags, time.Now(), rawMsg)
-	if err != nil {
-		return fmt.Errorf("failed to append to Sent folder: %w", err)
-	}
-
-	log.Info().
-		Str("account_id", acc.ID).
-		Str("sent_path", sentPath).
-		Msg("Message saved to Sent folder")
-
-	return nil
+	<-done
 }
 
 // SaveDraft saves the current compose state as a draft.
 // If existingDraftID is provided, updates that draft instead of creating a new one.
-func (c *ComposerApp) SaveDraft(msg smtp.ComposeMessage, existingDraftID string) (*draft.Draft, error) {
+func (c *ComposerApp) SaveDraft(accountID string, msg smtp.ComposeMessage, existingDraftID string) (*draft.Draft, error) {
 	log := logging.WithComponent("composer")
 
 	log.Debug().
@@ -864,7 +724,8 @@ func (c *ComposerApp) SaveDraft(msg smtp.ComposeMessage, existingDraftID string)
 		existing, err := c.draftStore.Get(existingDraftID)
 		if err != nil {
 			log.Warn().Err(err).Str("draftID", existingDraftID).Msg("Failed to load existing draft from ID")
-		} else if existing != nil {
+		}
+		if err == nil && existing != nil {
 			localDraft = existing
 			log.Debug().Str("draftID", existingDraftID).Msg("Loaded existing draft from provided ID")
 		}
@@ -876,120 +737,44 @@ func (c *ComposerApp) SaveDraft(msg smtp.ComposeMessage, existingDraftID string)
 		log.Debug().Str("draftID", localDraft.ID).Msg("Using c.currentDraft")
 	}
 
-	// Encrypt body to self if encryption is enabled (S/MIME or PGP, mutually exclusive)
-	bodyHTML := msg.HTMLBody
-	bodyText := msg.TextBody
-	encrypted := false
-	var encryptedBody []byte
-	pgpEncrypted := false
-	var pgpEncryptedBody []byte
-	var attachmentsData []byte
-
-	// The sender's email determines which cert/key to use for encrypt-to-self
-	draftFromEmail := msg.From.Address
-
-	if msg.EncryptMessage {
-		// S/MIME encrypt-to-self
-		payload := draftBodyPayload{BodyHTML: msg.HTMLBody, BodyText: msg.TextBody, Attachments: msg.Attachments}
-		jsonBytes, jsonErr := json.Marshal(payload)
-		if jsonErr != nil {
-			return nil, fmt.Errorf("failed to serialize draft body: %w", jsonErr)
-		}
-
-		enc, encErr := c.smimeEncryptor.EncryptBytes(c.config.AccountID, draftFromEmail, jsonBytes)
-		if encErr != nil {
-			log.Warn().Err(encErr).Msg("Failed to encrypt draft body, saving unencrypted")
-		} else {
-			encrypted = true
-			encryptedBody = enc
-			bodyHTML = ""
-			bodyText = ""
-		}
-	} else if msg.PGPEncryptMessage {
-		// PGP encrypt-to-self
-		payload := draftBodyPayload{BodyHTML: msg.HTMLBody, BodyText: msg.TextBody, Attachments: msg.Attachments}
-		jsonBytes, jsonErr := json.Marshal(payload)
-		if jsonErr != nil {
-			return nil, fmt.Errorf("failed to serialize draft body: %w", jsonErr)
-		}
-
-		enc, encErr := c.pgpEncryptor.EncryptBytes(c.config.AccountID, draftFromEmail, jsonBytes)
-		if encErr != nil {
-			log.Warn().Err(encErr).Msg("Failed to PGP encrypt draft body, saving unencrypted")
-		} else {
-			pgpEncrypted = true
-			pgpEncryptedBody = enc
-			bodyHTML = ""
-			bodyText = ""
-		}
+	enc, err := c.draftOps.encryptDraftBody(accountID, msg.From.Address, msg)
+	if err != nil {
+		return nil, err
 	}
 
-	// For non-encrypted drafts, store attachments separately
-	if !encrypted && !pgpEncrypted && len(msg.Attachments) > 0 {
-		attJSON, attErr := json.Marshal(msg.Attachments)
-		if attErr != nil {
-			log.Warn().Err(attErr).Msg("Failed to serialize draft attachments")
-		} else {
-			attachmentsData = attJSON
-		}
-	}
-
-	if localDraft != nil {
-		// Update existing draft
-		localDraft.ToList = addressListToJSON(msg.To)
-		localDraft.CcList = addressListToJSON(msg.Cc)
-		localDraft.BccList = addressListToJSON(msg.Bcc)
-		localDraft.Subject = msg.Subject
-		localDraft.BodyHTML = bodyHTML
-		localDraft.BodyText = bodyText
-		localDraft.InReplyToID = msg.InReplyTo
-		localDraft.SignMessage = msg.SignMessage
-		localDraft.Encrypted = encrypted
-		localDraft.EncryptedBody = encryptedBody
-		localDraft.PGPSignMessage = msg.PGPSignMessage
-		localDraft.PGPEncrypted = pgpEncrypted
-		localDraft.PGPEncryptedBody = pgpEncryptedBody
-		localDraft.AttachmentsData = attachmentsData
-		localDraft.SyncStatus = draft.SyncStatusPending
-
-		if err := c.draftStore.Update(localDraft); err != nil {
-			return nil, fmt.Errorf("failed to update draft: %w", err)
-		}
-		log.Debug().Str("draftID", localDraft.ID).Bool("encrypted", encrypted).Bool("pgpEncrypted", pgpEncrypted).Msg("Updated existing draft")
-	} else {
-		// Create new draft
-		localDraft = &draft.Draft{
-			AccountID:        c.config.AccountID,
-			ToList:           addressListToJSON(msg.To),
-			CcList:           addressListToJSON(msg.Cc),
-			BccList:          addressListToJSON(msg.Bcc),
-			Subject:          msg.Subject,
-			BodyHTML:         bodyHTML,
-			BodyText:         bodyText,
-			InReplyToID:      msg.InReplyTo,
-			SignMessage:      msg.SignMessage,
-			Encrypted:        encrypted,
-			EncryptedBody:    encryptedBody,
-			PGPSignMessage:   msg.PGPSignMessage,
-			PGPEncrypted:     pgpEncrypted,
-			PGPEncryptedBody: pgpEncryptedBody,
-			AttachmentsData:  attachmentsData,
-			SyncStatus:       draft.SyncStatusPending,
-		}
-
-		if err := c.draftStore.Create(localDraft); err != nil {
-			return nil, fmt.Errorf("failed to create draft: %w", err)
-		}
-		log.Debug().Str("draftID", localDraft.ID).Bool("encrypted", encrypted).Bool("pgpEncrypted", pgpEncrypted).Msg("Created new draft")
+	localDraft, err = c.draftOps.saveDraftToDB(accountID, localDraft, msg, enc)
+	if err != nil {
+		return nil, err
 	}
 
 	// Keep c.currentDraft in sync
 	c.currentDraft = localDraft
 
-	// Sync to IMAP in background (notifies main window after successful upload)
-	go c.syncDraftToIMAP(localDraft, msg)
+	// Cancel any previous in-flight sync before starting a new one
+	c.cancelDraftSync()
 
-	log.Info().Str("draftID", localDraft.ID).Bool("encrypted", encrypted).Bool("pgpEncrypted", pgpEncrypted).Msg("Draft saved")
+	// Sync to IMAP in background with cancellation support
+	ctx, cancel := context.WithCancel(c.ctx)
+	done := make(chan struct{})
+	c.draftSyncMu.Lock()
+	c.draftSyncCancel = cancel
+	c.draftSyncDone = done
+	c.draftSyncMu.Unlock()
+
+	go func() {
+		defer close(done)
+		defer func() {
+			c.draftSyncMu.Lock()
+			if c.draftSyncDone == done {
+				c.draftSyncCancel = nil
+				c.draftSyncDone = nil
+			}
+			c.draftSyncMu.Unlock()
+		}()
+		c.syncDraftToIMAP(ctx, localDraft, msg)
+	}()
+
+	log.Info().Str("draftID", localDraft.ID).Bool("encrypted", enc.encrypted).Bool("pgpEncrypted", enc.pgpEncrypted).Msg("Draft saved")
 	return localDraft, nil
 }
 
@@ -999,12 +784,11 @@ func (c *ComposerApp) DeleteDraft(draftID string) error {
 	log := logging.WithComponent("composer")
 
 	// Determine which draft ID to use
-	if draftID == "" {
-		if c.currentDraft != nil {
-			draftID = c.currentDraft.ID
-		} else if c.config.DraftID != "" {
-			draftID = c.config.DraftID
-		}
+	if draftID == "" && c.currentDraft != nil {
+		draftID = c.currentDraft.ID
+	}
+	if draftID == "" && c.config.DraftID != "" {
+		draftID = c.config.DraftID
 	}
 
 	if draftID == "" {
@@ -1014,7 +798,11 @@ func (c *ComposerApp) DeleteDraft(draftID string) error {
 
 	log.Debug().Str("draftID", draftID).Msg("DeleteDraft called")
 
-	// Load the draft directly from database (don't rely on c.currentDraft state)
+	// Cancel any in-flight IMAP sync goroutine and wait for it to finish.
+	// This ensures the goroutine can't upload the draft after we delete it.
+	c.cancelDraftSync()
+
+	// Load the draft directly from database (re-read after cancel to get latest state)
 	draftToDelete, err := c.draftStore.Get(draftID)
 	if err != nil {
 		log.Warn().Err(err).Str("draftID", draftID).Msg("Failed to load draft for deletion")
@@ -1031,34 +819,13 @@ func (c *ComposerApp) DeleteDraft(draftID string) error {
 		Str("syncStatus", string(draftToDelete.SyncStatus)).
 		Msg("Deleting draft")
 
-	// If synced to IMAP, delete from server first
-	if draftToDelete.IsSynced() {
-		draftsFolder, _ := c.folderStore.GetByType(c.config.AccountID, folder.TypeDrafts)
-		if draftsFolder != nil {
-			poolConn, err := c.imapPool.GetConnection(c.ctx, c.config.AccountID)
-			if err == nil {
-				defer c.imapPool.Release(poolConn)
-				conn := poolConn.Client()
-				if _, err := conn.SelectMailbox(c.ctx, draftsFolder.Path); err == nil {
-					if err := conn.DeleteMessageByUID(goImap.UID(draftToDelete.IMAPUID)); err != nil {
-						log.Warn().Err(err).Uint32("uid", draftToDelete.IMAPUID).Msg("Failed to delete draft from IMAP")
-					} else {
-						log.Info().Uint32("uid", draftToDelete.IMAPUID).Msg("Draft deleted from IMAP")
-					}
-				}
-			} else {
-				log.Warn().Err(err).Msg("Failed to get IMAP connection for draft deletion")
-			}
-		}
-	}
-
-	// Delete from local database
-	if err := c.draftStore.Delete(draftToDelete.ID); err != nil {
-		return fmt.Errorf("failed to delete draft from database: %w", err)
+	_, err = c.draftOps.deleteDraftCore(c.ctx, draftToDelete)
+	if err != nil {
+		return err
 	}
 
 	// Notify main window to refresh Drafts folder
-	c.notifyDraftDeleted()
+	c.notifyDraftDeleted(draftToDelete.AccountID)
 
 	log.Info().Str("draftID", draftToDelete.ID).Msg("Draft deleted successfully")
 
@@ -1072,11 +839,8 @@ func (c *ComposerApp) DeleteDraft(draftID string) error {
 
 // syncDraftToIMAP syncs a draft to the IMAP server.
 // This runs in a background goroutine and emits events to this window's frontend.
-func (c *ComposerApp) syncDraftToIMAP(localDraft *draft.Draft, msg smtp.ComposeMessage) {
-	log := logging.WithComponent("composer")
-
-	// Helper to emit sync status change event to this window
-	emitSyncStatus := func(status string, imapUID uint32, syncError string) {
+func (c *ComposerApp) syncDraftToIMAP(ctx context.Context, localDraft *draft.Draft, msg smtp.ComposeMessage) {
+	emitStatus := func(status draft.SyncStatus, imapUID uint32, syncError string) {
 		wailsRuntime.EventsEmit(c.ctx, "draft:syncStatusChanged", map[string]interface{}{
 			"draftId":    localDraft.ID,
 			"syncStatus": status,
@@ -1085,121 +849,14 @@ func (c *ComposerApp) syncDraftToIMAP(localDraft *draft.Draft, msg smtp.ComposeM
 		})
 	}
 
-	// Find the Drafts folder for this account
-	draftsFolder, err := c.folderStore.GetByType(c.config.AccountID, folder.TypeDrafts)
-	if err != nil || draftsFolder == nil {
-		log.Warn().Err(err).Str("account_id", c.config.AccountID).Msg("No drafts folder found, skipping IMAP sync")
-		c.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", "no drafts folder found")
-		emitSyncStatus("failed", 0, "no drafts folder found")
+	draftsFolder := c.draftOps.syncToIMAP(ctx, localDraft, msg, emitStatus)
+	if draftsFolder == nil {
 		return
 	}
-
-	// Get IMAP connection from pool
-	poolConn, err := c.imapPool.GetConnection(c.ctx, c.config.AccountID)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to get IMAP connection, will retry later")
-		c.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
-		emitSyncStatus("failed", 0, err.Error())
-		return
-	}
-	defer c.imapPool.Release(poolConn)
-
-	conn := poolConn.Client()
-
-	// Delete old IMAP draft if it exists
-	if localDraft.IMAPUID > 0 && localDraft.FolderID != "" {
-		if _, err := conn.SelectMailbox(c.ctx, draftsFolder.Path); err == nil {
-			if err := conn.DeleteMessageByUID(goImap.UID(localDraft.IMAPUID)); err != nil {
-				log.Warn().Err(err).Uint32("uid", localDraft.IMAPUID).Msg("Failed to delete old draft from IMAP")
-			}
-		}
-	}
-
-	// Build RFC822 message
-	rawMsg, err := msg.ToRFC822()
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to build RFC822 message")
-		c.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
-		emitSyncStatus("failed", 0, err.Error())
-		return
-	}
-
-	// The sender's email determines which cert/key to use
-	syncFromEmail := msg.From.Address
-
-	// Sign then encrypt draft for IMAP sync (mirrors send flow)
-	// S/MIME signing
-	if localDraft.SignMessage {
-		signedMsg, signErr := c.smimeSigner.SignMessage(c.config.AccountID, syncFromEmail, rawMsg)
-		if signErr != nil {
-			log.Warn().Err(signErr).Msg("Failed to S/MIME sign draft for IMAP sync, continuing unsigned")
-		} else {
-			rawMsg = signedMsg
-			log.Debug().Str("draftID", localDraft.ID).Msg("Draft S/MIME signed for IMAP sync")
-		}
-	}
-	// S/MIME encryption
-	if localDraft.Encrypted {
-		encryptedMsg, encErr := c.smimeEncryptor.EncryptMessageToSelf(c.config.AccountID, syncFromEmail, rawMsg)
-		if encErr != nil {
-			log.Error().Err(encErr).Msg("Failed to S/MIME encrypt draft for IMAP sync")
-			c.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", encErr.Error())
-			emitSyncStatus("failed", 0, encErr.Error())
-			return
-		}
-		rawMsg = encryptedMsg
-		log.Debug().Str("draftID", localDraft.ID).Msg("Draft S/MIME encrypted for IMAP sync")
-	}
-	// PGP signing (mutually exclusive with S/MIME)
-	if !localDraft.SignMessage && localDraft.PGPSignMessage {
-		signedMsg, signErr := c.pgpSigner.SignMessage(c.config.AccountID, syncFromEmail, rawMsg)
-		if signErr != nil {
-			log.Warn().Err(signErr).Msg("Failed to PGP sign draft for IMAP sync, continuing unsigned")
-		} else {
-			rawMsg = signedMsg
-			log.Debug().Str("draftID", localDraft.ID).Msg("Draft PGP signed for IMAP sync")
-		}
-	}
-	// PGP encryption (mutually exclusive with S/MIME)
-	if !localDraft.Encrypted && localDraft.PGPEncrypted {
-		encryptedMsg, encErr := c.pgpEncryptor.EncryptMessageToSelf(c.config.AccountID, syncFromEmail, rawMsg)
-		if encErr != nil {
-			log.Error().Err(encErr).Msg("Failed to PGP encrypt draft for IMAP sync")
-			c.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", encErr.Error())
-			emitSyncStatus("failed", 0, encErr.Error())
-			return
-		}
-		rawMsg = encryptedMsg
-		log.Debug().Str("draftID", localDraft.ID).Msg("Draft PGP encrypted for IMAP sync")
-	}
-
-	// Append to IMAP Drafts folder with \Draft and \Seen flags
-	flags := []goImap.Flag{goImap.FlagDraft, goImap.FlagSeen}
-	uid, err := conn.AppendMessage(draftsFolder.Path, flags, time.Now(), rawMsg)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to append draft to IMAP")
-		c.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
-		emitSyncStatus("failed", 0, err.Error())
-		return
-	}
-
-	// Update local draft with sync status
-	err = c.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusSynced, uint32(uid), draftsFolder.ID, "")
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to update draft sync status")
-	}
-
-	// Emit success event to this window
-	emitSyncStatus("synced", uint32(uid), "")
-
-	log.Info().
-		Str("id", localDraft.ID).
-		Uint32("imap_uid", uint32(uid)).
-		Msg("Draft synced to IMAP successfully")
 
 	// Notify main window now that the draft is on IMAP
 	// This triggers the main window to sync the Drafts folder
-	c.notifyDraftSaved(localDraft.ID)
+	c.notifyDraftSaved(localDraft.AccountID, localDraft.ID)
 }
 
 // CloseWindow requests the window to close.
@@ -1209,67 +866,12 @@ func (c *ComposerApp) CloseWindow() {
 
 // PickAttachmentFiles opens a file picker dialog and returns the selected files as attachments.
 func (c *ComposerApp) PickAttachmentFiles() ([]ComposerAttachment, error) {
-	log := logging.WithComponent("composer")
-
-	// Show multi-file picker dialog
-	files, err := wailsRuntime.OpenMultipleFilesDialog(c.ctx, wailsRuntime.OpenDialogOptions{
-		Title: "Select Attachments",
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to show file picker dialog")
-		return nil, fmt.Errorf("failed to show file picker: %w", err)
-	}
-
-	// User cancelled
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	var attachments []ComposerAttachment
-	for _, filePath := range files {
-		att, err := c.readFileAsAttachment(filePath)
-		if err != nil {
-			log.Warn().Err(err).Str("path", filePath).Msg("Failed to read file as attachment")
-			continue
-		}
-		attachments = append(attachments, *att)
-	}
-
-	log.Info().Int("count", len(attachments)).Msg("Files picked for attachment")
-	return attachments, nil
+	return pickAttachmentFiles(c.ctx)
 }
 
-// readFileAsAttachment reads a file and creates a ComposerAttachment.
-func (c *ComposerApp) readFileAsAttachment(filePath string) (*ComposerAttachment, error) {
-	log := logging.WithComponent("composer")
-
-	// Read file content
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	// Get filename
-	filename := filepath.Base(filePath)
-
-	// Detect content type from extension
-	contentType := detectContentType(filename)
-
-	// Encode to base64 for JSON transport
-	encoded := base64.StdEncoding.EncodeToString(content)
-
-	log.Debug().
-		Str("filename", filename).
-		Str("contentType", contentType).
-		Int("size", len(content)).
-		Msg("File read as attachment")
-
-	return &ComposerAttachment{
-		Filename:    filename,
-		ContentType: contentType,
-		Size:        len(content),
-		Data:        encoded,
-	}, nil
+// ReadFileAsAttachment reads a file from a filesystem path and creates a ComposerAttachment.
+func (c *ComposerApp) ReadFileAsAttachment(filePath string) (*ComposerAttachment, error) {
+	return readFileAsAttachment(filePath)
 }
 
 // ============================================================================
@@ -1279,77 +881,7 @@ func (c *ComposerApp) readFileAsAttachment(filePath string) (*ComposerAttachment
 // draftToComposeMessage converts a draft to a ComposeMessage.
 // If the draft is encrypted (S/MIME or PGP), decrypts the body first.
 func (c *ComposerApp) draftToComposeMessage(d *draft.Draft) *smtp.ComposeMessage {
-	bodyHTML := d.BodyHTML
-	bodyText := d.BodyText
-	encryptMessage := false
-	pgpEncryptMessage := false
-	var attachments []smtp.Attachment
-
-	// Resolve the identity email for decryption
-	draftIdentityEmail := c.getDraftIdentityEmail(d)
-
-	// S/MIME encrypted draft
-	if d.Encrypted && len(d.EncryptedBody) > 0 {
-		decrypted, err := c.smimeDecryptor.DecryptBytes(d.AccountID, draftIdentityEmail, d.EncryptedBody)
-		if err != nil {
-			log := logging.WithComponent("composer")
-			log.Error().Err(err).Str("draftID", d.ID).Msg("Failed to decrypt S/MIME draft body")
-		} else {
-			var payload draftBodyPayload
-			if err := json.Unmarshal(decrypted, &payload); err != nil {
-				log := logging.WithComponent("composer")
-				log.Error().Err(err).Str("draftID", d.ID).Msg("Failed to unmarshal decrypted S/MIME draft body")
-			} else {
-				bodyHTML = payload.BodyHTML
-				bodyText = payload.BodyText
-				attachments = payload.Attachments
-				encryptMessage = true
-			}
-		}
-	}
-
-	// PGP encrypted draft (mutually exclusive with S/MIME)
-	if !d.Encrypted && d.PGPEncrypted && len(d.PGPEncryptedBody) > 0 {
-		decrypted, err := c.pgpDecryptor.DecryptBytes(d.AccountID, draftIdentityEmail, d.PGPEncryptedBody)
-		if err != nil {
-			log := logging.WithComponent("composer")
-			log.Error().Err(err).Str("draftID", d.ID).Msg("Failed to decrypt PGP draft body")
-		} else {
-			var payload draftBodyPayload
-			if err := json.Unmarshal(decrypted, &payload); err != nil {
-				log := logging.WithComponent("composer")
-				log.Error().Err(err).Str("draftID", d.ID).Msg("Failed to unmarshal decrypted PGP draft body")
-			} else {
-				bodyHTML = payload.BodyHTML
-				bodyText = payload.BodyText
-				attachments = payload.Attachments
-				pgpEncryptMessage = true
-			}
-		}
-	}
-
-	// For non-encrypted drafts, restore attachments from separate column
-	if !d.Encrypted && !d.PGPEncrypted && len(d.AttachmentsData) > 0 {
-		if err := json.Unmarshal(d.AttachmentsData, &attachments); err != nil {
-			log := logging.WithComponent("composer")
-			log.Warn().Err(err).Str("draftID", d.ID).Msg("Failed to unmarshal draft attachments")
-		}
-	}
-
-	return &smtp.ComposeMessage{
-		To:                parseAddressList(d.ToList),
-		Cc:                parseAddressList(d.CcList),
-		Bcc:               parseAddressList(d.BccList),
-		Subject:           d.Subject,
-		HTMLBody:          bodyHTML,
-		TextBody:          bodyText,
-		Attachments:       attachments,
-		InReplyTo:         d.InReplyToID,
-		SignMessage:       d.SignMessage,
-		EncryptMessage:    encryptMessage,
-		PGPSignMessage:    d.PGPSignMessage,
-		PGPEncryptMessage: pgpEncryptMessage,
-	}
+	return c.draftOps.toComposeMessage(d)
 }
 
 // buildReplyMessage builds a compose message for reply/forward.
@@ -1449,15 +981,14 @@ func (c *ComposerApp) buildReplyMessage(msg *message.Message, mode string) *smtp
 }
 
 // HasSMIMECertificate returns whether the account has a valid default S/MIME certificate.
-func (c *ComposerApp) HasSMIMECertificate() bool {
-	cert, _, err := c.smimeStore.GetDefaultCertificate(c.config.AccountID)
-	return err == nil && cert != nil && !cert.IsExpired
+func (c *ComposerApp) HasSMIMECertificate(accountID string) bool {
+	return c.composeOps.hasSMIMECertificate(accountID)
 }
 
 // GetSMIMECertificateForEmail returns the S/MIME certificate matching the given email.
 // Returns nil if no matching certificate is found.
-func (c *ComposerApp) GetSMIMECertificateForEmail(email string) (*smime.Certificate, error) {
-	cert, _, err := c.smimeStore.GetCertificateByEmail(c.config.AccountID, email)
+func (c *ComposerApp) GetSMIMECertificateForEmail(accountID string, email string) (*smime.Certificate, error) {
+	cert, _, err := c.smimeStore.GetCertificateByEmail(accountID, email)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get certificate for email: %w", err)
 	}
@@ -1465,13 +996,13 @@ func (c *ComposerApp) GetSMIMECertificateForEmail(email string) (*smime.Certific
 }
 
 // GetSMIMESignPolicy returns the signing policy for the account.
-func (c *ComposerApp) GetSMIMESignPolicy() (string, error) {
-	return c.smimeStore.GetSignPolicy(c.config.AccountID)
+func (c *ComposerApp) GetSMIMESignPolicy(accountID string) (string, error) {
+	return c.smimeStore.GetSignPolicy(accountID)
 }
 
 // GetSMIMEEncryptPolicy returns the encryption policy for the account.
-func (c *ComposerApp) GetSMIMEEncryptPolicy() (string, error) {
-	return c.smimeStore.GetEncryptPolicy(c.config.AccountID)
+func (c *ComposerApp) GetSMIMEEncryptPolicy(accountID string) (string, error) {
+	return c.smimeStore.GetEncryptPolicy(accountID)
 }
 
 // CheckRecipientCerts checks which recipients have S/MIME certificates available.
@@ -1524,15 +1055,14 @@ func (c *ComposerApp) ImportRecipientCert(email, filePath string) error {
 }
 
 // HasPGPKey returns whether the account has a valid default PGP key.
-func (c *ComposerApp) HasPGPKey() bool {
-	key, _, err := c.pgpStore.GetDefaultKey(c.config.AccountID)
-	return err == nil && key != nil && !key.IsExpired
+func (c *ComposerApp) HasPGPKey(accountID string) bool {
+	return c.composeOps.hasPGPKey(accountID)
 }
 
 // GetPGPKeyForEmail returns the PGP key matching the given email.
 // Returns nil if no matching key is found.
-func (c *ComposerApp) GetPGPKeyForEmail(email string) (*pgp.Key, error) {
-	key, _, err := c.pgpStore.GetKeyByEmail(c.config.AccountID, email)
+func (c *ComposerApp) GetPGPKeyForEmail(accountID string, email string) (*pgp.Key, error) {
+	key, _, err := c.pgpStore.GetKeyByEmail(accountID, email)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get key for email: %w", err)
 	}
@@ -1540,13 +1070,13 @@ func (c *ComposerApp) GetPGPKeyForEmail(email string) (*pgp.Key, error) {
 }
 
 // GetPGPSignPolicy returns the PGP signing policy for the account.
-func (c *ComposerApp) GetPGPSignPolicy() (string, error) {
-	return c.pgpStore.GetSignPolicy(c.config.AccountID)
+func (c *ComposerApp) GetPGPSignPolicy(accountID string) (string, error) {
+	return c.pgpStore.GetSignPolicy(accountID)
 }
 
 // GetPGPEncryptPolicy returns the PGP encryption policy for the account.
-func (c *ComposerApp) GetPGPEncryptPolicy() (string, error) {
-	return c.pgpStore.GetEncryptPolicy(c.config.AccountID)
+func (c *ComposerApp) GetPGPEncryptPolicy(accountID string) (string, error) {
+	return c.pgpStore.GetEncryptPolicy(accountID)
 }
 
 // CheckRecipientPGPKeys checks which recipients have PGP public keys available.
@@ -1667,79 +1197,28 @@ func (c *ComposerApp) getHKPServers() []string {
 
 // shouldPGPSignMessage determines whether a message should be PGP signed.
 func (c *ComposerApp) shouldPGPSignMessage(perMessageOverride bool) bool {
-	if perMessageOverride {
-		return c.HasPGPKey()
-	}
-
-	policy, err := c.pgpStore.GetSignPolicy(c.config.AccountID)
-	if err != nil || policy != "always" {
-		return false
-	}
-
-	return c.HasPGPKey()
+	return c.composeOps.shouldPGPSignMessage(c.config.AccountID, perMessageOverride)
 }
 
 // shouldPGPEncryptMessage determines whether a message should be PGP encrypted.
 func (c *ComposerApp) shouldPGPEncryptMessage(perMessageOverride bool) bool {
-	if perMessageOverride {
-		return c.HasPGPKey()
-	}
-
-	policy, err := c.pgpStore.GetEncryptPolicy(c.config.AccountID)
-	if err != nil || policy != "always" {
-		return false
-	}
-
-	return c.HasPGPKey()
+	return c.composeOps.shouldPGPEncryptMessage(c.config.AccountID, perMessageOverride)
 }
 
 // shouldSignMessage determines whether a message should be S/MIME signed.
 func (c *ComposerApp) shouldSignMessage(perMessageOverride bool) bool {
-	if perMessageOverride {
-		return c.HasSMIMECertificate()
-	}
-
-	policy, err := c.smimeStore.GetSignPolicy(c.config.AccountID)
-	if err != nil || policy != "always" {
-		return false
-	}
-
-	return c.HasSMIMECertificate()
+	return c.composeOps.shouldSignMessage(c.config.AccountID, perMessageOverride)
 }
 
 // shouldEncryptMessage determines whether a message should be S/MIME encrypted.
 func (c *ComposerApp) shouldEncryptMessage(perMessageOverride bool) bool {
-	if perMessageOverride {
-		return c.HasSMIMECertificate()
-	}
-
-	policy, err := c.smimeStore.GetEncryptPolicy(c.config.AccountID)
-	if err != nil || policy != "always" {
-		return false
-	}
-
-	return c.HasSMIMECertificate()
+	return c.composeOps.shouldEncryptMessage(c.config.AccountID, perMessageOverride)
 }
 
 // getDraftIdentityEmail returns the email address for the draft's identity.
 // Falls back to the account email if the identity cannot be resolved.
 func (c *ComposerApp) getDraftIdentityEmail(d *draft.Draft) string {
-	if d.IdentityID != "" {
-		identities, err := c.accountStore.GetIdentities(d.AccountID)
-		if err == nil {
-			for _, id := range identities {
-				if id.ID == d.IdentityID {
-					return id.Email
-				}
-			}
-		}
-	}
-	// Fall back to account email
-	acc, err := c.accountStore.Get(d.AccountID)
-	if err == nil && acc != nil {
-		return acc.Email
-	}
-	return ""
+	return c.draftOps.getIdentityEmail(d)
 }
 
 // parseIntID parses a string ID to int64.

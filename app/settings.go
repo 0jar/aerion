@@ -163,6 +163,43 @@ func (a *App) SetLanguage(language string) error {
 	return a.settingsStore.SetLanguage(language)
 }
 
+// GetComposerMode returns the default compose mode ("inline" or "detached")
+func (a *App) GetComposerMode() (string, error) {
+	return a.settingsStore.GetComposerMode()
+}
+
+// SetComposerMode sets the default compose mode.
+// Setting to "detached" also auto-sets mailto mode to "detached".
+func (a *App) SetComposerMode(mode string) error {
+	if err := a.settingsStore.SetComposerMode(mode); err != nil {
+		return err
+	}
+	if mode == "detached" {
+		return a.settingsStore.SetMailtoMode("detached")
+	}
+	return nil
+}
+
+// GetMailtoMode returns the external mailto link handling mode ("inline" or "detached")
+func (a *App) GetMailtoMode() (string, error) {
+	return a.settingsStore.GetMailtoMode()
+}
+
+// SetMailtoMode sets the external mailto link handling mode
+func (a *App) SetMailtoMode(mode string) error {
+	return a.settingsStore.SetMailtoMode(mode)
+}
+
+// GetComposerFormat returns the default composer format ("rich" or "plain")
+func (a *App) GetComposerFormat() (string, error) {
+	return a.settingsStore.GetComposerFormat()
+}
+
+// SetComposerFormat sets the default composer format
+func (a *App) SetComposerFormat(format string) error {
+	return a.settingsStore.SetComposerFormat(format)
+}
+
 // AddImageAllowlist adds a domain or sender to the image allowlist
 // entryType: "domain" or "sender"
 // value: the domain (e.g., "company.com") or email (e.g., "newsletter@company.com")

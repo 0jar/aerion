@@ -158,7 +158,8 @@ func (a *App) handleComposerDraftSaved(payload ipc.DraftSavedPayload) {
 }
 
 // handleComposerDraftDeleted is called when a composer deletes a draft.
-// Syncs the Drafts folder so the main window's folder view reflects the deletion.
+// Emits messages:updated for immediate UI refresh and syncs the Drafts folder
+// so the main window's folder view reflects the deletion.
 func (a *App) handleComposerDraftDeleted(payload ipc.DraftDeletedPayload) {
 	log := logging.WithComponent("app.ipc")
 
@@ -166,26 +167,32 @@ func (a *App) handleComposerDraftDeleted(payload ipc.DraftDeletedPayload) {
 		Str("accountID", payload.AccountID).
 		Msg("Composer deleted draft notification")
 
-	// Sync the Drafts folder to reflect the deletion
-	go func() {
-		draftsFolder, err := a.GetSpecialFolder(payload.AccountID, folder.TypeDrafts)
-		if err != nil || draftsFolder == nil {
-			log.Warn().Err(err).Str("accountID", payload.AccountID).Msg("Could not find Drafts folder for sync")
-			return
-		}
+	draftsFolder, err := a.GetSpecialFolder(payload.AccountID, folder.TypeDrafts)
+	if err != nil || draftsFolder == nil {
+		log.Warn().Err(err).Str("accountID", payload.AccountID).Msg("Could not find Drafts folder for sync")
+		return
+	}
 
+	// Notify frontend to refresh the message list immediately
+	wailsRuntime.EventsEmit(a.ctx, "messages:updated", map[string]interface{}{
+		"accountId": payload.AccountID,
+		"folderId":  draftsFolder.ID,
+	})
+
+	// Sync the Drafts folder in background to reconcile with IMAP
+	go func() {
 		if err := a.SyncFolder(payload.AccountID, draftsFolder.ID); err != nil {
 			log.Warn().Err(err).Str("folderID", draftsFolder.ID).Msg("Failed to sync Drafts folder after deletion")
 			return
 		}
-
 		log.Debug().Str("folderID", draftsFolder.ID).Msg("Synced Drafts folder after composer draft delete")
 	}()
 }
 
 // OpenComposerWindow spawns a new detached composer window.
 // This creates a separate process of the same executable with composer mode flags.
-func (a *App) OpenComposerWindow(accountID, mode, messageID, draftID string) error {
+// If mailtoURL is non-empty, the --mailto flag is appended for the composer to handle.
+func (a *App) OpenComposerWindow(accountID, mode, messageID, draftID, mailtoURL string) error {
 	log := logging.WithComponent("app.ipc")
 
 	if a.ipcServer == nil || a.ipcTokenMgr == nil {
@@ -212,6 +219,11 @@ func (a *App) OpenComposerWindow(accountID, mode, messageID, draftID string) err
 		if messageID != "" {
 			args = append(args, "--message-id", messageID)
 		}
+	}
+
+	// Add mailto URL if provided
+	if mailtoURL != "" {
+		args = append(args, "--mailto", mailtoURL)
 	}
 
 	log.Info().

@@ -190,6 +190,36 @@ func (a *App) ReorderAccounts(ids []string) error {
 	return a.accountStore.Reorder(ids)
 }
 
+// AccountIdentityGroup groups an account with its identities for the cross-account From dropdown
+type AccountIdentityGroup struct {
+	Account    *account.Account    `json:"account"`
+	Identities []*account.Identity `json:"identities"`
+}
+
+// GetAllAccountIdentities returns all accounts with their identities in one call.
+// Used by the inline composer to populate the cross-account From dropdown.
+func (a *App) GetAllAccountIdentities() ([]AccountIdentityGroup, error) {
+	accounts, err := a.accountStore.List()
+	if err != nil {
+		return nil, err
+	}
+	var groups []AccountIdentityGroup
+	for _, acc := range accounts {
+		if !acc.Enabled {
+			continue
+		}
+		identities, err := a.accountStore.GetIdentities(acc.ID)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, AccountIdentityGroup{
+			Account:    acc,
+			Identities: identities,
+		})
+	}
+	return groups, nil
+}
+
 // GetIdentities returns all identities for an account
 func (a *App) GetIdentities(accountID string) ([]*account.Identity, error) {
 	return a.accountStore.GetIdentities(accountID)

@@ -2,11 +2,13 @@
 // Provides reactive state for application settings
 
 // @ts-ignore - wailsjs path
-import { GetMessageListDensity, GetMessageListSortOrder, GetThemeMode, GetShowTitleBar, GetRunBackground, GetStartHidden, GetAutostart, GetLanguage } from '../../../wailsjs/go/app/App'
+import { GetMessageListDensity, GetMessageListSortOrder, GetThemeMode, GetShowTitleBar, GetRunBackground, GetStartHidden, GetAutostart, GetLanguage, GetComposerMode, GetMailtoMode, GetComposerFormat } from '../../../wailsjs/go/app/App'
 import { setLocale as setI18nLocale } from '$lib/i18n'
 import { loadDateFnsLocale, getDateFnsLocale } from '$lib/i18n/dateFnsLocale'
 import type { Locale } from 'date-fns'
 
+export type ComposerMode = 'inline' | 'detached'
+export type ComposerFormat = 'rich' | 'plain'
 export type MessageListDensity = 'micro' | 'compact' | 'standard' | 'large'
 export type MessageListSortOrder = 'newest' | 'oldest'
 export type ThemeMode =
@@ -23,6 +25,9 @@ let runBackground = $state<boolean>(false)
 let startHidden = $state<boolean>(false)
 let autostart = $state<boolean>(false)
 let language = $state<string>('')
+let composerMode = $state<ComposerMode>('inline')
+let mailtoMode = $state<ComposerMode>('inline')
+let composerFormat = $state<ComposerFormat>('rich')
 
 // Getter functions to access the state
 export function getMessageListDensity(): MessageListDensity {
@@ -55,6 +60,18 @@ export function getAutostart(): boolean {
 
 export function getLanguage(): string {
   return language
+}
+
+export function getComposerMode(): ComposerMode {
+  return composerMode
+}
+
+export function getMailtoMode(): ComposerMode {
+  return mailtoMode
+}
+
+export function getComposerFormat(): ComposerFormat {
+  return composerFormat
 }
 
 export function getCurrentDateFnsLocale(): Locale | undefined {
@@ -98,10 +115,22 @@ export function setLanguage(lang: string) {
   }
 }
 
+export function setComposerMode(mode: ComposerMode) {
+  composerMode = mode
+}
+
+export function setMailtoMode(mode: ComposerMode) {
+  mailtoMode = mode
+}
+
+export function setComposerFormat(format: ComposerFormat) {
+  composerFormat = format
+}
+
 // Load settings from backend (call on app startup)
 export async function loadSettings(): Promise<ThemeMode> {
   try {
-    const [density, sortOrder, theme, titleBar, runBg, startHid, autoSt, lang] = await Promise.all([
+    const [density, sortOrder, theme, titleBar, runBg, startHid, autoSt, lang, compMode, mailMode, compFormat] = await Promise.all([
       GetMessageListDensity(),
       GetMessageListSortOrder(),
       GetThemeMode(),
@@ -110,6 +139,9 @@ export async function loadSettings(): Promise<ThemeMode> {
       GetStartHidden(),
       GetAutostart(),
       GetLanguage(),
+      GetComposerMode(),
+      GetMailtoMode(),
+      GetComposerFormat(),
     ])
     messageListDensity = (density as MessageListDensity) || 'standard'
     messageListSortOrder = (sortOrder as MessageListSortOrder) || 'newest'
@@ -118,6 +150,9 @@ export async function loadSettings(): Promise<ThemeMode> {
     runBackground = runBg ?? false
     startHidden = startHid ?? false
     autostart = autoSt ?? false
+    composerMode = (compMode as ComposerMode) || 'inline'
+    mailtoMode = (mailMode as ComposerMode) || 'inline'
+    composerFormat = (compFormat as ComposerFormat) || 'rich'
     // Apply saved language (if set, overrides system detection from initI18n)
     if (lang) {
       language = lang

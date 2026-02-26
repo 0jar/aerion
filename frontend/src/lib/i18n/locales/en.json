@@ -216,7 +216,12 @@
     "attachFiles": "Attach files",
     "filesAttached": "{count} file(s) attached",
     "ctrlEnterToSend": "Ctrl+Enter to send",
-    "dropToAttach": "Drop files to attach",
+    "dropToAttach": "Drop files to insert or attach",
+    "flatpakDndTitle": "Drag and Drop Not Available",
+    "flatpakDndDescription": "Drag and drop is not available on the Flatpak version of Aerion unless you manually grant it permission to access your filesystem.",
+    "flatpakDndGrantExample": "For example, to grant it access to your home directory, run the following in your terminal:",
+    "flatpakDndSecurityWarning": "There are security implications to granting such permission. Do not grant such permission without fully understanding what it does.",
+    "flatpakDndAlternative": "Alternatively, you can just use the insert image or attach buttons without any further configurations.",
     "encrypting": "Encrypting...",
     "saving": "Saving...",
     "saveFailed": "Save failed",
@@ -369,7 +374,8 @@
     "failedToRemoveRecipientPGPKey": "Failed to remove recipient PGP key.",
     "failedToAddKeyServer": "Failed to add key server.",
     "failedToRemoveKeyServer": "Failed to remove key server.",
-    "failedToRemoveSenderCert": "Failed to remove sender certificate."
+    "failedToRemoveSenderCert": "Failed to remove sender certificate.",
+    "linkOpened": "Link opened in browser"
   },
   "settings": {
     "title": "Settings",
@@ -377,7 +383,18 @@
     "general": "General",
     "accounts": "Accounts",
     "contacts": "Contacts",
-    "about": "About"
+    "about": "About",
+    "composer": "Composer",
+    "composerMode": "Default compose mode",
+    "composerModeInline": "In window",
+    "composerModeDetached": "Detached window",
+    "composerModeDescription": "Choose whether composing opens in the main window or a separate window",
+    "mailtoMode": "External mailto links",
+    "mailtoModeDescription": "Choose how mailto links from other apps are handled",
+    "composerFormat": "Default message format",
+    "composerFormatRich": "Rich text",
+    "composerFormatPlain": "Plain text",
+    "composerFormatDescription": "New messages will use this format by default. You can still switch per message."
   },
   "settingsGeneral": {
     "display": "Display",

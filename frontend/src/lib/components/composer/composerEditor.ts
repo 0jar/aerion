@@ -15,6 +15,7 @@ import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
 import FontSize from 'tiptap-extension-font-size'
+import { parseFileUris } from './composerUtils'
 
 /**
  * Extended TextStyle to handle legacy <font> tags from signatures/pasted content
@@ -66,6 +67,8 @@ export interface ComposerEditorHandlers {
   onUpdate?: () => void
   onPasteImage?: (file: File) => void
   onDropImage?: (file: File) => void
+  onDropFile?: (file: File) => void
+  onDropFilePaths?: (paths: string[]) => void
   onShiftTab?: () => void
 }
 
@@ -138,22 +141,93 @@ export function createComposerEditor(
         }
         return false
       },
-      // Handle drop events for images
-      handleDrop: (view, event, slice, moved) => {
-        if (moved) return false  // Let TipTap handle moves
+      // Handle drop events for files (images inline, others as attachments)
+      //
+      // Three-tier approach for cross-platform compatibility:
+      //  1. File objects via dataTransfer.files (macOS/Windows webviews)
+      //  2. File URIs via getData('text/uri-list') (standard browsers)
+      //  3. ProseMirror state cleanup (WebKitGTK fallback — neither #1 nor #2
+      //     work because WebKitGTK provides empty files/getData and instead
+      //     inserts file:/// URIs as plain text at the native GTK layer)
+      handleDrop: (view, event, _slice, moved) => {
+        if (moved) return false
 
-        const files = event.dataTransfer?.files
-        if (!files?.length) return false
+        // Snapshot pre-existing file:/// URIs so we only clean up NEW ones
+        // from the drop (preserves URIs the user intentionally typed)
+        const existingUris = new Set<string>()
+        view.state.doc.descendants((node) => {
+          if (!node.isText || !node.text || !node.text.includes('file:///')) return
+          const re = /file:\/\/\/.+/g
+          let m
+          while ((m = re.exec(node.text)) !== null) {
+            existingUris.add(m[0].trim())
+          }
+        })
 
-        for (const file of files) {
-          if (file.type.startsWith('image/')) {
-            event.preventDefault()
-            if (handlers.onDropImage) {
-              handlers.onDropImage(file)
+        // WebKitGTK fallback: after ProseMirror syncs the native text
+        // insertion into state, delete only the NEW file:/// URIs and
+        // extract paths for file processing via the Wails Go backend.
+        setTimeout(() => {
+          const { doc } = view.state
+          const fileUriRegex = /file:\/\/\/.+/g
+          const deletions: { from: number; to: number }[] = []
+          const uris: string[] = []
+
+          doc.descendants((node, pos) => {
+            if (!node.isText || !node.text || !node.text.includes('file:///')) return
+            let match
+            while ((match = fileUriRegex.exec(node.text)) !== null) {
+              const uri = match[0].trim()
+              if (existingUris.has(uri)) continue
+              deletions.push({
+                from: pos + match.index,
+                to: pos + match.index + match[0].length,
+              })
+              uris.push(uri)
             }
+          })
+
+          if (deletions.length === 0) return
+
+          let tr = view.state.tr
+          for (let i = deletions.length - 1; i >= 0; i--) {
+            tr = tr.delete(deletions[i].from, deletions[i].to)
+          }
+          view.dispatch(tr)
+
+          const paths = uris.map(uri => decodeURIComponent(uri.slice(7)))
+          if (paths.length > 0) {
+            handlers.onDropFilePaths?.(paths)
+          }
+        }, 200)
+
+        // Case 1: File objects (macOS/Windows webviews)
+        const files = event.dataTransfer?.files
+        if (files?.length) {
+          event.preventDefault()
+          for (const file of Array.from(files)) {
+            if (file.type.startsWith('image/')) {
+              handlers.onDropImage?.(file)
+              continue
+            }
+            handlers.onDropFile?.(file)
+          }
+          return true
+        }
+
+        // Case 2: File URIs via getData (standard browsers)
+        const uriList = event.dataTransfer?.getData('text/uri-list')
+        const textData = event.dataTransfer?.getData('text/plain')
+        const pathData = uriList || textData
+        if (pathData) {
+          const paths = parseFileUris(pathData)
+          if (paths.length > 0) {
+            event.preventDefault()
+            handlers.onDropFilePaths?.(paths)
             return true
           }
         }
+
         return false
       },
     },

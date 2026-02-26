@@ -8,7 +8,6 @@
   import { supportedLocales } from '$lib/i18n'
 
   interface Props {
-    readReceiptResponsePolicy: string
     markAsReadDelaySeconds: number
     messageListDensity: string
     themeMode: string
@@ -17,7 +16,6 @@
     startHidden: boolean
     autostart: boolean
     language: string
-    onPolicyChange: (value: string) => void
     onDelayChange: (value: number) => void
     onDensityChange: (value: string) => void
     onThemeChange: (value: string) => void
@@ -29,7 +27,6 @@
   }
 
   let {
-    readReceiptResponsePolicy = $bindable(),
     markAsReadDelaySeconds = $bindable(),
     messageListDensity = $bindable(),
     themeMode = $bindable(),
@@ -38,7 +35,6 @@
     startHidden = $bindable(),
     autostart = $bindable(),
     language = $bindable(),
-    onPolicyChange,
     onDelayChange,
     onDensityChange,
     onThemeChange,
@@ -48,13 +44,6 @@
     onAutostartChange,
     onLanguageChange,
   }: Props = $props()
-
-  // Read receipt response policy options
-  const readReceiptResponseOptions = $derived([
-    { value: 'never', label: $_('settingsGeneral.neverSendReceipts') },
-    { value: 'ask', label: $_('settingsGeneral.askEachTime') },
-    { value: 'always', label: $_('settingsGeneral.alwaysSendReceipts') },
-  ])
 
   // Message list density options
   const densityOptions = $derived([
@@ -74,11 +63,6 @@
     { value: 'dark-gray', label: $_('settingsGeneral.themeDarkGray') },
   ])
 
-  // Get the label for the current value
-  function getSelectedLabel(value: string): string {
-    return readReceiptResponseOptions.find(opt => opt.value === value)?.label || value
-  }
-
   function getDensityLabel(value: string): string {
     return densityOptions.find(opt => opt.value === value)?.label || value
   }
@@ -90,11 +74,6 @@
   // Language picker
   function getLanguageLabel(code: string): string {
     return supportedLocales.find(l => l.code === code)?.name || code || 'English'
-  }
-
-  function handlePolicyChange(value: string) {
-    readReceiptResponsePolicy = value
-    onPolicyChange?.(value)
   }
 
   function handleDensityChange(value: string) {
@@ -224,36 +203,6 @@
       </Select.Root>
       <p class="text-xs text-muted-foreground">
         {$_('settingsGeneral.messageListDensityHelp')}
-      </p>
-    </div>
-  </div>
-
-  <!-- Divider -->
-  <div class="border-t border-border"></div>
-
-  <!-- Read Receipts Section -->
-  <div class="space-y-4">
-    <h3 class="text-sm font-medium flex items-center gap-2">
-      <Icon icon="mdi:email-check-outline" class="w-4 h-4" />
-      {$_('settingsGeneral.readReceipts')}
-    </h3>
-
-    <div class="space-y-2">
-      <Label>{$_('settingsGeneral.readReceiptPolicy')}</Label>
-      <Select.Root value={readReceiptResponsePolicy} onValueChange={handlePolicyChange}>
-        <Select.Trigger>
-          <Select.Value placeholder={$_('settingsGeneral.selectPolicy')}>
-            {getSelectedLabel(readReceiptResponsePolicy)}
-          </Select.Value>
-        </Select.Trigger>
-        <Select.Content>
-          {#each readReceiptResponseOptions as opt (opt.value)}
-            <Select.Item value={opt.value} label={opt.label} />
-          {/each}
-        </Select.Content>
-      </Select.Root>
-      <p class="text-xs text-muted-foreground">
-        {$_('settingsGeneral.readReceiptPolicyHelp')}
       </p>
     </div>
   </div>

@@ -13,7 +13,7 @@
   import CertificateDialog from './lib/components/settings/CertificateDialog.svelte'
   import { accountStore } from '$lib/stores/accounts.svelte'
   import { addToast } from '$lib/stores/toast'
-  import { loadSettings, getThemeMode, getShowTitleBar, type ThemeMode } from '$lib/stores/settings.svelte'
+  import { loadSettings, getThemeMode, getShowTitleBar, getComposerMode, getMailtoMode, type ThemeMode } from '$lib/stores/settings.svelte'
   import { loadUIState, saveUIState, paneConstraints } from '$lib/stores/uiState.svelte'
   import {
     type FocusablePane,
@@ -26,7 +26,7 @@
   } from '$lib/stores/keyboard.svelte'
   import { initLayout, getLayoutMode, getResponsiveView, showViewer, hideViewer, showSidebar, hideSidebar, isResponsive } from '$lib/stores/layout.svelte'
   // @ts-ignore - wailsjs path
-  import { PrepareReply, GetPendingMailto, GetDraft, MarkAsRead, MarkAsUnread, Star, Unstar, Archive, MarkAsSpam, MarkAsNotSpam, Undo, GetTermsAccepted, SetTermsAccepted, GetSystemTheme, RefreshWindowConstraints, AcceptCertificate, GetStartHiddenActive, CloseWindow, QuitApp } from '../wailsjs/go/app/App.js'
+  import { PrepareReply, GetPendingMailto, GetDraft, MarkAsRead, MarkAsUnread, Star, Unstar, Archive, MarkAsSpam, MarkAsNotSpam, Undo, GetTermsAccepted, SetTermsAccepted, GetSystemTheme, RefreshWindowConstraints, AcceptCertificate, GetStartHiddenActive, CloseWindow, QuitApp, OpenComposerWindow } from '../wailsjs/go/app/App.js'
   // @ts-ignore - wailsjs path
   import { smtp, folder, certificate } from '../wailsjs/go/models'
   // @ts-ignore - wailsjs runtime
@@ -215,6 +215,11 @@
         pendingCertAccountId = data.accountId
         showCertDialog = true
       }
+    })
+
+    // Listen for external mailto from second instance (routed through backend)
+    EventsOn('mailto:external', (data: MailtoData) => {
+      handleMailtoData(data)
     })
 
     // Listen for escape-iframe-focus event (from EmailBody when navigating away from iframe)
@@ -455,23 +460,36 @@
     })
   }
   
+  // Resolve an account ID that may be 'unified' to a real account ID.
+  // Returns the first real account ID if the input is 'unified' or falsy.
+  function resolveAccountId(id: string | null): string | undefined {
+    if (id && id !== 'unified') return id
+    return accountStore.accounts[0]?.account.id
+  }
+
   // Handle compose button click (new message)
   function handleCompose() {
     // Use the selected account, or the first account if none selected
-    const accountId = selectedAccountId || accountStore.accounts[0]?.account.id
-    if (accountId) {
-      composerAccountId = accountId
-      composerInitialMessage = null
-      composerDraftId = null
-      showComposer = true
+    const accountId = resolveAccountId(selectedAccountId)
+    if (!accountId) return
+
+    // Check if detached mode is preferred
+    if (getComposerMode() === 'detached') {
+      OpenComposerWindow(accountId, 'new', '', '', '')
+      return
     }
+
+    composerAccountId = accountId
+    composerInitialMessage = null
+    composerDraftId = null
+    showComposer = true
   }
 
   // Handle edit draft (opens composer with existing draft)
   async function handleEditDraft(draftId: string) {
     // Use conversation's account ID, fall back to selected account or first account
-    const accountId = selectedConversationAccountId || selectedAccountId || accountStore.accounts[0]?.account.id
-    if (!accountId || accountId === 'unified') return
+    const accountId = resolveAccountId(selectedConversationAccountId) || resolveAccountId(selectedAccountId)
+    if (!accountId) return
 
     try {
       // Load the draft content from backend
@@ -493,24 +511,24 @@
   // Handle compose to a specific email address (from mailto: links in emails)
   function handleComposeToAddress(toAddress: string) {
     // Use conversation's account ID, or selected account, or first account
-    const accountId = selectedConversationAccountId || selectedAccountId || accountStore.accounts[0]?.account.id
-    if (accountId && accountId !== 'unified') {
-      composerAccountId = accountId
-      composerDraftId = null
-      // Create a minimal ComposeMessage with just the To address
-      composerInitialMessage = new smtp.ComposeMessage({
-        from: new smtp.Address({ name: '', address: '' }),
-        to: [new smtp.Address({ name: '', address: toAddress })],
-        cc: [],
-        bcc: [],
-        subject: '',
-        text_body: '',
-        html_body: '',
-        attachments: [],
-        request_read_receipt: false,
-      })
-      showComposer = true
-    }
+    const accountId = resolveAccountId(selectedConversationAccountId) || resolveAccountId(selectedAccountId)
+    if (!accountId) return
+
+    composerAccountId = accountId
+    composerDraftId = null
+    // Create a minimal ComposeMessage with just the To address
+    composerInitialMessage = new smtp.ComposeMessage({
+      from: new smtp.Address({ name: '', address: '' }),
+      to: [new smtp.Address({ name: '', address: toAddress })],
+      cc: [],
+      bcc: [],
+      subject: '',
+      text_body: '',
+      html_body: '',
+      attachments: [],
+      request_read_receipt: false,
+    })
+    showComposer = true
   }
 
   // Handle mailto: URL data (from command line launch)
@@ -522,15 +540,21 @@
     body?: string
   }
 
-  function handleMailtoData(data: MailtoData) {
-    // Use selected account or first account
-    const accountId = selectedAccountId || accountStore.accounts[0]?.account.id
-    if (!accountId || accountId === 'unified') {
+  function handleMailtoData(data: MailtoData, rawMailtoURL?: string) {
+    // Use selected account or first account (resolve 'unified' to real account)
+    const accountId = resolveAccountId(selectedAccountId)
+    if (!accountId) {
       // No accounts available, can't compose
       addToast({
         type: 'error',
         message: $_('toast.noAccountConfigured'),
       })
+      return
+    }
+
+    // Check if detached mode is preferred for mailto
+    if (getMailtoMode() === 'detached' && rawMailtoURL) {
+      OpenComposerWindow(accountId, 'new', '', '', rawMailtoURL)
       return
     }
 
@@ -553,8 +577,8 @@
   // Handle reply/reply-all/forward - calls backend API
   async function handleReply(mode: 'reply' | 'reply-all' | 'forward', messageId: string) {
     // Use conversation's account ID (important for unified inbox), fall back to selected account or first account
-    const accountId = selectedConversationAccountId || selectedAccountId || accountStore.accounts[0]?.account.id
-    if (!accountId || accountId === 'unified') return
+    const accountId = resolveAccountId(selectedConversationAccountId) || resolveAccountId(selectedAccountId)
+    if (!accountId) return
 
     try {
       // Call backend to prepare the reply message (backend gets account from message)
@@ -1212,6 +1236,7 @@
         folderType={selectedFolderType || 'inbox'}
         onConversationSelect={handleConversationSelect}
         onReply={handleReply}
+        onRowActionComplete={() => viewerRef?.refreshFlags()}
         isFocused={getFocusedPane() === 'messageList'}
         isFlashing={isPaneFlashing('messageList')}
         showFolderToggle={getLayoutMode() === 'narrow'}

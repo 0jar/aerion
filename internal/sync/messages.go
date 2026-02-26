@@ -452,7 +452,8 @@ func (e *Engine) fetchUIDsSince(ctx context.Context, client *imapclient.Client, 
 
 	// UID Search for messages since the given date
 	searchCmd := client.UIDSearch(&imap.SearchCriteria{
-		Since: since,
+		Since:   since,
+		NotFlag: []imap.Flag{imap.FlagDeleted},
 	}, nil)
 
 	// Run Wait() in a goroutine to allow context cancellation
@@ -493,7 +494,9 @@ func (e *Engine) fetchAllUIDs(ctx context.Context, client *imapclient.Client) ([
 	e.log.Debug().Msg("Fetching all UIDs from server")
 
 	// UID Search for all messages (must use UIDSearch to get UIDs, not sequence numbers)
-	searchCmd := client.UIDSearch(&imap.SearchCriteria{}, nil)
+	searchCmd := client.UIDSearch(&imap.SearchCriteria{
+		NotFlag: []imap.Flag{imap.FlagDeleted},
+	}, nil)
 
 	// Run Wait() in a goroutine to allow context cancellation
 	type searchResult struct {

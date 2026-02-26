@@ -18,39 +18,43 @@ export function CloseWindow():Promise<void>;
 
 export function DeleteDraft(arg1:string):Promise<void>;
 
-export function GetAccount():Promise<account.Account>;
+export function GetAccount(arg1:string):Promise<account.Account>;
+
+export function GetAllAccountIdentities():Promise<Array<app.AccountIdentityGroup>>;
 
 export function GetComposeMode():Promise<app.ComposeMode>;
 
 export function GetDraft():Promise<smtp.ComposeMessage>;
 
-export function GetIdentities():Promise<Array<account.Identity>>;
+export function GetIdentities(arg1:string):Promise<Array<account.Identity>>;
 
 export function GetOriginalMessage():Promise<message.Message>;
 
-export function GetPGPEncryptPolicy():Promise<string>;
+export function GetPGPEncryptPolicy(arg1:string):Promise<string>;
 
-export function GetPGPKeyForEmail(arg1:string):Promise<pgp.Key>;
+export function GetPGPKeyForEmail(arg1:string,arg2:string):Promise<pgp.Key>;
 
-export function GetPGPSignPolicy():Promise<string>;
+export function GetPGPSignPolicy(arg1:string):Promise<string>;
 
-export function GetSMIMECertificateForEmail(arg1:string):Promise<smime.Certificate>;
+export function GetSMIMECertificateForEmail(arg1:string,arg2:string):Promise<smime.Certificate>;
 
-export function GetSMIMEEncryptPolicy():Promise<string>;
+export function GetSMIMEEncryptPolicy(arg1:string):Promise<string>;
 
-export function GetSMIMESignPolicy():Promise<string>;
+export function GetSMIMESignPolicy(arg1:string):Promise<string>;
 
 export function GetSystemTheme():Promise<string>;
 
 export function GetThemeMode():Promise<string>;
 
-export function HasPGPKey():Promise<boolean>;
+export function HasPGPKey(arg1:string):Promise<boolean>;
 
-export function HasSMIMECertificate():Promise<boolean>;
+export function HasSMIMECertificate(arg1:string):Promise<boolean>;
 
 export function ImportRecipientCert(arg1:string,arg2:string):Promise<void>;
 
 export function ImportRecipientPGPKey(arg1:string,arg2:string):Promise<void>;
+
+export function IsFlatpak():Promise<boolean>;
 
 export function LookupHKP(arg1:string):Promise<string>;
 
@@ -66,13 +70,15 @@ export function PickRecipientPGPKeyFile():Promise<string>;
 
 export function PrepareReply():Promise<smtp.ComposeMessage>;
 
+export function ReadFileAsAttachment(arg1:string):Promise<app.ComposerAttachment>;
+
 export function RefreshWindowConstraints():Promise<void>;
 
-export function SaveDraft(arg1:smtp.ComposeMessage,arg2:string):Promise<draft.Draft>;
+export function SaveDraft(arg1:string,arg2:smtp.ComposeMessage,arg3:string):Promise<draft.Draft>;
 
 export function SearchContacts(arg1:string,arg2:number):Promise<Array<contact.Contact>>;
 
-export function SendMessage(arg1:smtp.ComposeMessage):Promise<void>;
+export function SendMessage(arg1:string,arg2:smtp.ComposeMessage):Promise<void>;
 
 export function Shutdown(arg1:context.Context):Promise<void>;
 

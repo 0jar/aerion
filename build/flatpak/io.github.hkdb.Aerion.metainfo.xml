@@ -128,6 +128,31 @@
   </provides>
 
   <releases>
+    <release version="0.1.29" date="2026-02-26">
+      <description>
+        <ul>
+          <li>Toast message to provide feedback for successful link clicks</li>
+          <li>Cross accounts from field</li>
+          <li>Handle external mailto calls</li>
+          <li>Added composer tab in settings</li> 
+          <li>Allow setting detached composer as default</li>
+          <li>Choose default or detached composer to handle mailto links</li>
+          <li>Allow setting plaintext as default</li>
+          <li>Moved read receipt setting to composer tab</li>
+          <li>Cross account from field</li>
+          <li>Fixed drag and drop inline images and attachments - #41</li>
+          <li>Fixed star buttons and states - #42</li>
+          <li>Fixed links in threads #48</li>
+          <li>Fixed attachment logic and extraction for non-text parts - needs a force resync to apply</li>
+          <li>Fixed orphaned drafts - #47</li>
+          <li>Fixed flatpak attachment download - #51</li>
+          <li>Consolidated duplicate code between composer and detached composer</li>
+          <li>Close conversation viewer if deleted</li>
+          <li>Don't auto-open next message if in vertical mobile layout - #30</li>
+          <li>Fixed empty from field - #39</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.28" date="2026-02-24">
       <description>
         <ul>

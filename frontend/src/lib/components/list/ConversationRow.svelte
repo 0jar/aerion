@@ -4,7 +4,10 @@
   import { _ } from '$lib/i18n'
   // @ts-ignore - wailsjs path
   import { message } from '../../../../wailsjs/go/models'
+  // @ts-ignore - wailsjs path
+  import { Star, Unstar } from '../../../../wailsjs/go/app/App'
   import MessageContextMenu from '$lib/components/common/MessageContextMenu.svelte'
+  import { toasts } from '$lib/stores/toast'
 
   interface Props {
     conversation: message.Conversation
@@ -192,9 +195,23 @@
     return colors[Math.abs(hash) % colors.length]
   }
 
-  function handleStarClick(e: MouseEvent) {
+  async function handleStarClick(e: MouseEvent) {
     e.stopPropagation()
-    // TODO: Toggle star for conversation
+    const starring = !conversation.isStarred
+    try {
+      if (starring) {
+        await Star(ownMessageIds)
+        toasts.success($_('toast.starred'))
+      }
+      if (!starring) {
+        await Unstar(ownMessageIds)
+        toasts.success($_('toast.starRemoved'))
+      }
+      onActionComplete?.()
+    } catch (err) {
+      console.error('Star toggle failed:', err)
+      toasts.error($_('toast.failedToUpdateStar'))
+    }
   }
 
   function handleCheckboxClick(e: MouseEvent) {

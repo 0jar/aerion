@@ -105,6 +105,8 @@ export function GetAccountFoldersForMapping(arg1:string):Promise<Array<folder.Fo
 
 export function GetAccounts():Promise<Array<account.Account>>;
 
+export function GetAllAccountIdentities():Promise<Array<app.AccountIdentityGroup>>;
+
 export function GetAppInfo():Promise<app.AppInfo>;
 
 export function GetAttachment(arg1:string):Promise<message.Attachment>;
@@ -114,6 +116,10 @@ export function GetAttachments(arg1:string):Promise<Array<message.Attachment>>;
 export function GetAutoDetectedFolders(arg1:string):Promise<Record<string, string>>;
 
 export function GetAutostart():Promise<boolean>;
+
+export function GetComposerFormat():Promise<string>;
+
+export function GetComposerMode():Promise<string>;
 
 export function GetConfiguredOAuthProviders():Promise<Array<string>>;
 
@@ -162,6 +168,8 @@ export function GetInlineAttachments(arg1:string):Promise<Record<string, string>
 export function GetLanguage():Promise<string>;
 
 export function GetLinkedAccountsForContactSync():Promise<Array<app.LinkedAccountInfo>>;
+
+export function GetMailtoMode():Promise<string>;
 
 export function GetMarkAsReadDelay():Promise<number>;
 
@@ -253,6 +261,8 @@ export function IsFTSIndexComplete(arg1:string):Promise<boolean>;
 
 export function IsFTSIndexing():Promise<boolean>;
 
+export function IsFlatpak():Promise<boolean>;
+
 export function IsImageAllowed(arg1:string):Promise<boolean>;
 
 export function IsOAuthConfigured(arg1:string):Promise<boolean>;
@@ -295,7 +305,7 @@ export function MoveToFolder(arg1:Array<string>,arg2:string):Promise<void>;
 
 export function OpenAttachment(arg1:string):Promise<void>;
 
-export function OpenComposerWindow(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
+export function OpenComposerWindow(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<void>;
 
 export function OpenEncryptedAttachment(arg1:string,arg2:string):Promise<void>;
 
@@ -373,6 +383,10 @@ export function SetAddressbookEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetAutostart(arg1:boolean):Promise<void>;
 
+export function SetComposerFormat(arg1:string):Promise<void>;
+
+export function SetComposerMode(arg1:string):Promise<void>;
+
 export function SetDefaultIdentity(arg1:string,arg2:string):Promise<void>;
 
 export function SetDefaultPGPKey(arg1:string,arg2:string):Promise<void>;
@@ -380,6 +394,8 @@ export function SetDefaultPGPKey(arg1:string,arg2:string):Promise<void>;
 export function SetDefaultSMIMECertificate(arg1:string,arg2:string):Promise<void>;
 
 export function SetLanguage(arg1:string):Promise<void>;
+
+export function SetMailtoMode(arg1:string):Promise<void>;
 
 export function SetMarkAsReadDelay(arg1:number):Promise<void>;
 

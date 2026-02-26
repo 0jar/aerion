@@ -133,7 +133,7 @@
       EventsOn('messages:flagsChanged', (data: { messageIds: string[], isRead: boolean }) => {
         // Check if this is our own mark-as-read operation
         const isOwnOperation = data.messageIds.every(id => pendingMarkAsReadIds.has(id))
-        
+
         if (isOwnOperation) {
           // Clear pending IDs and update local state
           pendingMarkAsReadIds = new Set()
@@ -317,7 +317,11 @@
   async function refreshConversation(tid: string, fid: string) {
     try {
       const updated = await GetConversation(tid, fid)
-      if (!updated?.messages || !conversation?.messages) return
+      if (!updated?.messages || updated.messages.length === 0) {
+        dismissConversation(true)
+        return
+      }
+      if (!conversation?.messages) return
 
       // Compare message count and latest message ID to detect actual changes
       if (updated.messages.length === conversation.messages.length) {
@@ -396,6 +400,20 @@
       if (contentContainerRef) {
         contentContainerRef.scrollTop = contentContainerRef.scrollHeight
       }
+    }
+  }
+
+  /** Dismiss the current conversation from the viewer.
+   *  Cancels any pending mark-as-read timer, clears the conversation state,
+   *  and optionally tells the message list to auto-select the next item. */
+  function dismissConversation(autoSelectNext: boolean) {
+    if (markAsReadTimer) {
+      clearTimeout(markAsReadTimer)
+      markAsReadTimer = null
+    }
+    conversation = null
+    if (autoSelectNext) {
+      onActionComplete?.(true)
     }
   }
 
@@ -584,6 +602,16 @@
     return conversation.messages[conversation.messages.length - 1].id
   }
 
+  // Re-fetch conversation to pick up flag changes (star, read) from external actions
+  export async function refreshFlags() {
+    if (!threadId || !folderId) return
+    try {
+      conversation = await GetConversation(threadId, folderId)
+    } catch {
+      // Silent — flag refresh is best-effort
+    }
+  }
+
   // Get the target message ID for actions:
   // Use focused message if one is focused, otherwise fall back to last message
   function getTargetMessageId(): string | null {
@@ -723,20 +751,23 @@
   }
 
   async function handleStar() {
-    if (!conversation?.messages) return
-    
+    if (!conversation?.messages || !threadId || !folderId) return
+
     // Toggle based on current state - star if any unstarred, unstar if all starred
-    const allStarred = conversation.messages.every(m => m.isStarred)
+    const wasAllStarred = conversation.messages.every(m => m.isStarred)
     const messageIds = conversation.messages.map(m => m.id)
-    
+
     try {
-      if (allStarred) {
+      if (wasAllStarred) {
         await Unstar(messageIds)
         toasts.success($_('toast.removedStar'))
-      } else {
+      }
+      if (!wasAllStarred) {
         await Star(messageIds)
         toasts.success($_('toast.starred'))
       }
+      conversation = await GetConversation(threadId, folderId)
+      onActionComplete?.()
     } catch (err) {
       console.error('Star toggle failed:', err)
       toasts.error($_('toast.failedToUpdateStar'))

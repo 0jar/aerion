@@ -165,8 +165,7 @@ func (a *App) DeletePGPSenderKey(keyID string) error {
 
 // HasPGPKey returns whether an account has a default PGP key configured
 func (a *App) HasPGPKey(accountID string) bool {
-	key, _, err := a.pgpStore.GetDefaultKey(accountID)
-	return err == nil && key != nil && !key.IsExpired
+	return a.composeOps.hasPGPKey(accountID)
 }
 
 // GetPGPKeyForEmail returns the PGP key matching the given email.
@@ -181,30 +180,12 @@ func (a *App) GetPGPKeyForEmail(accountID, email string) (*pgp.Key, error) {
 
 // shouldPGPSignMessage determines whether a message should be PGP signed
 func (a *App) shouldPGPSignMessage(accountID string, perMessageOverride bool) bool {
-	if perMessageOverride {
-		return a.HasPGPKey(accountID)
-	}
-
-	policy, err := a.pgpStore.GetSignPolicy(accountID)
-	if err != nil || policy != "always" {
-		return false
-	}
-
-	return a.HasPGPKey(accountID)
+	return a.composeOps.shouldPGPSignMessage(accountID, perMessageOverride)
 }
 
 // shouldPGPEncryptMessage determines whether a message should be PGP encrypted
 func (a *App) shouldPGPEncryptMessage(accountID string, perMessageOverride bool) bool {
-	if perMessageOverride {
-		return a.HasPGPKey(accountID)
-	}
-
-	policy, err := a.pgpStore.GetEncryptPolicy(accountID)
-	if err != nil || policy != "always" {
-		return false
-	}
-
-	return a.HasPGPKey(accountID)
+	return a.composeOps.shouldPGPEncryptMessage(accountID, perMessageOverride)
 }
 
 // CheckRecipientPGPKeys checks which recipients have PGP public keys available

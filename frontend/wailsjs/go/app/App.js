@@ -178,6 +178,10 @@ export function GetAccounts() {
   return window['go']['app']['App']['GetAccounts']();
 }
 
+export function GetAllAccountIdentities() {
+  return window['go']['app']['App']['GetAllAccountIdentities']();
+}
+
 export function GetAppInfo() {
   return window['go']['app']['App']['GetAppInfo']();
 }
@@ -196,6 +200,14 @@ export function GetAutoDetectedFolders(arg1) {
 
 export function GetAutostart() {
   return window['go']['app']['App']['GetAutostart']();
+}
+
+export function GetComposerFormat() {
+  return window['go']['app']['App']['GetComposerFormat']();
+}
+
+export function GetComposerMode() {
+  return window['go']['app']['App']['GetComposerMode']();
 }
 
 export function GetConfiguredOAuthProviders() {
@@ -292,6 +304,10 @@ export function GetLanguage() {
 
 export function GetLinkedAccountsForContactSync() {
   return window['go']['app']['App']['GetLinkedAccountsForContactSync']();
+}
+
+export function GetMailtoMode() {
+  return window['go']['app']['App']['GetMailtoMode']();
 }
 
 export function GetMarkAsReadDelay() {
@@ -474,6 +490,10 @@ export function IsFTSIndexing() {
   return window['go']['app']['App']['IsFTSIndexing']();
 }
 
+export function IsFlatpak() {
+  return window['go']['app']['App']['IsFlatpak']();
+}
+
 export function IsImageAllowed(arg1) {
   return window['go']['app']['App']['IsImageAllowed'](arg1);
 }
@@ -558,8 +578,8 @@ export function OpenAttachment(arg1) {
   return window['go']['app']['App']['OpenAttachment'](arg1);
 }
 
-export function OpenComposerWindow(arg1, arg2, arg3, arg4) {
-  return window['go']['app']['App']['OpenComposerWindow'](arg1, arg2, arg3, arg4);
+export function OpenComposerWindow(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['app']['App']['OpenComposerWindow'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function OpenEncryptedAttachment(arg1, arg2) {
@@ -714,6 +734,14 @@ export function SetAutostart(arg1) {
   return window['go']['app']['App']['SetAutostart'](arg1);
 }
 
+export function SetComposerFormat(arg1) {
+  return window['go']['app']['App']['SetComposerFormat'](arg1);
+}
+
+export function SetComposerMode(arg1) {
+  return window['go']['app']['App']['SetComposerMode'](arg1);
+}
+
 export function SetDefaultIdentity(arg1, arg2) {
   return window['go']['app']['App']['SetDefaultIdentity'](arg1, arg2);
 }
@@ -728,6 +756,10 @@ export function SetDefaultSMIMECertificate(arg1, arg2) {
 
 export function SetLanguage(arg1) {
   return window['go']['app']['App']['SetLanguage'](arg1);
+}
+
+export function SetMailtoMode(arg1) {
+  return window['go']['app']['App']['SetMailtoMode'](arg1);
 }
 
 export function SetMarkAsReadDelay(arg1) {

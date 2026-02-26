@@ -215,7 +215,20 @@ func (e *Engine) parseMultipartBody(mr gomessage.MultipartReader, result *Parsed
 			continue
 		}
 
-		// Read text/html parts
+		// Handle non-text, non-image parts with inline disposition (e.g. inline PDF)
+		// or no disposition at all — these are implicit attachments
+		if contentType != "" && !strings.HasPrefix(contentType, "text/") &&
+			!isSignaturePart(contentType) {
+			result.HasAttachments = true
+			isInline := disposition == "inline" || contentID != ""
+			att := e.extractAttachmentMetadata(part, messageID, contentType, dispParams, contentID, isInline)
+			if att != nil {
+				result.Attachments = append(result.Attachments, att)
+			}
+			continue
+		}
+
+		// Read text parts
 		lr := io.LimitReader(part.Body, maxPartSize)
 		partBody, err := io.ReadAll(lr)
 		if err != nil {
@@ -247,11 +260,6 @@ func (e *Engine) parseMultipartBody(mr gomessage.MultipartReader, result *Parsed
 		case "text/html":
 			if result.BodyHTML == "" {
 				result.BodyHTML = decodedContent
-			}
-		default:
-			// Other content types might be implicit attachments
-			if contentType != "" && !strings.HasPrefix(contentType, "text/") {
-				result.HasAttachments = true
 			}
 		}
 	}
@@ -636,6 +644,17 @@ func (e *Engine) extractAttachmentMetadata(part *gomessage.Entity, messageID, co
 	}
 
 	return att
+}
+
+// isSignaturePart returns true for S/MIME and PGP signature content types
+// that should not be exposed as downloadable attachments.
+func isSignaturePart(contentType string) bool {
+	switch contentType {
+	case "application/pkcs7-signature", "application/x-pkcs7-signature",
+		"application/pgp-signature":
+		return true
+	}
+	return false
 }
 
 // extractPlainTextFallback attempts to extract readable text from raw email bytes.

@@ -216,7 +216,12 @@
     "attachFiles": "附加文件",
     "filesAttached": "已附加 {count} 个文件",
     "ctrlEnterToSend": "Ctrl+Enter 发送",
-    "dropToAttach": "拖放文件以附加",
+    "dropToAttach": "拖放文件以插入或附加",
+    "flatpakDndTitle": "无法使用拖放功能",
+    "flatpakDndDescription": "除非您手动授予 Aerion 访问文件系统的权限，否则 Flatpak 版本无法使用拖放功能。",
+    "flatpakDndGrantExample": "例如，若要授予其访问您的主目录的权限，请在终端中运行以下命令：",
+    "flatpakDndSecurityWarning": "授予此权限有安全性影响。请在完全了解其作用后再授予此权限。",
+    "flatpakDndAlternative": "另外，您也可以在无需额外设置的情况下直接使用插入图片或附加文件按钮。",
     "encrypting": "加密中...",
     "saving": "保存中...",
     "saveFailed": "保存失败",
@@ -368,7 +373,8 @@
     "failedToRemoveRecipientPGPKey": "移除收件人 PGP 密钥失败。",
     "failedToAddKeyServer": "添加密钥服务器失败。",
     "failedToRemoveKeyServer": "移除密钥服务器失败。",
-    "failedToRemoveSenderCert": "移除发件人证书失败。"
+    "failedToRemoveSenderCert": "移除发件人证书失败。",
+    "linkOpened": "已在浏览器中打开链接"
   },
   "settings": {
     "title": "设置",
@@ -376,7 +382,18 @@
     "general": "常规",
     "accounts": "账户",
     "contacts": "联系人",
-    "about": "关于"
+    "about": "关于",
+    "composer": "撰写",
+    "composerMode": "默认撰写模式",
+    "composerModeInline": "在窗口内",
+    "composerModeDetached": "独立窗口",
+    "composerModeDescription": "选择撰写邮件时在主窗口内打开或在独立窗口中打开",
+    "mailtoMode": "外部 mailto 链接",
+    "mailtoModeDescription": "选择如何处理来自其他应用的 mailto 链接",
+    "composerFormat": "默认撰写格式",
+    "composerFormatRich": "富文本",
+    "composerFormatPlain": "纯文本",
+    "composerFormatDescription": "新邮件将默认使用此格式。您仍可在撰写时切换。"
   },
   "settingsGeneral": {
     "display": "显示",

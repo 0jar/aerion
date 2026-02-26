@@ -156,8 +156,7 @@ func (a *App) DeleteSenderCert(certID string) error {
 
 // HasSMIMECertificate returns whether an account has a default S/MIME certificate configured
 func (a *App) HasSMIMECertificate(accountID string) bool {
-	cert, _, err := a.smimeStore.GetDefaultCertificate(accountID)
-	return err == nil && cert != nil && !cert.IsExpired
+	return a.composeOps.hasSMIMECertificate(accountID)
 }
 
 // GetSMIMECertificateForEmail returns the S/MIME certificate matching the given email.
@@ -172,38 +171,12 @@ func (a *App) GetSMIMECertificateForEmail(accountID, email string) (*smime.Certi
 
 // shouldSignMessage determines whether a message should be S/MIME signed
 func (a *App) shouldSignMessage(accountID string, perMessageOverride bool) bool {
-	if perMessageOverride {
-		return a.HasSMIMECertificate(accountID)
-	}
-
-	policy, err := a.smimeStore.GetSignPolicy(accountID)
-	if err != nil {
-		return false
-	}
-
-	if policy != "always" {
-		return false
-	}
-
-	return a.HasSMIMECertificate(accountID)
+	return a.composeOps.shouldSignMessage(accountID, perMessageOverride)
 }
 
 // shouldEncryptMessage determines whether a message should be S/MIME encrypted
 func (a *App) shouldEncryptMessage(accountID string, perMessageOverride bool) bool {
-	if perMessageOverride {
-		return a.HasSMIMECertificate(accountID)
-	}
-
-	policy, err := a.smimeStore.GetEncryptPolicy(accountID)
-	if err != nil {
-		return false
-	}
-
-	if policy != "always" {
-		return false
-	}
-
-	return a.HasSMIMECertificate(accountID)
+	return a.composeOps.shouldEncryptMessage(accountID, perMessageOverride)
 }
 
 // GetSMIMEEncryptPolicy returns the encryption policy for an account

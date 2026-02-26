@@ -89,11 +89,23 @@ export interface ComposerApi {
   /** Perform a unified WKD+HKP lookup for a recipient's PGP key */
   lookupPGPKey: (email: string) => Promise<string>
 
+  /** Read a file from a filesystem path as an attachment */
+  readFileAsAttachment: (filePath: string) => Promise<app.ComposerAttachment | null>
+
+  /** Check if running inside a Flatpak sandbox */
+  isFlatpak: () => Promise<boolean>
+
+  /**
+   * Get all accounts with their identities (only available in main window).
+   * Returns undefined in detached composer windows.
+   */
+  getAllAccountIdentities?: () => Promise<app.AccountIdentityGroup[]>
+
   /**
    * Open a detached composer window (only available in main window).
    * Returns undefined in detached composer windows.
    */
-  openComposerWindow?: (accountId: string, mode: string, messageId: string, draftId: string) => Promise<void>
+  openComposerWindow?: (accountId: string, mode: string, messageId: string, draftId: string, mailtoURL?: string) => Promise<void>
 }
 
 /**
@@ -231,9 +243,24 @@ export function createMainWindowApi(): ComposerApi {
       return LookupPGPKey(email)
     },
 
-    openComposerWindow: async (accountId: string, mode: string, messageId: string, draftId: string) => {
+    readFileAsAttachment: async (filePath: string) => {
+      const { ReadFileAsAttachment } = await import('../../wailsjs/go/app/App.js')
+      return ReadFileAsAttachment(filePath)
+    },
+
+    isFlatpak: async () => {
+      const { IsFlatpak } = await import('../../wailsjs/go/app/App.js')
+      return IsFlatpak()
+    },
+
+    getAllAccountIdentities: async () => {
+      const { GetAllAccountIdentities } = await import('../../wailsjs/go/app/App.js')
+      return GetAllAccountIdentities()
+    },
+
+    openComposerWindow: async (accountId: string, mode: string, messageId: string, draftId: string, mailtoURL?: string) => {
       const { OpenComposerWindow } = await import('../../wailsjs/go/app/App.js')
-      return OpenComposerWindow(accountId, mode, messageId, draftId)
+      return OpenComposerWindow(accountId, mode, messageId, draftId, mailtoURL || '')
     },
   }
 }
@@ -244,68 +271,60 @@ export function createMainWindowApi(): ComposerApi {
  */
 export function createComposerWindowApi(accountId: string): ComposerApi {
   return {
-    sendMessage: async (_accountId: string, message: smtp.ComposeMessage) => {
+    sendMessage: async (accountId: string, message: smtp.ComposeMessage) => {
       const { SendMessage } = await import('../../wailsjs/go/app/ComposerApp.js')
-      // ComposerApp.SendMessage doesn't take accountId (it's set in config)
-      return SendMessage(message)
+      return SendMessage(accountId, message)
     },
-    
+
     searchContacts: async (query: string, limit: number) => {
       const { SearchContacts } = await import('../../wailsjs/go/app/ComposerApp.js')
       return SearchContacts(query, limit) || []
     },
-    
-    getIdentities: async (_accountId: string) => {
+
+    getIdentities: async (accountId: string) => {
       const { GetIdentities } = await import('../../wailsjs/go/app/ComposerApp.js')
-      // ComposerApp.GetIdentities doesn't take accountId (it's set in config)
-      return GetIdentities()
+      return GetIdentities(accountId)
     },
-    
-    saveDraft: async (_accountId: string, message: smtp.ComposeMessage, draftId: string) => {
+
+    saveDraft: async (accountId: string, message: smtp.ComposeMessage, draftId: string) => {
       const { SaveDraft } = await import('../../wailsjs/go/app/ComposerApp.js')
-      // Pass draftId so backend knows which draft to update
-      const result = await SaveDraft(message, draftId || '')
+      const result = await SaveDraft(accountId, message, draftId || '')
       return { id: result?.id || '', syncStatus: result?.syncStatus || 'pending' }
     },
-    
+
     deleteDraft: async (draftId: string) => {
       const { DeleteDraft } = await import('../../wailsjs/go/app/ComposerApp.js')
       return DeleteDraft(draftId)
     },
-    
+
     pickAttachmentFiles: async () => {
-      // For now, the detached composer uses the same file picker
-      // which is available via the App bindings that are also bound to ComposerApp
       const { PickAttachmentFiles } = await import('../../wailsjs/go/app/ComposerApp.js')
       return PickAttachmentFiles()
     },
-    
-    getAccount: async (_accountId: string) => {
+
+    getAccount: async (accountId: string) => {
       const { GetAccount } = await import('../../wailsjs/go/app/ComposerApp.js')
-      // ComposerApp.GetAccount doesn't take accountId (it's set in config)
-      return GetAccount()
+      return GetAccount(accountId)
     },
 
-    hasSMIMECertificate: async (_accountId: string) => {
+    hasSMIMECertificate: async (accountId: string) => {
       const { HasSMIMECertificate } = await import('../../wailsjs/go/app/ComposerApp.js')
-      // ComposerApp.HasSMIMECertificate doesn't take accountId (it's set in config)
-      return HasSMIMECertificate()
+      return HasSMIMECertificate(accountId)
     },
 
-    getSMIMECertificateForEmail: async (_accountId: string, email: string) => {
+    getSMIMECertificateForEmail: async (accountId: string, email: string) => {
       const { GetSMIMECertificateForEmail } = await import('../../wailsjs/go/app/ComposerApp.js')
-      return GetSMIMECertificateForEmail(email)
+      return GetSMIMECertificateForEmail(accountId, email)
     },
 
-    getSMIMESignPolicy: async (_accountId: string) => {
+    getSMIMESignPolicy: async (accountId: string) => {
       const { GetSMIMESignPolicy } = await import('../../wailsjs/go/app/ComposerApp.js')
-      // ComposerApp.GetSMIMESignPolicy doesn't take accountId (it's set in config)
-      return GetSMIMESignPolicy()
+      return GetSMIMESignPolicy(accountId)
     },
 
-    getSMIMEEncryptPolicy: async (_accountId: string) => {
+    getSMIMEEncryptPolicy: async (accountId: string) => {
       const { GetSMIMEEncryptPolicy } = await import('../../wailsjs/go/app/ComposerApp.js')
-      return GetSMIMEEncryptPolicy()
+      return GetSMIMEEncryptPolicy(accountId)
     },
 
     checkRecipientCerts: async (emails: string[]) => {
@@ -323,24 +342,24 @@ export function createComposerWindowApi(accountId: string): ComposerApi {
       return ImportRecipientCert(email, filePath)
     },
 
-    hasPGPKey: async (_accountId: string) => {
+    hasPGPKey: async (accountId: string) => {
       const { HasPGPKey } = await import('../../wailsjs/go/app/ComposerApp.js')
-      return HasPGPKey()
+      return HasPGPKey(accountId)
     },
 
-    getPGPKeyForEmail: async (_accountId: string, email: string) => {
+    getPGPKeyForEmail: async (accountId: string, email: string) => {
       const { GetPGPKeyForEmail } = await import('../../wailsjs/go/app/ComposerApp.js')
-      return GetPGPKeyForEmail(email)
+      return GetPGPKeyForEmail(accountId, email)
     },
 
-    getPGPSignPolicy: async (_accountId: string) => {
+    getPGPSignPolicy: async (accountId: string) => {
       const { GetPGPSignPolicy } = await import('../../wailsjs/go/app/ComposerApp.js')
-      return GetPGPSignPolicy()
+      return GetPGPSignPolicy(accountId)
     },
 
-    getPGPEncryptPolicy: async (_accountId: string) => {
+    getPGPEncryptPolicy: async (accountId: string) => {
       const { GetPGPEncryptPolicy } = await import('../../wailsjs/go/app/ComposerApp.js')
-      return GetPGPEncryptPolicy()
+      return GetPGPEncryptPolicy(accountId)
     },
 
     checkRecipientPGPKeys: async (emails: string[]) => {
@@ -371,6 +390,21 @@ export function createComposerWindowApi(accountId: string): ComposerApi {
     lookupPGPKey: async (email: string) => {
       const { LookupPGPKey } = await import('../../wailsjs/go/app/ComposerApp.js')
       return LookupPGPKey(email)
+    },
+
+    readFileAsAttachment: async (filePath: string) => {
+      const { ReadFileAsAttachment } = await import('../../wailsjs/go/app/ComposerApp.js')
+      return ReadFileAsAttachment(filePath)
+    },
+
+    isFlatpak: async () => {
+      const { IsFlatpak } = await import('../../wailsjs/go/app/ComposerApp.js')
+      return IsFlatpak()
+    },
+
+    getAllAccountIdentities: async () => {
+      const { GetAllAccountIdentities } = await import('../../wailsjs/go/app/ComposerApp.js')
+      return GetAllAccountIdentities()
     },
   }
 }

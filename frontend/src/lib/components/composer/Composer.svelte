@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { onMount, onDestroy, getContext, untrack } from 'svelte'
+  import { onMount, onDestroy, getContext, setContext, untrack } from 'svelte'
   import Icon from '@iconify/svelte'
   import type { Editor } from '@tiptap/core'
   import { createComposerEditor } from './composerEditor'
   // @ts-ignore - Wails generated imports
-  import { smtp, account, contact } from '../../../../wailsjs/go/models'
+  import { smtp, account, contact, app } from '../../../../wailsjs/go/models'
   // @ts-ignore - Wails runtime for events
   import { EventsOn, EventsOff } from '../../../../wailsjs/runtime/runtime.js'
   import { type ComposerApi, COMPOSER_API_KEY, createMainWindowApi } from '$lib/composerApi'
@@ -32,6 +32,7 @@
     addParagraphStyles,
     base64ToBytes,
     htmlToPlainText,
+    parseFileUris,
     plainTextToHtml,
     readFileAsBase64,
     readFileAsDataUrl,
@@ -51,6 +52,7 @@
   import Switch from '$lib/components/ui/switch/Switch.svelte'
   import { ConfirmDialog, ThreeOptionDialog } from '$lib/components/ui/confirm-dialog'
   import { addToast } from '$lib/stores/toast'
+  import { getComposerFormat } from '$lib/stores/settings.svelte'
   import { _ } from '$lib/i18n'
 
   // Props
@@ -79,12 +81,28 @@
   // Get API from context, props, or create default main window API
   const contextApi = getContext<ComposerApi | undefined>(COMPOSER_API_KEY)
   const defaultApi = createMainWindowApi()
+  // Resolve once at init — the API never changes after mount
+  // svelte-ignore state_referenced_locally
+  const resolvedApi: ComposerApi = propApi || contextApi || defaultApi
   // Use $derived so propApi changes are detected (even though it typically doesn't change after mount)
   const api: ComposerApi = $derived(propApi || contextApi || defaultApi)
 
+  // Propagate the resolved API to child components (e.g. RecipientInput)
+  // so they can access it via getContext instead of falling back to the main window API
+  setContext(COMPOSER_API_KEY, resolvedApi)
+
   // State
-  let identities = $state<account.Identity[]>([])
+  let allGroups = $state<app.AccountIdentityGroup[]>([])  // All accounts + identities (main window only)
+  let identities = $state<account.Identity[]>([])  // Flat list of all identities (union)
   let selectedIdentityId = $state<string>('')
+
+  // Derive the active account ID from the selected identity's accountId.
+  // Falls back to the prop accountId if no identity is selected yet.
+  let activeAccountId = $derived.by(() => {
+    if (!selectedIdentityId) return accountId
+    const identity = identities.find(i => i.id === selectedIdentityId)
+    return identity?.accountId || accountId
+  })
   let toRecipients = $state<smtp.Address[]>([])
   let ccRecipients = $state<smtp.Address[]>([])
   let bccRecipients = $state<smtp.Address[]>([])
@@ -151,8 +169,8 @@
   // Security mode for keyboard shortcuts (Alt+P / Alt+S activate, then s/e toggle sign/encrypt)
   let securityMode = $state<'pgp' | 'smime' | null>(null)
 
-  // Plain text mode toggle
-  let isPlainTextMode = $state(false)
+  // Plain text mode toggle (default from user setting, can be toggled per-message)
+  let isPlainTextMode = $state(getComposerFormat() === 'plain')
   let plainTextContent = $state('')  // Store plain text when in plain text mode
 
   // Component refs
@@ -318,6 +336,7 @@
   // Confirmation dialogs state
   let showEmptySubjectDialog = $state(false)
   let showMissingAttachmentDialog = $state(false)
+  let showFlatpakDndDialog = $state(false)
   let showCloseConfirm = $state(false)
   let closeLoading = $state<'discard' | 'save' | null>(null)
   
@@ -460,20 +479,33 @@
     }, DRAFT_SAVE_DELAY)
   }
 
+  // Guard to prevent concurrent save requests (which cause orphaned drafts)
+  let isSaving = false
+  let discarding = false
+  let savingComplete: Promise<void> = Promise.resolve()
+
   // Actually save the draft
   async function saveDraft() {
+    if (discarding) return
     if (!hasContent()) return
-    
+
+    // If a save is already in flight, skip — next edit will trigger a fresh save
+    if (isSaving) return
+
     // Check again for content changes before saving
     const currentHash = getContentHash()
     if (currentHash === lastContent && currentDraftId) {
       return  // No changes since last save
     }
 
+    let resolveSaving: () => void
+    savingComplete = new Promise<void>(resolve => { resolveSaving = resolve })
+
+    isSaving = true
     saveStatus = 'saving'
     try {
       const message = buildMessage()
-      const result = await api.saveDraft(accountId, message, currentDraftId || '')
+      const result = await api.saveDraft(activeAccountId, message, currentDraftId || '')
       currentDraftId = result.id
       lastContent = currentHash
       saveStatus = 'saved'
@@ -482,6 +514,9 @@
     } catch (err) {
       console.error('Failed to save draft:', err)
       saveStatus = 'error'
+    } finally {
+      isSaving = false
+      resolveSaving!()
     }
   }
 
@@ -516,36 +551,53 @@
   // Track current signature for swapping when identity changes
   let currentSignatureHtml = $state<string>('')
 
+  // Apply read receipt policy from account settings
+  function applyReadReceiptPolicy(policy: string) {
+    switch (policy) {
+      case 'always':
+        requestReadReceipt = true
+        showReadReceiptOption = false
+        break
+      case 'ask':
+        requestReadReceipt = false
+        showReadReceiptOption = true
+        break
+      default:
+        requestReadReceipt = false
+        showReadReceiptOption = false
+    }
+  }
+
   // Initialize
   onMount(async () => {
-    // Load identities for the account
+    // Load identities — try cross-account first (main window), fall back to single-account (detached)
     try {
-      identities = await api.getIdentities(accountId)
-      
-      // Select identity: match reply recipient or use default
+      if (api.getAllAccountIdentities) {
+        const groups = await api.getAllAccountIdentities()
+        allGroups = groups || []
+        identities = allGroups.flatMap(g => g.identities || [])
+      }
+      if (!api.getAllAccountIdentities) {
+        // Detached window — single account only
+        identities = await api.getIdentities(accountId)
+      }
+
+      // Select identity: match reply recipient or use default for the initial account
       const matchedIdentity = selectIdentityForReply()
-      const selectedIdentity = matchedIdentity || identities.find(i => i.isDefault) || identities[0]
+      const accountIdentities = identities.filter(i => i.accountId === accountId)
+      const defaultIdentity = accountIdentities.find(i => i.isDefault) || accountIdentities[0]
+      const selectedIdentity = matchedIdentity || defaultIdentity || identities[0]
       if (selectedIdentity) {
         selectedIdentityId = selectedIdentity.id
       }
     } catch (err) {
       console.error('Failed to load identities:', err)
     }
-    
-    // Load account's read receipt request policy
+
+    // Load account's read receipt request policy (use activeAccountId which derives from selected identity)
     try {
-      const acc = await api.getAccount(accountId)
-      const policy = acc.readReceiptRequestPolicy || 'never'
-      if (policy === 'always') {
-        requestReadReceipt = true
-        showReadReceiptOption = false  // Don't show checkbox, always enabled
-      } else if (policy === 'ask') {
-        requestReadReceipt = false  // Default unchecked
-        showReadReceiptOption = true  // Show checkbox
-      } else {
-        requestReadReceipt = false
-        showReadReceiptOption = false  // Don't show checkbox, never request
-      }
+      const acc = await api.getAccount(activeAccountId)
+      applyReadReceiptPolicy(acc.readReceiptRequestPolicy || 'never')
     } catch (err) {
       console.error('Failed to load account settings:', err)
     }
@@ -564,6 +616,8 @@
         onUpdate: scheduleDraftSave,
         onPasteImage: handleInlineImageFile,
         onDropImage: handleInlineImageFile,
+        onDropFile: handleDroppedFile,
+        onDropFilePaths: handleDroppedFilePaths,
         onShiftTab: () => document.getElementById('composer-subject')?.focus(),
       })
     }
@@ -650,7 +704,8 @@
 
   // Update security bar visibility based on the selected identity's email
   async function loadSMIMEForEmail(email: string) {
-    const cert = await api.getSMIMECertificateForEmail(accountId, email)
+    const acctId = activeAccountId
+    const cert = await api.getSMIMECertificateForEmail(acctId, email)
     if (!cert || cert.isExpired) {
       signMessage = false
       encryptMessage = false
@@ -662,15 +717,16 @@
     smimeCertFingerprint = cert.fingerprint ? cert.fingerprint.substring(0, 8).toUpperCase() : ''
 
     const [signPolicy, encryptPolicy] = await Promise.all([
-      api.getSMIMESignPolicy(accountId),
-      api.getSMIMEEncryptPolicy(accountId),
+      api.getSMIMESignPolicy(acctId),
+      api.getSMIMEEncryptPolicy(acctId),
     ])
     signMessage = signPolicy === 'always'
     encryptMessage = encryptPolicy === 'always'
   }
 
   async function loadPGPForEmail(email: string) {
-    const key = await api.getPGPKeyForEmail(accountId, email)
+    const acctId = activeAccountId
+    const key = await api.getPGPKeyForEmail(acctId, email)
     if (!key || key.isExpired) {
       pgpSignMessage = false
       pgpEncryptMessage = false
@@ -682,8 +738,8 @@
     pgpKeyId = key.fingerprint ? key.fingerprint.slice(-8).toUpperCase() : ''
 
     const [pgpSignPolicy, pgpEncryptPolicy] = await Promise.all([
-      api.getPGPSignPolicy(accountId),
-      api.getPGPEncryptPolicy(accountId),
+      api.getPGPSignPolicy(acctId),
+      api.getPGPEncryptPolicy(acctId),
     ])
     // Only enable PGP defaults if S/MIME is not already active (mutual exclusivity)
     pgpSignMessage = !signMessage && pgpSignPolicy === 'always'
@@ -719,11 +775,32 @@
     if (newIdentityId === selectedIdentityId) return
 
     const newIdentity = identities.find(i => i.id === newIdentityId)
+    const oldAccountId = activeAccountId
     selectedIdentityId = newIdentityId
 
     if (!editor || !newIdentity) return
 
-    // Update security bars for the new identity
+    // If account changed, reload read receipt policy and migrate draft
+    if (newIdentity.accountId !== oldAccountId) {
+      api.getAccount(newIdentity.accountId).then(acc => {
+        applyReadReceiptPolicy(acc.readReceiptRequestPolicy || 'never')
+      }).catch(err => {
+        console.error('Failed to load account settings:', err)
+      })
+
+      // Delete old draft (belongs to previous account) and clear ID
+      // so the next save creates a fresh draft under the new account
+      if (currentDraftId) {
+        const oldDraftId = currentDraftId
+        currentDraftId = null
+        lastContent = ''
+        api.deleteDraft(oldDraftId).catch(err => {
+          console.error('Failed to delete old account draft:', err)
+        })
+      }
+    }
+
+    // Update security bars for the new identity (uses activeAccountId which is now updated)
     updateSecurityForIdentity(newIdentity.email)
 
     // Remove old signature and apply new one
@@ -906,7 +983,7 @@
 
     try {
       const message = buildMessage()
-      await api.sendMessage(accountId, message)
+      await api.sendMessage(activeAccountId, message)
 
       // Delete the draft on successful send (fire-and-forget - don't block UI)
       if (currentDraftId) {
@@ -960,10 +1037,17 @@
 
   // Discard: Delete draft from local DB and IMAP, then close
   async function handleDiscardAndClose() {
+    discarding = true
+    if (saveTimeoutId) {
+      clearTimeout(saveTimeoutId)
+      saveTimeoutId = null
+    }
+    await savingComplete
     closeLoading = 'discard'
     try {
       if (currentDraftId) {
         await api.deleteDraft(currentDraftId)
+        currentDraftId = null
       }
     } catch (err) {
       console.error('Failed to delete draft:', err)
@@ -1010,12 +1094,12 @@
     try {
       // Save draft first to get a draft ID
       const message = buildMessage()
-      const result = await api.saveDraft(accountId, message, currentDraftId || '')
+      const result = await api.saveDraft(activeAccountId, message, currentDraftId || '')
       const savedDraftId = result.id
 
-      // Open detached composer window with the saved draft
+      // Open detached composer window with the active account
       await api.openComposerWindow(
-        accountId,
+        activeAccountId,
         getDisplayMode(),
         messageId || '',
         savedDraftId
@@ -1184,6 +1268,62 @@
     }
   }
   
+  // Handle a non-image File dropped on the editor (add as attachment)
+  async function handleDroppedFile(file: File) {
+    try {
+      const data = await readFileAsBase64(file)
+      attachments = [...attachments, {
+        filename: file.name,
+        contentType: file.type || 'application/octet-stream',
+        size: file.size,
+        data,
+      }]
+      scheduleDraftSave()
+    } catch (err) {
+      console.error('Failed to read dropped file:', err)
+    }
+  }
+
+  // Handle file paths dropped on the editor (from text/uri-list parsing)
+  // Images are inserted inline, other files are added as attachments
+  async function handleDroppedFilePaths(paths: string[]) {
+    for (const filePath of paths) {
+      try {
+        const att = await api.readFileAsAttachment(filePath)
+        if (!att) continue
+
+        if (att.contentType.startsWith('image/')) {
+          // Insert as inline image
+          const dataUrl = `data:${att.contentType};base64,${att.data}`
+          const cid = generateCID()
+          inlineImages = [...inlineImages, {
+            cid,
+            dataUrl,
+            contentType: att.contentType,
+            data: att.data,
+            filename: att.filename,
+          }]
+          editor?.chain().focus().setImage({ src: dataUrl, alt: att.filename }).run()
+          continue
+        }
+        // Add as regular attachment
+        attachments = [...attachments, {
+          filename: att.filename,
+          contentType: att.contentType,
+          size: att.size,
+          data: att.data,
+        }]
+      } catch {
+        // Direct read failed — if Flatpak, show permission info dialog
+        if (await api.isFlatpak()) {
+          showFlatpakDndDialog = true
+        }
+        return
+      }
+    }
+    scheduleDraftSave()
+  }
+
   // Attachment handling — uses HTML file input so WebKitGTK routes through
   // the FileChooser portal (required for Flatpak sandbox file access)
   function handleAttachFiles() {
@@ -1247,34 +1387,69 @@
   }
   
   async function handleDrop(e: DragEvent) {
-    e.preventDefault()
     e.stopPropagation()
     isDraggingOver = false
-    
+
+    // Already handled by TipTap editor's handleDrop
+    if (e.defaultPrevented) return
+    e.preventDefault()
+
+    // Case 1: File objects from browser-internal drag operations
     const files = e.dataTransfer?.files
-    if (!files || files.length === 0) return
-    
-    // Read files as attachments
-    const newAttachments: ComposerAttachment[] = []
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      try {
-        const data = await readFileAsBase64(file)
-        newAttachments.push({
-          filename: file.name,
-          contentType: file.type || 'application/octet-stream',
-          size: file.size,
-          data: data,
-        })
-      } catch (err) {
-        console.error('Failed to read dropped file:', err)
+    if (files && files.length > 0) {
+      const newAttachments: ComposerAttachment[] = []
+      for (const file of Array.from(files)) {
+        try {
+          const data = await readFileAsBase64(file)
+          newAttachments.push({
+            filename: file.name,
+            contentType: file.type || 'application/octet-stream',
+            size: file.size,
+            data,
+          })
+        } catch (err) {
+          console.error('Failed to read dropped file:', err)
+        }
       }
+      if (newAttachments.length > 0) {
+        attachments = [...attachments, ...newAttachments]
+        scheduleDraftSave()
+      }
+      return
     }
-    
-    if (newAttachments.length > 0) {
-      attachments = [...attachments, ...newAttachments]
-      scheduleDraftSave()
+
+    // Case 2: File URIs (drops outside editor — all as attachments)
+    const uriList = e.dataTransfer?.getData('text/uri-list')
+    const textData = e.dataTransfer?.getData('text/plain')
+    const pathData = uriList || textData
+    if (pathData) {
+      const paths = parseFileUris(pathData)
+      if (paths.length > 0) {
+        let directReadFailed = false
+        for (const filePath of paths) {
+          try {
+            const att = await api.readFileAsAttachment(filePath)
+            if (!att) continue
+            attachments = [...attachments, {
+              filename: att.filename,
+              contentType: att.contentType,
+              size: att.size,
+              data: att.data,
+            }]
+          } catch {
+            directReadFailed = true
+            break
+          }
+        }
+        if (directReadFailed) {
+          // If Flatpak, show permission info dialog
+          if (await api.isFlatpak()) {
+            showFlatpakDndDialog = true
+          }
+          return
+        }
+        scheduleDraftSave()
+      }
     }
   }
   
@@ -1283,7 +1458,7 @@
 <svelte:window on:keydown={handleKeyDown} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div 
+<div
   class="flex flex-col h-full bg-background relative"
   class:ring-2={isDraggingOver}
   class:ring-primary={isDraggingOver}
@@ -1370,15 +1545,37 @@
               {#if selectedIdentityId}
                 {@const identity = identities.find(i => i.id === selectedIdentityId)}
                 {#if identity}
+                  {@const group = allGroups.find(g => g.account?.id === identity.accountId)}
+                  {#if group?.account?.color}
+                    <span class="inline-block w-2 h-2 rounded-full mr-1.5 flex-shrink-0" style="background-color: {group.account.color}"></span>
+                  {/if}
                   {identity.name} &lt;{identity.email}&gt;
                 {/if}
               {/if}
             </Select.Value>
           </Select.Trigger>
           <Select.Content>
-            {#each identities as identity (identity.id)}
-              <Select.Item value={identity.id} label="{identity.name} <{identity.email}>" />
-            {/each}
+            {#if allGroups.length > 0}
+              <!-- Cross-account: grouped by account -->
+              {#each allGroups as group (group.account?.id)}
+                <Select.Group>
+                  <Select.GroupHeading class="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-muted-foreground">
+                    {#if group.account?.color}
+                      <span class="inline-block w-2 h-2 rounded-full flex-shrink-0" style="background-color: {group.account.color}"></span>
+                    {/if}
+                    {group.account?.name || group.account?.email}
+                  </Select.GroupHeading>
+                  {#each group.identities || [] as identity (identity.id)}
+                    <Select.Item value={identity.id} label="{identity.name} <{identity.email}>" />
+                  {/each}
+                </Select.Group>
+              {/each}
+            {:else}
+              <!-- Single-account fallback (detached window) -->
+              {#each identities as identity (identity.id)}
+                <Select.Item value={identity.id} label="{identity.name} <{identity.email}>" />
+              {/each}
+            {/if}
           </Select.Content>
         </Select.Root>
       </div>
@@ -1626,6 +1823,25 @@
     <AlertDialog.Footer>
       <AlertDialog.Cancel>{$_('common.cancel')}</AlertDialog.Cancel>
       <AlertDialog.Action onclick={handleConfirmMissingAttachment}>{$_('composer.sendAnywayGeneric')}</AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>
+
+<!-- Flatpak Drag-and-Drop Info Dialog -->
+<AlertDialog.Root bind:open={showFlatpakDndDialog}>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>{$_('composer.flatpakDndTitle')}</AlertDialog.Title>
+      <AlertDialog.Description>
+        <p class="mb-3">{$_('composer.flatpakDndDescription')}</p>
+        <p class="mb-2">{$_('composer.flatpakDndGrantExample')}</p>
+        <code class="block bg-muted px-3 py-2 rounded text-sm font-mono mb-3 select-all">flatpak override --user --filesystem=home io.github.hkdb.Aerion</code>
+        <p class="mb-3 text-sm text-destructive">{$_('composer.flatpakDndSecurityWarning')}</p>
+        <p class="text-sm text-muted-foreground">{$_('composer.flatpakDndAlternative')}</p>
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Action onclick={() => showFlatpakDndDialog = false}>{$_('common.ok')}</AlertDialog.Action>
     </AlertDialog.Footer>
   </AlertDialog.Content>
 </AlertDialog.Root>

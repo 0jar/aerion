@@ -24,6 +24,9 @@ const (
 	KeyStartHidden               = "start_hidden"
 	KeyAutostart                 = "autostart"
 	KeyLanguage                  = "language"
+	KeyComposerMode              = "composer_mode"
+	KeyMailtoMode                = "mailto_mode"
+	KeyComposerFormat            = "composer_format"
 )
 
 // Density values for message list
@@ -58,6 +61,24 @@ const (
 
 // DefaultThemeMode is the default theme mode
 const DefaultThemeMode = ThemeModeSystem
+
+// Composer mode values
+const (
+	ComposerModeInline   = "inline"
+	ComposerModeDetached = "detached"
+)
+
+// DefaultComposerMode is the default compose mode
+const DefaultComposerMode = ComposerModeInline
+
+// Composer format values
+const (
+	ComposerFormatRich  = "rich"
+	ComposerFormatPlain = "plain"
+)
+
+// DefaultComposerFormat is the default composer format
+const DefaultComposerFormat = ComposerFormatRich
 
 // Policy values for read receipts
 const (
@@ -327,4 +348,64 @@ func (s *Store) GetLanguage() (string, error) {
 // SetLanguage sets the language preference (locale code, e.g. "en", "zh-TW", "zh-CN")
 func (s *Store) SetLanguage(language string) error {
 	return s.Set(KeyLanguage, language)
+}
+
+// GetComposerMode returns the default compose mode ("inline" or "detached")
+func (s *Store) GetComposerMode() (string, error) {
+	value, err := s.Get(KeyComposerMode)
+	if err != nil {
+		return DefaultComposerMode, err
+	}
+	if value == "" {
+		return DefaultComposerMode, nil
+	}
+	return value, nil
+}
+
+// SetComposerMode sets the default compose mode
+func (s *Store) SetComposerMode(mode string) error {
+	if mode != ComposerModeInline && mode != ComposerModeDetached {
+		return fmt.Errorf("invalid composer mode: %s (must be 'inline' or 'detached')", mode)
+	}
+	return s.Set(KeyComposerMode, mode)
+}
+
+// GetMailtoMode returns the external mailto link handling mode ("inline" or "detached")
+func (s *Store) GetMailtoMode() (string, error) {
+	value, err := s.Get(KeyMailtoMode)
+	if err != nil {
+		return DefaultComposerMode, err
+	}
+	if value == "" {
+		return DefaultComposerMode, nil
+	}
+	return value, nil
+}
+
+// SetMailtoMode sets the external mailto link handling mode
+func (s *Store) SetMailtoMode(mode string) error {
+	if mode != ComposerModeInline && mode != ComposerModeDetached {
+		return fmt.Errorf("invalid mailto mode: %s (must be 'inline' or 'detached')", mode)
+	}
+	return s.Set(KeyMailtoMode, mode)
+}
+
+// GetComposerFormat returns the default composer format ("rich" or "plain")
+func (s *Store) GetComposerFormat() (string, error) {
+	value, err := s.Get(KeyComposerFormat)
+	if err != nil {
+		return DefaultComposerFormat, err
+	}
+	if value == "" {
+		return DefaultComposerFormat, nil
+	}
+	return value, nil
+}
+
+// SetComposerFormat sets the default composer format
+func (s *Store) SetComposerFormat(format string) error {
+	if format != ComposerFormatRich && format != ComposerFormatPlain {
+		return fmt.Errorf("invalid composer format: %s (must be 'rich' or 'plain')", format)
+	}
+	return s.Set(KeyComposerFormat, format)
 }

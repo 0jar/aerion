@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/hkdb/aerion/internal/appstate"
+	"github.com/hkdb/aerion/internal/platform"
 )
 
 // ============================================================================
@@ -35,11 +36,16 @@ type AppInfo struct {
 func (a *App) GetAppInfo() AppInfo {
 	return AppInfo{
 		Name:        "Aerion",
-		Version:     "0.1.28",
+		Version:     "0.1.29",
 		Description: "An Open Source Lightweight E-Mail Client",
 		Website:     "https://github.com/hkdb/aerion",
 		License:     "Apache 2.0",
 	}
+}
+
+// IsFlatpak returns true if the application is running inside a Flatpak sandbox.
+func (a *App) IsFlatpak() bool {
+	return platform.IsFlatpak()
 }
 
 // GetPendingMailto returns and clears any pending mailto: URL data.

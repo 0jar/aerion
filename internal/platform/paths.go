@@ -107,6 +107,11 @@ func getWindowsPaths() (*Paths, error) {
 	}, nil
 }
 
+// IsFlatpak returns true if the application is running inside a Flatpak sandbox.
+func IsFlatpak() bool {
+	return os.Getenv("FLATPAK_ID") != ""
+}
+
 // EnsureDirectories creates all necessary directories if they don't exist
 func (p *Paths) EnsureDirectories() error {
 	dirs := []string{

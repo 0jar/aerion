@@ -31,7 +31,7 @@ func (a *App) SyncFolder(accountID, folderID string) error {
 	if lastReq, exists := a.syncLastRequest[syncKey]; exists {
 		if time.Since(lastReq) < time.Duration(debounceMs)*time.Millisecond {
 			a.syncMu.Unlock()
-			log.Debug().Str("account", accountID).Str("folder", folderID).Msg("Sync request debounced")
+			log.Debug().Str("account", accountID).Str("folder", folderID).Msg("SyncFolder debounced, skipping")
 			return nil // Silently ignore
 		}
 	}

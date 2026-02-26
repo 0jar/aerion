@@ -6,80 +6,53 @@ Thank you for your interest in contributing to Aerion! This document provides gu
 
 By participating in this project, you agree to maintain a respectful and inclusive environment for everyone.
 
-## Getting Started
-
-### Prerequisites
-
-- **Go** 1.21 or later
-- **Node.js** 18 or later
-- **Wails** v2 CLI
-- **Git**
-
-### Development Setup
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/hkdb/aerion.git
-   cd aerion
-   ```
-
-2. **Install Go dependencies**
-   ```bash
-   go mod download
-   ```
-
-3. **Install frontend dependencies**
-   ```bash
-   cd frontend
-   npm install
-   cd ..
-   ```
-
-4. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your OAuth credentials (for Gmail/OAuth testing)
-   ```
-
-5. **Run in development mode**
-   ```bash
-   make dev
-   ```
-
-### Building
-
-```bash
-make build
-```
-
 ## How to Contribute
 
 ### Reporting Bugs
 
 1. Check if the bug has already been reported in [Issues](https://github.com/hkdb/aerion/issues)
 2. If not, create a new issue with:
-   - Clear, descriptive title
-   - Steps to reproduce
-   - Expected vs actual behavior
-   - Environment details (OS, version, etc.)
-   - Relevant logs or screenshots
+    - Select the `Bug` template and fill the form out in detail.
 
 ### Suggesting Features
 
 1. Check existing issues for similar suggestions
-2. Create a new issue with the `enhancement` label
-3. Describe the feature and its use case
-4. Be open to discussion and feedback
+2. Determine if your request is a brand new feature or an enahncement to an existing feature
+3. Create a new issue with the `feature request` or `enhancement` template depending on step 2.
 
 ### Pull Requests
 
-1. **Fork the repository** and create your branch from `main`
-2. **Make your changes** following our coding standards
-3. **Test your changes** thoroughly
-4. **Commit with clear messages** (see commit guidelines below)
-5. **Push to your fork** and submit a pull request
+Aerion is currently in the rapid development state and the workflow is not yet setup to accept pull requests. However, in the near future, we will transition to a workflow that will make accepting PRs possible.
+
+There will be 2 phases of opening up for PRs:
+
+1. Translation - Once ready, we will create language branches that will accept PRs for translation contributions.
+2. General - Transition to a workflow that makes accepting PRs for the rest of the porject possible.
+
+Meanwhile, below are some guidelines for contributions when we become ready to accept PRs.
+
+## Areas for Contribution
+
+We welcome contributions in these areas:
+
+- **Bug fixes** - Check issues labeled `bug`
+- **Documentation** - README, code comments, guides
+- **Tests** - We need more test coverage
+- **Accessibility** - Improving keyboard navigation and screen reader support
+- **Performance** - Optimization opportunities
+- **Features** - Check issues labeled `enhancement`
+
+In order to ensure that we don't waste your efforts, prior to working on a PR, first submit an issue with the `Contribution` template and describe what you want to work on and any relevant details that will help the maintainer understand what you will achieve. A maintainer will review your issue and work with you to ensure there aren't any issues or overlapping efforts with your proposal. This will greatly increase the chances of you submitting a PR that yields positive results.
 
 ## Coding Standards
+
+### General
+
+**if/else if/else:**
+
+While there are instances of `else if` and `else` statements in the current code base. We are constantly refactoring them as we find them. In general, unless absolutely necessary which is very rare, don't use `else` and especially not long chains of `else if`.
+
+Instead, use guard clause (w/ early returns) or switch statements.
 
 ### Go (Backend)
 
@@ -148,28 +121,6 @@ Prefixes:
 - `test:` Adding or updating tests
 - `chore:` Maintenance tasks
 
-## Project Structure
-
-```
-aerion/
-├── app.go              # Main Wails app (backend API)
-├── internal/           # Internal Go packages
-│   ├── account/        # Account management
-│   ├── imap/           # IMAP client and connection pool
-│   ├── sync/           # Email sync engine
-│   ├── message/        # Message storage
-│   └── ...
-├── frontend/           # Svelte frontend
-│   ├── src/
-│   │   ├── App.svelte  # Main app component
-│   │   ├── lib/
-│   │   │   ├── components/  # UI components
-│   │   │   ├── stores/      # Svelte stores
-│   │   │   └── ui/          # Design system
-│   │   └── ...
-│   └── ...
-└── ...
-```
 
 ## Testing
 
@@ -189,21 +140,67 @@ cd frontend && npm test
 - Focus on critical paths and edge cases
 - Use table-driven tests in Go where appropriate
 
-## Areas for Contribution
 
-We welcome contributions in these areas:
+## Getting Started
 
-- **Bug fixes** - Check issues labeled `bug`
-- **Documentation** - README, code comments, guides
-- **Tests** - We need more test coverage
-- **Accessibility** - Improving keyboard navigation and screen reader support
-- **Performance** - Optimization opportunities
-- **Features** - Check issues labeled `enhancement`
+### Prerequisites
+
+- **Go** 1.21 or later
+- **Node.js** 18 or later
+- **Wails** v2 CLI
+- **Git**
+
+### Development Setup
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/hkdb/aerion.git
+   cd aerion
+   ```
+
+2. **Install Go dependencies**
+   ```bash
+   go mod download
+   ```
+
+3. **Install frontend dependencies**
+   ```bash
+   cd frontend
+   npm install
+   cd ..
+   ```
+
+4. **Set up environment variables**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your OAuth credentials (for Gmail/OAuth testing)
+   ```
+
+5. **Run in development mode**
+   ```bash
+   make dev
+   ```
+
+### Building
+
+```bash
+make build
+```
+Local Flatpak test build:
+
+```bash
+make flatpak-dev
+```
+Test Flatpak production build:
+
+```bash
+make flatpak
+```
 
 ## Questions?
 
-- Open a [Discussion](https://github.com/hkdb/aerion/discussions) for questions
-- Check existing issues and discussions first
+- Open an [Issue](https://github.com/hkdb/aerion/issues) with the `Question` template for questions
+- Check existing issues first
 - Be patient - maintainers are volunteers
 
 ## License

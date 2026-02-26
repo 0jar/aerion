@@ -77,7 +77,7 @@ func (e *Engine) FetchMessageBody(ctx context.Context, accountID, messageID stri
 	}
 
 	// Update message in store
-	if err := e.messageStore.UpdateBody(messageID, result.BodyHTML, result.BodyText, result.Snippet); err != nil {
+	if err := e.messageStore.UpdateBody(messageID, result.BodyHTML, result.BodyText, result.Snippet, result.HasAttachments); err != nil {
 		return nil, fmt.Errorf("failed to update message body: %w", err)
 	}
 
@@ -128,7 +128,7 @@ func (e *Engine) fetchMessageBodyWithConn(ctx context.Context, client *imapclien
 	}
 
 	// Update message in store
-	if err := e.messageStore.UpdateBody(messageID, result.BodyHTML, result.BodyText, result.Snippet); err != nil {
+	if err := e.messageStore.UpdateBody(messageID, result.BodyHTML, result.BodyText, result.Snippet, result.HasAttachments); err != nil {
 		return fmt.Errorf("failed to update message body: %w", err)
 	}
 
@@ -707,6 +707,7 @@ func (e *Engine) FetchBodiesInBackground(ctx context.Context, accountID, folderI
 					BodyHTML:       pb.BodyHTML,
 					BodyText:       pb.BodyText,
 					Snippet:        pb.Snippet,
+					HasAttachments: pb.HasAttachments,
 					SMIMERawBody:   pb.SMIMERawBody,
 					SMIMEEncrypted: pb.SMIMEEncrypted,
 					PGPRawBody:     pb.PGPRawBody,
