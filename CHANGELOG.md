@@ -1,6 +1,12 @@
 # CHANGELOG
 
 
+**v0.1.31 - 03-05-2026**
+---
+
+- Fixed title bar setting regression - [#57](https://github.com/hkdb/aerion/issues/57)
+
+
 **v0.1.30 - 03-05-2026**
 ---
 

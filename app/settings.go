@@ -210,15 +210,8 @@ func (a *App) GetNativeTitleBar() (bool, error) {
 }
 
 // SetNativeTitleBar sets whether the native OS title bar is enabled.
-// Enabling auto-sets show_title_bar to false; disabling restores it to true.
 func (a *App) SetNativeTitleBar(enabled bool) error {
-	if err := a.settingsStore.SetNativeTitleBar(enabled); err != nil {
-		return err
-	}
-	if enabled {
-		return a.settingsStore.SetShowTitleBar(false)
-	}
-	return a.settingsStore.SetShowTitleBar(true)
+	return a.settingsStore.SetNativeTitleBar(enabled)
 }
 
 // GetAlwaysLoadImages returns whether remote images should always be loaded
