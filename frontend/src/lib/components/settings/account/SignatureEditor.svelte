@@ -157,7 +157,7 @@
 
   let { value = '', placeholder = 'Enter your signature...', onchange }: Props = $props()
 
-  let editorElement: HTMLElement
+  let editorElement: HTMLElement | undefined = $state()
   let editor: Editor | null = null
   let isUpdatingFromProp = false
   

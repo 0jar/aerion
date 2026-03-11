@@ -16,7 +16,7 @@
   // @ts-ignore - wailsjs imports
   import { smtp, app } from '../wailsjs/go/models'
   // @ts-ignore - wailsjs runtime
-  import { WindowMinimise, WindowToggleMaximise, WindowShow, Quit, EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
+  import { WindowMinimise, WindowToggleMaximise, WindowShow, WindowSetTitle, Quit, EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
 
   // Compose mode info from backend
   let composeMode = $state<app.ComposeMode | null>(null)
@@ -30,17 +30,33 @@
   
   // Close request state - triggers Composer's close dialog
   let closeRequested = $state(false)
-  
-  // Window title based on mode
+
+  // Dynamic title parts from Composer
+  let titleTo = $state('')
+  let titleSubject = $state('')
+
+  // Window title based on mode + dynamic recipient/subject
   let windowTitle = $derived(() => {
     if (!composeMode) return $_('sidebar.compose')
+    let base: string
     switch (composeMode.mode) {
-      case 'reply': return $_('composer.reply')
-      case 'reply-all': return $_('composer.replyAll')
-      case 'forward': return $_('composer.forward')
-      default: return composeMode.draftId ? $_('composer.editDraft') : $_('composer.newMessage')
+      case 'reply': base = $_('composer.reply'); break
+      case 'reply-all': base = $_('composer.replyAll'); break
+      case 'forward': base = $_('composer.forward'); break
+      default: base = composeMode.draftId ? $_('composer.editDraft') : $_('composer.newMessage')
     }
+    if (!titleTo && !titleSubject) return base
+    const detail = titleTo && titleSubject
+      ? `${titleTo} | ${titleSubject}`
+      : titleTo || titleSubject
+    return `${base} — ${detail}`
   })
+
+  function handleTitleChange(to: string, subject: string) {
+    titleTo = to
+    titleSubject = subject
+    WindowSetTitle(windowTitle())
+  }
 
   onMount(async () => {
     // Load title bar settings so the composer respects the user's preference
@@ -248,6 +264,7 @@
         isDetached={true}
         closeRequested={closeRequested}
         onCloseHandled={handleCloseHandled}
+        onTitleChange={handleTitleChange}
       />
     {/if}
   </main>

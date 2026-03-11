@@ -220,6 +220,14 @@ func (a *App) SaveAttachmentAs(attachmentID string) (string, error) {
 
 // openFile opens a file with the system default application
 func (a *App) openFile(path string) error {
+	if runtime.GOOS == "linux" && platform.IsFlatpak() {
+		if platform.IsDocPortalPath(path) {
+			wailsRuntime.EventsEmit(a.ctx, "flatpak:filesystem-dialog")
+			return nil // Don't open — portal FUSE path is broken for editing
+		}
+		return platform.PortalOpenFile(path)
+	}
+
 	var cmd *exec.Cmd
 
 	switch runtime.GOOS {
@@ -243,13 +251,16 @@ func (a *App) OpenFile(path string) error {
 
 // OpenFolder opens the folder containing a file in the system file manager
 func (a *App) OpenFolder(path string) error {
-	dir := filepath.Dir(path)
+	// In Flatpak, use the OpenURI portal to resolve sandboxed paths correctly
+	if runtime.GOOS == "linux" && platform.IsFlatpak() {
+		return platform.PortalOpenDirectory(path)
+	}
+
 	var cmd *exec.Cmd
 
 	switch runtime.GOOS {
 	case "linux":
-		// Try to select the file in the file manager if possible
-		cmd = exec.Command("xdg-open", dir)
+		cmd = exec.Command("xdg-open", filepath.Dir(path))
 	case "darwin":
 		// -R reveals the file in Finder
 		cmd = exec.Command("open", "-R", path)

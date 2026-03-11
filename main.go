@@ -150,6 +150,15 @@ func runComposerMode() {
 		os.Exit(1)
 	}
 
+	// Validate compose mode
+	switch *mode {
+	case "new", "reply", "reply-all", "forward":
+		// valid
+	default:
+		println("Error: --mode must be one of: new, reply, reply-all, forward")
+		os.Exit(1)
+	}
+
 	// Create composer configuration
 	config := app.ComposerConfig{
 		AccountID:  *accountID,

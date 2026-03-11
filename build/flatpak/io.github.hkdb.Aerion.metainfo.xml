@@ -128,6 +128,20 @@
   </provides>
 
   <releases>
+    <release version="0.1.33" date="2026-03-11">
+      <description>
+        <ul>
+          <li>Added dynamic title to detached composer</li>
+          <li>Fixed frontend warning</li>
+          <li>Updated npm packages</li>
+          <li>Improved flags values guarding</li>
+          <li>Fixed show attachment in folder - #69</li>
+          <li>Fixed downloading synthetically named attachments</li>
+          <li>Added proper flatpak attachments opening from toast logic</li>
+          <li>Improved has_attachment marking</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.32" date="2026-03-10">
       <description>
         <ul>

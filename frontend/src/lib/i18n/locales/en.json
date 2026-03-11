@@ -937,7 +937,11 @@
     "downloadAll": "Download All",
     "saving": "Saving...",
     "saveAll": "Save All ({count} files)",
-    "inline": "(inline)"
+    "inline": "(inline)",
+    "flatpakOpenTitle": "Limited File Access",
+    "flatpakOpenDescription": "Opening a file from this toast notification does not work properly in Flatpak. For this functionality to work properly, grant Aerion access to your home directory by running the following in your terminal:",
+    "flatpakOpenSecurityWarning": "There are security implications to granting such permission. Do not grant such permission without fully understanding what it does.",
+    "flatpakOpenAlternative": "Alternatively, without any further configurations, you can click on \"Show in Folder\" instead to show the folder that the file is located in so that you can open it from there."
   },
   "aria": {
     "windowControls": "Window controls",

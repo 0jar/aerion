@@ -3,6 +3,7 @@ package platform
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -226,6 +227,83 @@ func PortalSaveFiles(title string, filenames []string, directory string) ([]stri
 			return nil, fmt.Errorf("FileChooser portal request timed out")
 		}
 	}
+}
+
+// PortalOpenDirectory opens the folder containing a file using the OpenURI portal.
+// This resolves sandboxed document portal paths to the real host location.
+func PortalOpenDirectory(filePath string) error {
+	log := logging.WithComponent("filechooser")
+
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		return fmt.Errorf("failed to connect to session bus: %w", err)
+	}
+
+	// Check if the portal service is actually running
+	var hasOwner bool
+	if err := conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, "org.freedesktop.portal.Desktop").Store(&hasOwner); err != nil || !hasOwner {
+		return fmt.Errorf("portal service not available")
+	}
+
+	// Open the file to get a file descriptor — the portal uses the fd
+	// to resolve the real host path even from inside the sandbox
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file %q: %w", filePath, err)
+	}
+	defer f.Close()
+
+	obj := conn.Object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop")
+	options := map[string]dbus.Variant{}
+
+	call := obj.Call("org.freedesktop.portal.OpenURI.OpenDirectory", 0, "", dbus.UnixFD(f.Fd()), options)
+	if call.Err != nil {
+		return fmt.Errorf("OpenDirectory portal call failed: %w", call.Err)
+	}
+
+	log.Debug().Str("path", filePath).Msg("Opened directory via portal")
+	return nil
+}
+
+// IsDocPortalPath checks if a path is on the document portal FUSE mount.
+func IsDocPortalPath(path string) bool {
+	return strings.HasPrefix(path, "/run/user/") && strings.Contains(path, "/doc/")
+}
+
+// PortalOpenFile opens a file with the default application using the OpenURI portal.
+func PortalOpenFile(filePath string) error {
+	log := logging.WithComponent("filechooser")
+
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		return fmt.Errorf("failed to connect to session bus: %w", err)
+	}
+
+	var hasOwner bool
+	if err := conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, "org.freedesktop.portal.Desktop").Store(&hasOwner); err != nil || !hasOwner {
+		return fmt.Errorf("portal service not available")
+	}
+
+	f, err := os.OpenFile(filePath, os.O_RDWR, 0)
+	if err != nil {
+		f, err = os.Open(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to open file %q: %w", filePath, err)
+		}
+	}
+	defer f.Close()
+
+	obj := conn.Object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop")
+	options := map[string]dbus.Variant{
+		"writable": dbus.MakeVariant(true),
+	}
+	call := obj.Call("org.freedesktop.portal.OpenURI.OpenFile", 0, "", dbus.UnixFD(f.Fd()), options)
+	if call.Err != nil {
+		return fmt.Errorf("OpenFile portal call failed: %w", call.Err)
+	}
+
+	log.Debug().Str("path", filePath).Msg("Opened file via portal")
+	return nil
 }
 
 // uriToPath converts a file:// URI to a filesystem path.

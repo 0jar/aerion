@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/user"
+	"strings"
 
 	"github.com/Microsoft/go-winio"
 )
@@ -69,8 +70,9 @@ func (s *PipeServer) createPipeName() (string, error) {
 	}
 
 	// Use \\.\pipe\aerion-{username} format
-	// The username is sanitized to remove any characters that might cause issues
-	pipeName := fmt.Sprintf(`\\.\pipe\aerion-%s`, currentUser.Username)
+	// Sanitize backslashes from domain-joined usernames (e.g., DOMAIN\user)
+	sanitized := strings.ReplaceAll(currentUser.Username, `\`, "_")
+	pipeName := fmt.Sprintf(`\\.\pipe\aerion-%s`, sanitized)
 
 	return pipeName, nil
 }

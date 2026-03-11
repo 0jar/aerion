@@ -11,6 +11,7 @@
   import ToastContainer from './lib/components/ui/toast/ToastContainer.svelte'
   import TermsDialog from './lib/components/TermsDialog.svelte'
   import CertificateDialog from './lib/components/settings/CertificateDialog.svelte'
+  import * as AlertDialog from '$lib/components/ui/alert-dialog'
   import { accountStore } from '$lib/stores/accounts.svelte'
   import { addToast } from '$lib/stores/toast'
   import { loadSettings, getThemeMode, getShowTitleBar, getNativeTitleBar, getComposerMode, getMailtoMode } from '$lib/stores/settings.svelte'
@@ -75,6 +76,9 @@
   let showCertDialog = $state(false)
   let pendingCertificate = $state<certificate.CertificateInfo | null>(null)
   let pendingCertAccountId = $state<string | null>(null)
+
+  // Flatpak filesystem permission dialog state
+  let showFlatpakFsDialog = $state(false)
 
   // Handle window close button (title bar X) — hides if background mode, quits if not
   function handleClose() {
@@ -209,6 +213,11 @@
         pendingCertAccountId = data.accountId
         showCertDialog = true
       }
+    })
+
+    // Listen for Flatpak filesystem permission dialog event
+    EventsOn('flatpak:filesystem-dialog', () => {
+      showFlatpakFsDialog = true
     })
 
     // Listen for external mailto from second instance (routed through backend)
@@ -1268,3 +1277,21 @@
   onAcceptPermanently={handleBgCertAcceptPermanently}
   onDecline={handleBgCertDecline}
 />
+
+<!-- Flatpak Filesystem Permission Dialog -->
+<AlertDialog.Root bind:open={showFlatpakFsDialog}>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>{$_('attachment.flatpakOpenTitle')}</AlertDialog.Title>
+      <AlertDialog.Description>
+        <p class="mb-3">{$_('attachment.flatpakOpenDescription')}</p>
+        <pre class="mb-3 rounded bg-muted p-2 text-sm overflow-x-auto"><code>flatpak override --user --filesystem=home com.aerion.Aerion</code></pre>
+        <p class="mb-3 text-sm text-destructive">{$_('attachment.flatpakOpenSecurityWarning')}</p>
+        <p class="text-sm text-muted-foreground">{$_('attachment.flatpakOpenAlternative')}</p>
+      </AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Action onclick={() => showFlatpakFsDialog = false}>{$_('common.ok')}</AlertDialog.Action>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>

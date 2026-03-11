@@ -100,14 +100,14 @@ func (e *AttachmentExtractor) extractFromMultipart(messageID string, mr gomessag
 			if filename == "" {
 				filename = params["name"]
 			}
-			if filename == "" && contentID != "" {
-				// Generate filename from content-id for inline images
-				ext := getExtensionForMimeType(contentType)
-				filename = contentID + ext
-			}
 			if filename == "" {
-				// Generate a default filename
-				ext := getExtensionForMimeType(contentType)
+				ext := ".bin"
+				if strings.HasPrefix(contentType, "image/") {
+					parts := strings.SplitN(contentType, "/", 2)
+					if len(parts) == 2 {
+						ext = "." + parts[1]
+					}
+				}
 				filename = "attachment" + ext
 			}
 
@@ -221,64 +221,3 @@ func decodeRFC2047(s string) (string, error) {
 	return dec.DecodeHeader(s)
 }
 
-// getExtensionForMimeType returns a file extension for a MIME type
-func getExtensionForMimeType(mimeType string) string {
-	extensions, err := mime.ExtensionsByType(mimeType)
-	if err != nil || len(extensions) == 0 {
-		switch mimeType {
-		case "image/jpeg":
-			return ".jpg"
-		case "image/png":
-			return ".png"
-		case "image/gif":
-			return ".gif"
-		case "application/pdf":
-			return ".pdf"
-		case "text/plain":
-			return ".txt"
-		case "text/html":
-			return ".html"
-		case "application/zip":
-			return ".zip"
-		case "application/msword":
-			return ".doc"
-		case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-			return ".docx"
-		case "application/vnd.ms-excel":
-			return ".xls"
-		case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-			return ".xlsx"
-		default:
-			return ""
-		}
-	}
-	return extensions[0]
-}
-
-// GetAttachmentIcon returns an icon name based on content type
-func GetAttachmentIcon(contentType string) string {
-	switch {
-	case strings.HasPrefix(contentType, "image/"):
-		return "mdi:file-image"
-	case strings.HasPrefix(contentType, "video/"):
-		return "mdi:file-video"
-	case strings.HasPrefix(contentType, "audio/"):
-		return "mdi:file-music"
-	case contentType == "application/pdf":
-		return "mdi:file-pdf-box"
-	case strings.Contains(contentType, "word") || contentType == "application/msword":
-		return "mdi:file-word"
-	case strings.Contains(contentType, "excel") || contentType == "application/vnd.ms-excel":
-		return "mdi:file-excel"
-	case strings.Contains(contentType, "powerpoint") || contentType == "application/vnd.ms-powerpoint":
-		return "mdi:file-powerpoint"
-	case strings.Contains(contentType, "zip") || strings.Contains(contentType, "compressed"):
-		return "mdi:folder-zip"
-	case contentType == "text/plain":
-		return "mdi:file-document-outline"
-	case contentType == "text/html":
-		return "mdi:language-html5"
-	default:
-		return "mdi:file"
-	}
-}

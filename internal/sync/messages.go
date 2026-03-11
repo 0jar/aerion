@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -640,13 +639,6 @@ func (e *Engine) fetchMessageHeaders(ctx context.Context, client *imapclient.Cli
 		if len(headerBytes) > 0 {
 			references = e.extractReferences(headerBytes)
 			m.ReadReceiptTo = e.extractDispositionNotificationTo(headerBytes)
-
-			// Check for attachments from Content-Type header (heuristic)
-			headerStr := string(headerBytes)
-			if strings.Contains(strings.ToLower(headerStr), "multipart/mixed") ||
-				strings.Contains(strings.ToLower(headerStr), "application/") {
-				m.HasAttachments = true
-			}
 		}
 
 		// Store references as JSON array

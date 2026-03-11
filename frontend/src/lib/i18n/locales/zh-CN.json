@@ -932,7 +932,11 @@
     "downloadAll": "全部下载",
     "saving": "保存中...",
     "saveAll": "全部保存（{count} 个文件）",
-    "inline": "（内嵌）"
+    "inline": "（内嵌）",
+    "flatpakOpenTitle": "文件访问受限",
+    "flatpakOpenDescription": "在 Flatpak 中通过此通知打开文件无法正常工作。若要此功能正常工作，请在终端中运行以下命令授予 Aerion 访问您的主目录的权限：",
+    "flatpakOpenSecurityWarning": "授予此权限有安全性影响。请在完全了解其作用后再授予此权限。",
+    "flatpakOpenAlternative": "或者，您也可以点击「在文件夹中显示」来打开文件所在的文件夹，从那里打开文件，此功能无需任何额外配置。"
   },
   "aria": {
     "windowControls": "窗口控件",

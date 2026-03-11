@@ -74,9 +74,11 @@
     closeRequested?: boolean
     /** Callback when close request has been handled */
     onCloseHandled?: () => void
+    /** Callback when recipient or subject changes (for dynamic window title) */
+    onTitleChange?: (to: string, subject: string) => void
   }
 
-  let { accountId, initialMessage = null, draftId = null, messageId = null, onClose, onSent, api: propApi, isDetached = false, closeRequested = false, onCloseHandled }: Props = $props()
+  let { accountId, initialMessage = null, draftId = null, messageId = null, onClose, onSent, api: propApi, isDetached = false, closeRequested = false, onCloseHandled, onTitleChange }: Props = $props()
 
   // Get API from context, props, or create default main window API
   const contextApi = getContext<ComposerApi | undefined>(COMPOSER_API_KEY)
@@ -546,6 +548,14 @@
     if (closeRequested) {
       handleClose()
     }
+  })
+
+  // Emit title info when recipients or subject change (for dynamic window title)
+  $effect(() => {
+    if (!onTitleChange) return
+    const firstTo = toRecipients[0]
+    const displayTo = firstTo?.name || firstTo?.address || ''
+    onTitleChange(displayTo, subject)
   })
 
   // Track current signature for swapping when identity changes
@@ -1835,7 +1845,7 @@
       <AlertDialog.Description>
         <p class="mb-3">{$_('composer.flatpakDndDescription')}</p>
         <p class="mb-2">{$_('composer.flatpakDndGrantExample')}</p>
-        <code class="block bg-muted px-3 py-2 rounded text-sm font-mono mb-3 select-all">flatpak override --user --filesystem=home io.github.hkdb.Aerion</code>
+        <code class="block bg-muted px-3 py-2 rounded text-sm font-mono mb-3 select-all overflow-x-auto">flatpak override --user --filesystem=home io.github.hkdb.Aerion</code>
         <p class="mb-3 text-sm text-destructive">{$_('composer.flatpakDndSecurityWarning')}</p>
         <p class="text-sm text-muted-foreground">{$_('composer.flatpakDndAlternative')}</p>
       </AlertDialog.Description>

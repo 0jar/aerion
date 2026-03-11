@@ -183,7 +183,23 @@ func getFilename(part *gomessage.Entity) string {
 		}
 	}
 
-	return ""
+	// Synthetic fallback: match sync/parse.go extractAttachmentMetadata logic
+	contentType := "application/octet-stream"
+	if ct := part.Header.Get("Content-Type"); ct != "" {
+		mt, _, _ := mime.ParseMediaType(ct)
+		if mt != "" {
+			contentType = mt
+		}
+	}
+
+	ext := ".bin"
+	if strings.HasPrefix(contentType, "image/") {
+		parts := strings.SplitN(contentType, "/", 2)
+		if len(parts) == 2 {
+			ext = "." + parts[1]
+		}
+	}
+	return "attachment" + ext
 }
 
 // SaveAttachment saves attachment content to disk

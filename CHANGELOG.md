@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+**v0.1.33 - 03-11-2026**
+---
+
+- Added dynamic title to detached composer
+- Fixed frontend warning
+- Updated npm packages
+- Improved flags values guarding
+- Fixed show attachment in folder - [#69](https://github.com/hkdb/aerion/issues/69)
+- Fixed downloading synthetically named attachments
+- Added proper flatpak attachments opening from toast logic
+- Improved has_attachment marking
+
+
 **v0.1.32 - 03-10-2026**
 ---
 
