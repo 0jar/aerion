@@ -112,7 +112,7 @@ func (s *ImageAllowlistStore) List() ([]*AllowlistEntry, error) {
 	}
 	defer rows.Close()
 
-	var entries []*AllowlistEntry
+	entries := make([]*AllowlistEntry, 0)
 	for rows.Next() {
 		var entry AllowlistEntry
 		var createdAt sql.NullString

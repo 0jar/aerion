@@ -1,6 +1,13 @@
 # CHANGELOG
 
 
+**v0.1.35 - 03-13-2026**
+---
+
+- Fixed spinning wheel of death in Image Tab of Settings - [#73](https://github.com/hkdb/aerion/issues/73)
+- Bumping Github Actions version
+
+
 **v0.1.34 - 03-13-2026**
 ---
 

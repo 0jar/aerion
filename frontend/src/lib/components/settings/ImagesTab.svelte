@@ -47,7 +47,7 @@
 
   async function loadData() {
     try {
-      entries = await GetImageAllowlist()
+      entries = await GetImageAllowlist() ?? []
     } catch (err) {
       console.error('Failed to load image allowlist:', err)
     } finally {
