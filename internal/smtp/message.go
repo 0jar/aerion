@@ -170,8 +170,10 @@ func (m *ComposeMessage) ToRFC822() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// writeHeader writes a single header line
+// writeHeader writes a single header line.
+// CRLF characters are stripped from the value to prevent header injection.
 func writeHeader(w io.Writer, name, value string) {
+	value = strings.NewReplacer("\r\n", "", "\r", "", "\n", "").Replace(value)
 	fmt.Fprintf(w, "%s: %s\r\n", name, value)
 }
 

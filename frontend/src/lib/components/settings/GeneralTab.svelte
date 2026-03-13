@@ -4,7 +4,6 @@
   import { Label } from '$lib/components/ui/label'
   import { Input } from '$lib/components/ui/input'
   import Switch from '$lib/components/ui/switch/Switch.svelte'
-  import ConfirmDialog from '$lib/components/ui/confirm-dialog/ConfirmDialog.svelte'
   import { _, setLocale } from '$lib/i18n'
   import { supportedLocales } from '$lib/i18n'
 
@@ -18,7 +17,6 @@
     startHidden: boolean
     autostart: boolean
     language: string
-    alwaysLoadImages: boolean
     onDelayChange: (value: number) => void
     onDensityChange: (value: string) => void
     onThemeChange: (value: string) => void
@@ -27,7 +25,6 @@
     onStartHiddenChange: (value: boolean) => void
     onAutostartChange: (value: boolean) => void
     onLanguageChange: (value: string) => void
-    onAlwaysLoadImagesChange: (value: boolean) => void
   }
 
   let {
@@ -40,7 +37,6 @@
     startHidden = $bindable(),
     autostart = $bindable(),
     language = $bindable(),
-    alwaysLoadImages = $bindable(),
     onDelayChange,
     onDensityChange,
     onThemeChange,
@@ -49,7 +45,6 @@
     onStartHiddenChange,
     onAutostartChange,
     onLanguageChange,
-    onAlwaysLoadImagesChange,
   }: Props = $props()
 
   // Message list density options
@@ -164,16 +159,7 @@
     onLanguageChange?.(value)
   }
 
-  let showAlwaysLoadImagesConfirm = $state(false)
 
-  function handleAlwaysLoadImagesChange(value: boolean) {
-    if (value) {
-      showAlwaysLoadImagesConfirm = true
-      return
-    }
-    alwaysLoadImages = false
-    onAlwaysLoadImagesChange?.(false)
-  }
 </script>
 
 <div class="space-y-6">
@@ -255,21 +241,6 @@
       <p class="text-xs text-muted-foreground">
         {$_('settingsGeneral.messageListDensityHelp')}
       </p>
-    </div>
-    <div class="space-y-2">
-      <div class="flex items-center justify-between">
-        <div class="space-y-0.5">
-          <Label for="always-load-images">{$_('settingsGeneral.alwaysLoadImages')}</Label>
-          <p class="text-xs text-muted-foreground">
-            {$_('settingsGeneral.alwaysLoadImagesHelp')}
-          </p>
-        </div>
-        <Switch
-          id="always-load-images"
-          bind:checked={alwaysLoadImages}
-          onCheckedChange={handleAlwaysLoadImagesChange}
-        />
-      </div>
     </div>
   </div>
 
@@ -376,12 +347,3 @@
 
 </div>
 
-<ConfirmDialog
-  bind:open={showAlwaysLoadImagesConfirm}
-  title={$_('settingsGeneral.alwaysLoadImagesWarningTitle')}
-  description={$_('settingsGeneral.alwaysLoadImagesWarningDescription')}
-  confirmLabel={$_('settingsGeneral.disable')}
-  variant="destructive"
-  onConfirm={() => { onAlwaysLoadImagesChange?.(true) }}
-  onCancel={() => { alwaysLoadImages = false }}
-/>

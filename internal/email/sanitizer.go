@@ -122,7 +122,7 @@ func NewSanitizer() *Sanitizer {
 	p.AllowAttrs("noshade", "size", "width").OnElements("hr")
 
 	// ==========================================================================
-	// Data attributes (used by some email clients/tracking)
+	// Data attributes (used by email templates for lazy-loading, CSS selectors, etc.)
 	// ==========================================================================
 	p.AllowDataAttributes()
 
@@ -191,29 +191,6 @@ func blockRemoteImages(html string) string {
 	result = bgAttrRe.ReplaceAllString(result, `background=""`)
 
 	return result
-}
-
-// UnblockRemoteImages restores original image sources from data attributes
-func UnblockRemoteImages(html string) string {
-	re := regexp.MustCompile(`(?i)<img([^>]*)\sdata-original-src=["']([^"']+)["']([^>]*)>`)
-
-	return re.ReplaceAllStringFunc(html, func(match string) string {
-		// Extract original src from data attribute
-		dataRe := regexp.MustCompile(`(?i)data-original-src=["']([^"']+)["']`)
-		dataMatch := dataRe.FindStringSubmatch(match)
-		if len(dataMatch) < 2 {
-			return match
-		}
-
-		originalSrc := dataMatch[1]
-
-		// Replace placeholder src with original
-		result := regexp.MustCompile(`(?i)src=["'][^"']*["']`).ReplaceAllString(match, `src="`+originalSrc+`"`)
-		// Remove data-original-src attribute
-		result = dataRe.ReplaceAllString(result, "")
-
-		return result
-	})
 }
 
 // escapeHTML escapes HTML special characters for use in attributes

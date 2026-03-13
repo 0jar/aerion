@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // UnixServer implements the Server interface using Unix domain sockets.
@@ -40,16 +41,12 @@ func (s *UnixServer) Start(ctx context.Context) error {
 	// Remove existing socket if present
 	os.Remove(socketPath)
 
+	// Set umask before creating socket to avoid TOCTOU race with Chmod
+	oldMask := syscall.Umask(0077)
 	listener, err := net.Listen("unix", socketPath)
+	syscall.Umask(oldMask)
 	if err != nil {
 		return fmt.Errorf("failed to listen on socket: %w", err)
-	}
-
-	// Set socket permissions to owner read/write only (0600)
-	if err := os.Chmod(socketPath, 0600); err != nil {
-		listener.Close()
-		os.Remove(socketPath)
-		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
 
 	s.SetListener(listener, socketPath)

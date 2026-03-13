@@ -23,6 +23,7 @@
 
   // State for remote image handling
   let imagesBlocked = $state(true)
+  let allowlistResolved = $state(false)
   let iframeElement = $state<HTMLIFrameElement | null>(null)
   let iframeReady = $state(false)
 
@@ -439,33 +440,44 @@ ${processedHtml}
     }
   }
 
-  // Check allowlist on mount and auto-load if sender/domain is allowed
-  $effect(() => {
-    const email = fromEmail
-    const hasImages = hasRemoteImages
-
-    if (getAlwaysLoadImages()) {
-      imagesBlocked = false
-      return
-    }
-
-    if (email && hasImages) {
-      IsImageAllowed(email).then((allowed) => {
-        if (allowed) {
-          imagesBlocked = false
-        }
-      }).catch((err) => {
-        console.error('[EmailBody] Failed to check allowlist:', err)
-      })
-    }
-  })
-
-  // Reset state when messageId changes
+  // Check allowlist and reset state on message change (single effect to avoid race conditions)
   $effect(() => {
     const id = messageId
+    const email = fromEmail
+    const hasImages = hasRemoteImages
+    let cancelled = false
+
+    // Reset state (was in separate effect — merged to avoid race)
     iframeReady = false
     lastSentMessageId = null
     inlineAttachments = {}
+    imagesBlocked = true
+    allowlistResolved = false
+
+    if (!hasImages) {
+      allowlistResolved = true
+      return
+    }
+
+    if (getAlwaysLoadImages()) {
+      imagesBlocked = false
+      allowlistResolved = true
+      return
+    }
+
+    if (email) {
+      IsImageAllowed(email).then((allowed) => {
+        if (cancelled) return
+        if (allowed) imagesBlocked = false
+        allowlistResolved = true
+      }).catch((err) => {
+        console.error('[EmailBody] Failed to check allowlist:', err)
+        if (!cancelled) allowlistResolved = true
+      })
+      return () => { cancelled = true }
+    }
+
+    allowlistResolved = true
   })
 
   // Fetch inline attachments when we have cid references
@@ -510,7 +522,8 @@ ${processedHtml}
     const html = bodyHtml
     const blocked = imagesBlocked
 
-    if (iframeElement && html) {
+    const resolved = allowlistResolved
+    if (iframeElement && html && resolved) {
       const content = buildIframeContent(html)
       iframeElement.srcdoc = content
       iframeReady = false
@@ -590,7 +603,7 @@ ${processedHtml}
 
 <div class="email-body relative">
   {#if bodyHtml}
-    {#if hasRemoteImages && imagesBlocked}
+    {#if hasRemoteImages && imagesBlocked && allowlistResolved}
       <div class="flex items-center gap-2 px-3 py-2 mb-3 rounded-md bg-yellow-500/10 border border-yellow-500/30 text-sm">
         <Icon icon="mdi:image-off" class="w-4 h-4 text-yellow-600 flex-shrink-0" />
         <span class="text-yellow-700 dark:text-yellow-400">{$_('viewer.remoteImagesBlocked')}</span>

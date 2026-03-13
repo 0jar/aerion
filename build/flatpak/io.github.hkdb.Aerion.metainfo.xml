@@ -128,6 +128,24 @@
   </provides>
 
   <releases>
+    <release version="0.1.34" date="2026-03-13">
+      <description>
+        <ul>
+          <li>Added Images tab to Settings Dialog to manage Always Load lists</li>
+          <li>Security - Remove OAuth debug</li>
+          <li>Security - Fix attachment file perms</li>
+          <li>Security - Sanitize attachment filename</li>
+          <li>Security - Validate paths in OpenFile and OpenFolder</li>
+          <li>Security - Fix IPC socket TOCTOU with umask</li>
+          <li>Security - Strip CRLF in writeHeader</li>
+          <li>Cleanup - Removed dead UnblockRemoteImages function</li>
+          <li>Cleaned up image loading logic</li>
+          <li>Added CardDAV returning time.RFC1123Z (purelymail) workaround - #71</li>
+          <li>Added CardDAV returning unquoted Etag (mailbox.org) workaround - #26</li>
+          <li>Fixed message list checkboxes not responding to shift click - #67</li>
+        </ul>
+    </description>
+    </release>
     <release version="0.1.33" date="2026-03-11">
       <description>
         <ul>

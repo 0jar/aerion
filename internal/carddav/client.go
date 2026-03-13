@@ -1,10 +1,13 @@
 package carddav
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,6 +17,110 @@ import (
 	"github.com/hkdb/aerion/internal/logging"
 	"github.com/rs/zerolog"
 )
+
+// xmlFixTransport wraps an http.RoundTripper to normalize WebDAV XML responses:
+// 1. DAV:getlastmodified — converts numeric timezone offsets (e.g., +0000) to GMT format.
+//    Some servers (e.g., Purelymail) return RFC 1123Z dates which http.ParseTime() cannot parse.
+// 2. DAV:getetag — adds quotes around unquoted ETag values.
+//    Some servers (e.g., mailbox.org) return unquoted ETags which go-webdav's strconv.Unquote() rejects.
+type xmlFixTransport struct {
+	base http.RoundTripper
+}
+
+var getlastmodifiedRe = regexp.MustCompile(
+	`(<[^>]*getlastmodified[^>]*>)\s*([^<]+?)\s*(</[^>]*getlastmodified[^>]*>)`,
+)
+
+var getetagRe = regexp.MustCompile(
+	`(<[^>]*getetag[^>]*>)\s*([^<]+?)\s*(</[^>]*getetag[^>]*>)`,
+)
+
+func (t *xmlFixTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "xml") && !strings.Contains(ct, "text/xml") {
+		return resp, nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("xmlFixTransport: failed to read body: %w", err)
+	}
+
+	// Fix 1: Normalize getlastmodified date formats
+	fixed := getlastmodifiedRe.ReplaceAllFunc(body, func(match []byte) []byte {
+		sub := getlastmodifiedRe.FindSubmatch(match)
+		if len(sub) < 4 {
+			return match
+		}
+		dateStr := strings.TrimSpace(string(sub[2]))
+		return fixDateValue(sub[1], dateStr, sub[3])
+	})
+
+	// Fix 2: Quote unquoted getetag values
+	fixed = getetagRe.ReplaceAllFunc(fixed, func(match []byte) []byte {
+		sub := getetagRe.FindSubmatch(match)
+		if len(sub) < 4 {
+			return match
+		}
+		etagStr := strings.TrimSpace(string(sub[2]))
+		return fixETagValue(sub[1], etagStr, sub[3])
+	})
+
+	resp.Body = io.NopCloser(bytes.NewReader(fixed))
+	resp.ContentLength = int64(len(fixed))
+	return resp, nil
+}
+
+// fixETagValue adds quotes around an unquoted ETag value.
+// If the value is already quoted, it is returned unchanged.
+func fixETagValue(prefix []byte, etagStr string, suffix []byte) []byte {
+	var buf bytes.Buffer
+	buf.Write(prefix)
+	if strings.HasPrefix(etagStr, `"`) && strings.HasSuffix(etagStr, `"`) {
+		buf.WriteString(etagStr)
+		buf.Write(suffix)
+		return buf.Bytes()
+	}
+	buf.WriteByte('"')
+	buf.WriteString(etagStr)
+	buf.WriteByte('"')
+	buf.Write(suffix)
+	return buf.Bytes()
+}
+
+// fixDateValue converts an RFC 1123Z date to RFC 1123 (GMT) format.
+// If the value is not RFC 1123Z, it is returned unchanged.
+func fixDateValue(prefix []byte, dateStr string, suffix []byte) []byte {
+	t, err := time.Parse(time.RFC1123Z, dateStr)
+	if err != nil {
+		// Not RFC 1123Z — leave unchanged
+		var buf bytes.Buffer
+		buf.Write(prefix)
+		buf.WriteString(dateStr)
+		buf.Write(suffix)
+		return buf.Bytes()
+	}
+	var buf bytes.Buffer
+	buf.Write(prefix)
+	buf.WriteString(t.UTC().Format(http.TimeFormat))
+	buf.Write(suffix)
+	return buf.Bytes()
+}
+
+// newHTTPClient creates an HTTP client with the XML-fix transport applied.
+func newHTTPClient(timeout time.Duration) *http.Client {
+	base := http.DefaultTransport
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: &xmlFixTransport{base: base},
+	}
+}
 
 // Client wraps the CardDAV client with discovery and convenience methods
 type Client struct {
@@ -26,10 +133,8 @@ type Client struct {
 
 // NewClient creates a new CardDAV client
 func NewClient(baseURL, username, password string) (*Client, error) {
-	// Create HTTP client with basic auth
-	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	// Create HTTP client with XML-fix transport
+	httpClient := newHTTPClient(30 * time.Second)
 
 	// Parse and normalize the URL
 	parsedURL, err := url.Parse(baseURL)
@@ -79,9 +184,9 @@ func DiscoverAddressbooks(baseURL, username, password string) ([]AddressbookInfo
 		parsedURL.Scheme = "https"
 	}
 
-	// Create HTTP client with basic auth
+	// Create HTTP client with XML-fix transport
 	httpClient := webdav.HTTPClientWithBasicAuth(
-		&http.Client{Timeout: 30 * time.Second},
+		newHTTPClient(30*time.Second),
 		username, password,
 	)
 
@@ -226,7 +331,7 @@ func (c *Client) FetchContacts(addressbookPath string) ([]ParsedContact, error) 
 
 	// Create a new client for this specific addressbook
 	httpClient := webdav.HTTPClientWithBasicAuth(
-		&http.Client{Timeout: 60 * time.Second},
+		newHTTPClient(60*time.Second),
 		c.username, c.password,
 	)
 
@@ -336,7 +441,7 @@ func (c *Client) SyncAddressbook(addressbookPath, syncToken string) (*SyncResult
 
 	// Create a new client for this specific addressbook
 	httpClient := webdav.HTTPClientWithBasicAuth(
-		&http.Client{Timeout: 60 * time.Second},
+		newHTTPClient(60*time.Second),
 		c.username, c.password,
 	)
 

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/hkdb/aerion/internal/email"
 	"github.com/hkdb/aerion/internal/logging"
@@ -244,13 +245,49 @@ func (a *App) openFile(path string) error {
 	return cmd.Start()
 }
 
+// validateOpenPath checks that the path is under an allowed root directory
+func (a *App) validateOpenPath(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+	absPath = filepath.Clean(absPath)
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	allowedRoots := []string{
+		a.paths.AttachmentsPath(),
+		filepath.Join(homeDir, "Downloads"),
+		a.paths.Data,
+	}
+
+	for _, root := range allowedRoots {
+		cleanRoot := filepath.Clean(root) + string(filepath.Separator)
+		if strings.HasPrefix(absPath, cleanRoot) || absPath == filepath.Clean(root) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("path %q is outside allowed directories", path)
+}
+
 // OpenFile opens a file with the system default application (exposed to frontend)
 func (a *App) OpenFile(path string) error {
+	if err := a.validateOpenPath(path); err != nil {
+		return err
+	}
 	return a.openFile(path)
 }
 
 // OpenFolder opens the folder containing a file in the system file manager
 func (a *App) OpenFolder(path string) error {
+	if err := a.validateOpenPath(path); err != nil {
+		return err
+	}
+
 	// In Flatpak, use the OpenURI portal to resolve sandboxed paths correctly
 	if runtime.GOOS == "linux" && platform.IsFlatpak() {
 		return platform.PortalOpenDirectory(path)

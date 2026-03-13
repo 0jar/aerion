@@ -384,6 +384,7 @@
     "accounts": "帳號",
     "contacts": "聯絡人",
     "about": "關於",
+    "images": "圖片",
     "composer": "撰寫",
     "composerMode": "預設撰寫模式",
     "composerModeInline": "在視窗內",
@@ -993,5 +994,13 @@
     "waitingForAuth": "等待授權中...",
     "authSuccess": "授權成功！",
     "authFailed": "授權失敗：{error}"
+  },
+  "images": {
+    "addresses": "地址",
+    "domains": "網域",
+    "noAddresses": "允許清單中沒有任何地址。在郵件檢視器中使用「一律載入 > 針對寄件者」來新增地址。",
+    "noDomains": "允許清單中沒有任何網域。在郵件檢視器中使用「一律載入 > 針對網域」來新增網域。",
+    "removeButton": "從允許清單中移除",
+    "removed": "已從允許清單中移除"
   }
 }

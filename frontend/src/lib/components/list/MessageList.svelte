@@ -739,7 +739,19 @@
     }
   }
 
-  function handleCheck(threadId: string, isChecked: boolean) {
+  function handleCheck(threadId: string, isChecked: boolean, index: number, event?: MouseEvent) {
+    if (event?.shiftKey && lastClickedIndex !== null) {
+      const start = Math.min(lastClickedIndex, index)
+      const end = Math.max(lastClickedIndex, index)
+      const newChecked = new Set(checkedThreadIds)
+      for (let i = start; i <= end; i++) {
+        newChecked.add(activeList[i].threadId)
+      }
+      checkedThreadIds = newChecked
+      return
+    }
+
+    lastClickedIndex = index
     const newChecked = new Set(checkedThreadIds)
     isChecked ? newChecked.add(threadId) : newChecked.delete(threadId)
     checkedThreadIds = newChecked
@@ -1443,7 +1455,7 @@
               selectedIsRead={!selectedHasUnread}
               isNonLocal={result._isLocal === false}
               onSelect={(e) => selectConversation(result.threadId, index, e)}
-              onCheck={(checked) => handleCheck(result.threadId, checked)}
+              onCheck={(checked, e) => handleCheck(result.threadId, checked, index, e)}
               onClearSelection={clearSelection}
               onActionComplete={handleActionComplete}
               {onReply}
@@ -1518,7 +1530,7 @@
             searchFolderName={result.folderName}
             searchFolderType={result.folderType}
             onSelect={(e) => selectConversation(result.threadId, index, e)}
-            onCheck={(checked) => handleCheck(result.threadId, checked)}
+            onCheck={(checked, e) => handleCheck(result.threadId, checked, index, e)}
             onClearSelection={clearSelection}
             onActionComplete={handleActionComplete}
             {onReply}
@@ -1583,7 +1595,7 @@
           accountColor={convAccountColor}
           accountName={convAccountName}
           onSelect={(e) => selectConversation(conv.threadId, index, e)}
-          onCheck={(checked) => handleCheck(conv.threadId, checked)}
+          onCheck={(checked, e) => handleCheck(conv.threadId, checked, index, e)}
           onClearSelection={clearSelection}
           onActionComplete={handleActionComplete}
           {onReply}

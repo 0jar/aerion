@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+**v0.1.34 - 03-13-2026**
+---
+
+- Added Images tab to Settings Dialog to manage Always Load lists
+- Security - Remove OAuth debug
+- Security - Fix attachment file perms
+- Security - Sanitize attachment filename
+- Security - Validate paths in OpenFile and OpenFolder
+- Security - Fix IPC socket TOCTOU with umask
+- Security - Strip CRLF in writeHeader
+- Cleanup - Removed dead UnblockRemoteImages function
+- Cleanup - image loading logic
+- Added CardDAV returning time.RFC1123Z (purelymail) workaround - [#71](https://github.com/hkdb/aerion/issues/71)
+- Added CardDAV returning unquoted Etag (mailbox.org) workaround - [#26](https://github.com/hkdb/aerion/issues/26)
+- Fixed message list checkboxes not responding to shift click - [#67](https://github.com/hkdb/aerion/issues/67)
+
+**Note:** This release is compiled with a new Client ID from the Microsoft newly verified account. However, as per [#29](https://github.com/hkdb/aerion/issues/29), it still doesn't completely solve the oauth "Admin Approval" problem unless your Microsoft 365 administrator has intentionally switched to approve Microsoft verified apps (not the default) in the org settings.
+
+
 **v0.1.33 - 03-11-2026**
 ---
 

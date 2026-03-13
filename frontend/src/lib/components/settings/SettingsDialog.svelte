@@ -12,6 +12,7 @@
   import ConfirmDialog from '$lib/components/ui/confirm-dialog/ConfirmDialog.svelte'
   import GeneralTab from './GeneralTab.svelte'
   import ComposerTab from './ComposerTab.svelte'
+  import ImagesTab from './ImagesTab.svelte'
   import AccountsTab from './AccountsTab.svelte'
   import ContactsTab from './ContactsTab.svelte'
   import AboutTab from './AboutTab.svelte'
@@ -192,7 +193,7 @@
       </div>
     {:else}
       <Tabs.Root bind:value={activeTab} class="w-full">
-        <Tabs.List class="grid w-full grid-cols-5">
+        <Tabs.List class="grid w-full grid-cols-6">
           <Tabs.Trigger value="general" class="flex items-center gap-2">
             <Icon icon="mdi:cog" class="w-4 h-4" />
             {$_('settings.general')}
@@ -200,6 +201,10 @@
           <Tabs.Trigger value="composer" class="flex items-center gap-2">
             <Icon icon="mdi:email-edit-outline" class="w-4 h-4" />
             {$_('settings.composer')}
+          </Tabs.Trigger>
+          <Tabs.Trigger value="images" class="flex items-center gap-2">
+            <Icon icon="mdi:image-outline" class="w-4 h-4" />
+            {$_('settings.images')}
           </Tabs.Trigger>
           <Tabs.Trigger value="accounts" class="flex items-center gap-2">
             <Icon icon="mdi:email-multiple" class="w-4 h-4" />
@@ -227,7 +232,6 @@
               bind:startHidden
               bind:autostart
               bind:language
-              bind:alwaysLoadImages
               onDelayChange={(v) => markAsReadDelaySeconds = v}
               onDensityChange={(v) => messageListDensity = v}
               onThemeChange={(v) => themeMode = v}
@@ -236,7 +240,6 @@
               onStartHiddenChange={(v) => { startHidden = v; if (v) runBackground = true }}
               onAutostartChange={(v) => autostart = v}
               onLanguageChange={(v) => language = v}
-              onAlwaysLoadImagesChange={(v) => alwaysLoadImages = v}
             />
           </Tabs.Content>
 
@@ -250,6 +253,13 @@
               onMailtoModeChange={(v) => mailtoMode = v}
               onFormatChange={(v) => composerFormat = v}
               onPolicyChange={(v) => readReceiptResponsePolicy = v}
+            />
+          </Tabs.Content>
+
+          <Tabs.Content value="images" class="mt-0">
+            <ImagesTab
+              bind:alwaysLoadImages
+              onAlwaysLoadImagesChange={(v) => alwaysLoadImages = v}
             />
           </Tabs.Content>
 
@@ -268,7 +278,7 @@
       </Tabs.Root>
 
       <!-- Actions - show Save/Cancel on General and Composer tabs -->
-      {#if activeTab === 'general' || activeTab === 'composer'}
+      {#if activeTab === 'general' || activeTab === 'composer' || activeTab === 'images'}
         <div class="flex items-center justify-end gap-2 pt-4 border-t border-border">
           <Button variant="ghost" onclick={handleCancel} disabled={saving}>
             {$_('common.cancel')}

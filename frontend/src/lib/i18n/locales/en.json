@@ -385,6 +385,7 @@
     "accounts": "Accounts",
     "contacts": "Contacts",
     "about": "About",
+    "images": "Images",
     "composer": "Composer",
     "composerMode": "Default compose mode",
     "composerModeInline": "In window",
@@ -998,5 +999,13 @@
     "waitingForAuth": "Waiting for authorization...",
     "authSuccess": "Authorization successful!",
     "authFailed": "Authorization failed: {error}"
+  },
+  "images": {
+    "addresses": "Addresses",
+    "domains": "Domains",
+    "noAddresses": "No addresses in the allowlist. Use \"Always Load > For sender\" in the email viewer to add addresses.",
+    "noDomains": "No domains in the allowlist. Use \"Always Load > For domain\" in the email viewer to add domains.",
+    "removeButton": "Remove from allowlist",
+    "removed": "Removed from allowlist"
   }
 }

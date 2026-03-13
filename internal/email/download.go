@@ -213,17 +213,18 @@ func (d *AttachmentDownloader) SaveAttachment(att *message.Attachment, content [
 		// Save to default attachments directory
 		// Create subdirectory based on message ID for organization
 		subDir := filepath.Join(d.attachmentsDir, att.MessageID[:8])
-		if err := os.MkdirAll(subDir, 0755); err != nil {
+		if err := os.MkdirAll(subDir, 0700); err != nil {
 			return "", fmt.Errorf("failed to create attachment directory: %w", err)
 		}
 
 		// Generate unique filename to avoid conflicts
-		savePath = filepath.Join(subDir, att.Filename)
+		safeName := filepath.Base(att.Filename)
+		savePath = filepath.Join(subDir, safeName)
 
 		// If file exists, append a number
 		if _, err := os.Stat(savePath); err == nil {
-			ext := filepath.Ext(att.Filename)
-			base := att.Filename[:len(att.Filename)-len(ext)]
+			ext := filepath.Ext(safeName)
+			base := safeName[:len(safeName)-len(ext)]
 			for i := 1; ; i++ {
 				savePath = filepath.Join(subDir, fmt.Sprintf("%s_%d%s", base, i, ext))
 				if _, err := os.Stat(savePath); os.IsNotExist(err) {
@@ -234,7 +235,7 @@ func (d *AttachmentDownloader) SaveAttachment(att *message.Attachment, content [
 	}
 
 	// Write content to file
-	if err := os.WriteFile(savePath, content, 0644); err != nil {
+	if err := os.WriteFile(savePath, content, 0600); err != nil {
 		return "", fmt.Errorf("failed to write attachment: %w", err)
 	}
 

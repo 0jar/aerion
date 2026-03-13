@@ -399,9 +399,6 @@ func buildAuthURL(provider ProviderConfig, state, codeChallenge string, port int
 	}
 
 	authURL := provider.AuthURL + "?" + params.Encode()
-	fmt.Printf("[DEBUG OAuth] Auth URL: %s\n", authURL)
-	fmt.Printf("[DEBUG OAuth] Redirect URI: %s\n", redirectURI)
-	fmt.Printf("[DEBUG OAuth] Client ID: %s\n", provider.ClientID)
 	return authURL
 }
 

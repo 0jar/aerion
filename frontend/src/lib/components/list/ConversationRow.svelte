@@ -30,7 +30,7 @@
     searchFolderType?: string       // Folder type for icon in search results
     isNonLocal?: boolean            // Show cloud icon for non-local server search results
     onSelect: (e?: MouseEvent) => void
-    onCheck: (checked: boolean) => void
+    onCheck: (checked: boolean, event?: MouseEvent) => void
     onClearSelection: () => void  // Clear multi-select when right-clicking unchecked row
     onActionComplete?: (autoSelectNext?: boolean) => void
     onReply?: (mode: 'reply' | 'reply-all' | 'forward', messageId: string) => void
@@ -216,7 +216,7 @@
 
   function handleCheckboxClick(e: MouseEvent) {
     e.stopPropagation()
-    onCheck(!checked)
+    onCheck(!checked, e)
   }
 
   const hasUnread = $derived((conversation.unreadCount || 0) > 0)

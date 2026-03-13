@@ -384,6 +384,7 @@
     "accounts": "账户",
     "contacts": "联系人",
     "about": "关于",
+    "images": "图片",
     "composer": "撰写",
     "composerMode": "默认撰写模式",
     "composerModeInline": "在窗口内",
@@ -993,5 +994,13 @@
     "waitingForAuth": "等待授权中...",
     "authSuccess": "授权成功！",
     "authFailed": "授权失败：{error}"
+  },
+  "images": {
+    "addresses": "地址",
+    "domains": "域名",
+    "noAddresses": "允许列表中没有任何地址。在邮件查看器中使用「始终加载 > 针对发件人」来添加地址。",
+    "noDomains": "允许列表中没有任何域名。在邮件查看器中使用「始终加载 > 针对域名」来添加域名。",
+    "removeButton": "从允许列表中移除",
+    "removed": "已从允许列表中移除"
   }
 }
