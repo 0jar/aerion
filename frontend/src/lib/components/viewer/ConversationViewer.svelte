@@ -16,6 +16,7 @@
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import MessageContextMenu from '$lib/components/common/MessageContextMenu.svelte'
   import { _ } from '$lib/i18n'
+  import { isDialogGuardActive } from '$lib/stores/dialogGuard'
 
   interface Props {
     threadId?: string | null
@@ -114,6 +115,8 @@
 
   // Debounce timer for refreshConversation (coalesces rapid sync events)
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingRefresh: { tid: string; fid: string } | null = null
+  let dialogGuardInterval: ReturnType<typeof setInterval> | null = null
 
   // Event listener cleanup functions
   let cleanupFunctions: (() => void)[] = []
@@ -176,11 +179,19 @@
 
     cleanupFunctions.push(
       EventsOn('messages:moved', (data: { messageIds: string[], destFolderId: string }) => {
-        if (conversation?.messages?.some(m => data.messageIds.includes(m.id))) {
-          // Reload or show empty state if moved to different folder
-          if (threadId && folderId) {
-            loadConversation(threadId, folderId)
-          }
+        if (!conversation?.messages?.some(m => data.messageIds.includes(m.id))) return
+
+        const movedCount = conversation.messages.filter(m => data.messageIds.includes(m.id)).length
+        const remainingCount = conversation.messages.length - movedCount
+
+        if (remainingCount === 0) {
+          // All messages moved out — dismiss and auto-select next
+          dismissConversation(true)
+          return
+        }
+        // Some messages remain — reload conversation
+        if (threadId && folderId) {
+          loadConversation(threadId, folderId)
         }
       })
     )
@@ -237,6 +248,14 @@
       })
     )
 
+    cleanupFunctions.push(
+      EventsOn('sent:synced', (data: { accountId: string }) => {
+        if (threadId && folderId && accountId && data.accountId === accountId) {
+          scheduleRefresh(threadId, folderId)
+        }
+      })
+    )
+
     // Keyboard handler for message navigation and deletion
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle if viewer pane is focused
@@ -285,6 +304,15 @@
     cleanupFunctions.push(() => {
       window.removeEventListener('keydown', handleKeyDown)
     })
+
+    // Flush deferred refreshes once dialogs close
+    dialogGuardInterval = setInterval(() => {
+      if (pendingRefresh && !isDialogGuardActive()) {
+        const { tid, fid } = pendingRefresh
+        pendingRefresh = null
+        scheduleRefresh(tid, fid)
+      }
+    }, 500)
   })
 
   onDestroy(() => {
@@ -297,6 +325,7 @@
       clearTimeout(refreshTimer)
       refreshTimer = null
     }
+    if (dialogGuardInterval) clearInterval(dialogGuardInterval)
     // Clean up all event listeners
     cleanupFunctions.forEach(cleanup => cleanup())
   })
@@ -327,7 +356,12 @@
 
   // Debounced refresh: coalesces rapid sync events (e.g. folder:synced + messages:updated)
   // into a single refreshConversation call, reducing Wails bridge pressure.
+  // Defers if a dialog guard is active (e.g. folder picker open).
   function scheduleRefresh(tid: string, fid: string) {
+    if (isDialogGuardActive()) {
+      pendingRefresh = { tid, fid }
+      return
+    }
     if (refreshTimer) clearTimeout(refreshTimer)
     refreshTimer = setTimeout(() => {
       refreshTimer = null
@@ -705,10 +739,10 @@
       // Move to trash (undoable)
       const messageIds = conversation.messages.map(m => m.id)
       try {
-        await Trash(messageIds)
-        toasts.success($_('toast.movedToTrash'), [
-          { label: $_('common.undo'), onClick: handleUndo }
-        ])
+        const movedToTrash = await Trash(messageIds)
+        const toastMsg = movedToTrash ? $_('toast.movedToTrash') : $_('toast.deletedFromFolder')
+        const actions = movedToTrash ? [{ label: $_('common.undo'), onClick: handleUndo }] : []
+        toasts.success(toastMsg, actions)
         onActionComplete?.(true)
       } catch (err) {
         console.error('Delete failed:', err)
@@ -751,10 +785,10 @@
     } else {
       // Move to trash (undoable)
       try {
-        await Trash([focusedMessageId])
-        toasts.success($_('toast.movedToTrash'), [
-          { label: $_('common.undo'), onClick: handleUndo }
-        ])
+        const movedToTrash = await Trash([focusedMessageId])
+        const toastMsg = movedToTrash ? $_('toast.movedToTrash') : $_('toast.deletedFromFolder')
+        const actions = movedToTrash ? [{ label: $_('common.undo'), onClick: handleUndo }] : []
+        toasts.success(toastMsg, actions)
         focusedMessageId = null
         // Will auto-reload via messages:deleted event
       } catch (err) {
@@ -775,13 +809,14 @@
         toasts.success($_('toast.markedAsNotSpam'), [
           { label: $_('common.undo'), onClick: handleUndo }
         ])
-      } else {
-        // Otherwise, mark as spam
-        await MarkAsSpam(messageIds)
-        toasts.success($_('toast.markedAsSpam'), [
-          { label: $_('common.undo'), onClick: handleUndo }
-        ])
+        onActionComplete?.(true)
+        return
       }
+      // Otherwise, mark as spam
+      const movedToSpam = await MarkAsSpam(messageIds)
+      const toastMsg = movedToSpam ? $_('toast.markedAsSpam') : $_('toast.deletedFromFolder')
+      const actions = movedToSpam ? [{ label: $_('common.undo'), onClick: handleUndo }] : []
+      toasts.success(toastMsg, actions)
       onActionComplete?.(true)
     } catch (err) {
       console.error('Spam toggle failed:', err)

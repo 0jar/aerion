@@ -472,6 +472,18 @@ func (a *App) MoveToFolder(messageIDs []string, destFolderID string) error {
 	return nil
 }
 
+// isGmailAccount checks if the account uses Gmail's IMAP server.
+// Gmail uses labels instead of folders — IMAP COPY adds a label rather than
+// creating an independent copy, and adding the Trash/Spam label hides the
+// message from all other IMAP mailbox views.
+func (a *App) isGmailAccount(accountID string) bool {
+	acc, err := a.accountStore.Get(accountID)
+	if err != nil || acc == nil {
+		return false
+	}
+	return acc.IMAPHost == "imap.gmail.com"
+}
+
 func (a *App) moveMessagesToIMAP(messages []*message.Message, sourceFolderID string, destFolder *folder.Folder) error {
 	log := logging.WithComponent("app.moveMessagesToIMAP")
 
@@ -497,28 +509,66 @@ func (a *App) moveMessagesToIMAP(messages []*message.Message, sourceFolderID str
 		Int("count", len(messages)).
 		Msg("Starting IMAP move operation")
 
-	uids := make([]goImap.UID, len(messages))
-	for i, m := range messages {
-		uids[i] = goImap.UID(m.UID)
+	accountID := messages[0].AccountID
+	isGmail := a.isGmailAccount(accountID)
+	destIsTrashOrSpam := destFolder.Type == folder.TypeTrash || destFolder.Type == folder.TypeSpam
+
+	// For Gmail + dest is Trash/Spam: partition messages by whether they have
+	// copies in other folders. Messages with copies only need label removal
+	// (DELETE without COPY). Messages without copies need a real move (COPY + DELETE).
+	var moveUIDs, labelRemovalUIDs []goImap.UID
+	if isGmail && destIsTrashOrSpam {
+		for _, m := range messages {
+			hasCopies := false
+			if m.MessageID != "" {
+				var copyErr error
+				hasCopies, copyErr = a.messageStore.HasCopiesInOtherFolders(m.MessageID, sourceFolderID, accountID)
+				if copyErr != nil {
+					log.Warn().Err(copyErr).Str("messageID", m.MessageID).Msg("Failed to check for copies, treating as sole copy")
+				}
+			}
+			if hasCopies {
+				labelRemovalUIDs = append(labelRemovalUIDs, goImap.UID(m.UID))
+				continue
+			}
+			moveUIDs = append(moveUIDs, goImap.UID(m.UID))
+		}
+		log.Info().
+			Int("moveCount", len(moveUIDs)).
+			Int("labelRemovalCount", len(labelRemovalUIDs)).
+			Msg("Gmail: partitioned messages for trash/spam operation")
+	}
+	if !isGmail || !destIsTrashOrSpam {
+		for _, m := range messages {
+			moveUIDs = append(moveUIDs, goImap.UID(m.UID))
+		}
 	}
 
-	err = a.withIMAPRetry(messages[0].AccountID, func(conn *imap.Client) error {
+	// Combine all UIDs that need DELETE from source
+	allUIDs := append(moveUIDs, labelRemovalUIDs...)
+	if len(allUIDs) == 0 {
+		return nil
+	}
+
+	err = a.withIMAPRetry(accountID, func(conn *imap.Client) error {
 		// Select source mailbox
 		log.Debug().Str("mailbox", sourceFolder.Path).Msg("Selecting source mailbox")
 		if _, err := conn.SelectMailbox(a.ctx, sourceFolder.Path); err != nil {
 			return fmt.Errorf("failed to select source mailbox: %w", err)
 		}
 
-		// COPY to destination
-		log.Debug().Str("destMailbox", destFolder.Path).Msg("Copying messages to destination")
-		if _, err := conn.CopyMessages(uids, destFolder.Path); err != nil {
-			return fmt.Errorf("failed to copy messages: %w", err)
+		// COPY only the messages that need a real move (not label-removal-only)
+		if len(moveUIDs) > 0 {
+			log.Debug().Str("destMailbox", destFolder.Path).Int("count", len(moveUIDs)).Msg("Copying messages to destination")
+			if _, err := conn.CopyMessages(moveUIDs, destFolder.Path); err != nil {
+				return fmt.Errorf("failed to copy messages: %w", err)
+			}
+			log.Debug().Msg("Messages copied successfully")
 		}
-		log.Debug().Msg("Messages copied successfully")
 
-		// DELETE from source
-		log.Debug().Msg("Deleting messages from source (marking deleted + expunge)")
-		if err := conn.DeleteMessagesByUID(uids); err != nil {
+		// DELETE all UIDs from source (both moved and label-removed)
+		log.Debug().Int("count", len(allUIDs)).Msg("Deleting messages from source (marking deleted + expunge)")
+		if err := conn.DeleteMessagesByUID(allUIDs); err != nil {
 			return fmt.Errorf("failed to delete messages from source: %w", err)
 		}
 
@@ -578,14 +628,16 @@ func (a *App) CopyToFolder(messageIDs []string, destFolderID string) error {
 			}
 		}
 
-		// After copy completes, sync destination folder to fetch new copies
+		// Sync destination folder so copied messages appear (headers + bodies)
+		// Clear debounce so this request isn't silently dropped
 		if len(messages) > 0 {
-			// Get account sync period (0 means all messages)
-			syncPeriodDays := 30
-			if acc, err := a.accountStore.Get(messages[0].AccountID); err == nil && acc != nil {
-				syncPeriodDays = acc.SyncPeriodDays
-			}
-			if err := a.syncEngine.SyncMessages(a.ctx, messages[0].AccountID, destFolderID, syncPeriodDays); err != nil {
+			accountID := messages[0].AccountID
+			syncKey := accountID + ":" + destFolderID
+			a.syncMu.Lock()
+			delete(a.syncLastRequest, syncKey)
+			a.syncMu.Unlock()
+
+			if err := a.SyncFolder(accountID, destFolderID); err != nil && err != context.Canceled {
 				log.Warn().Err(err).Str("destFolderID", destFolderID).Msg("Failed to sync destination folder after copy")
 			}
 		}
@@ -652,48 +704,229 @@ func (a *App) Archive(messageIDs []string) error {
 	return a.MoveToFolder(messageIDs, archiveFolder.ID)
 }
 
-// Trash moves messages to the Trash folder
-func (a *App) Trash(messageIDs []string) error {
+// Trash moves messages to the Trash folder.
+// Returns true if at least one message was moved to trash (show undo toast).
+// Returns false if all messages were just label-removed on Gmail (no undo).
+func (a *App) Trash(messageIDs []string) (bool, error) {
 	if len(messageIDs) == 0 {
-		return nil
+		return false, nil
 	}
 
 	messages, err := a.messageStore.GetByIDs(messageIDs[:1])
 	if err != nil || len(messages) == 0 {
-		return fmt.Errorf("failed to get message")
+		return false, fmt.Errorf("failed to get message")
 	}
 
-	trashFolder, err := a.GetSpecialFolder(messages[0].AccountID, folder.TypeTrash)
+	accountID := messages[0].AccountID
+
+	trashFolder, err := a.GetSpecialFolder(accountID, folder.TypeTrash)
 	if err != nil {
-		return fmt.Errorf("failed to get trash folder: %w", err)
+		return false, fmt.Errorf("failed to get trash folder: %w", err)
 	}
 	if trashFolder == nil {
-		return fmt.Errorf("no trash folder configured")
+		return false, fmt.Errorf("no trash folder configured")
 	}
 
-	return a.MoveToFolder(messageIDs, trashFolder.ID)
+	// Non-Gmail: normal move to trash for all messages
+	if !a.isGmailAccount(accountID) {
+		return true, a.MoveToFolder(messageIDs, trashFolder.ID)
+	}
+
+	// Gmail: partition messages into copies (label-remove) vs sole copies (move to trash)
+	return a.gmailTrashOrSpam(messageIDs, trashFolder)
 }
 
-// MarkAsSpam moves messages to the Spam folder
-func (a *App) MarkAsSpam(messageIDs []string) error {
-	if len(messageIDs) == 0 {
+// gmailTrashOrSpam handles Gmail-specific trash/spam behavior.
+// Messages with copies in other folders get label-removed (DELETE only).
+// Messages without copies get moved to the destination folder (COPY + DELETE).
+// Returns true if at least one message was moved to dest (show undo toast).
+func (a *App) gmailTrashOrSpam(messageIDs []string, destFolder *folder.Folder) (bool, error) {
+	log := logging.WithComponent("app.gmailTrashOrSpam")
+
+	allMessages, err := a.messageStore.GetByIDs(messageIDs)
+	if err != nil {
+		return false, fmt.Errorf("failed to get messages: %w", err)
+	}
+	if len(allMessages) == 0 {
+		return false, nil
+	}
+
+	accountID := allMessages[0].AccountID
+
+	// Partition: copies (exist in other folders) vs non-copies (sole copy)
+	var copyIDs, nonCopyIDs []string
+	var copyMsgs []*message.Message
+	for _, m := range allMessages {
+		hasCopies := false
+		if m.MessageID != "" {
+			hasCopies, err = a.messageStore.HasCopiesInOtherFolders(m.MessageID, m.FolderID, accountID)
+			if err != nil {
+				log.Warn().Err(err).Str("messageID", m.MessageID).Msg("Failed to check for copies, treating as sole copy")
+			}
+		}
+		if hasCopies {
+			copyIDs = append(copyIDs, m.ID)
+			copyMsgs = append(copyMsgs, m)
+			continue
+		}
+		nonCopyIDs = append(nonCopyIDs, m.ID)
+	}
+
+	log.Info().
+		Int("copyCount", len(copyIDs)).
+		Int("nonCopyCount", len(nonCopyIDs)).
+		Str("destFolder", destFolder.Name).
+		Msg("Gmail: partitioned messages for trash/spam")
+
+	// Handle copies: just remove the label (delete locally + IMAP DELETE without COPY)
+	if len(copyIDs) > 0 {
+		if err := a.gmailRemoveLabel(copyMsgs); err != nil {
+			log.Error().Err(err).Msg("Failed to remove Gmail labels for copies")
+			return len(nonCopyIDs) > 0, err
+		}
+	}
+
+	// Handle non-copies: normal move to trash/spam
+	if len(nonCopyIDs) > 0 {
+		if err := a.MoveToFolder(nonCopyIDs, destFolder.ID); err != nil {
+			return true, err
+		}
+	}
+
+	return len(nonCopyIDs) > 0, nil
+}
+
+// gmailRemoveLabel removes messages from their current folder (label) on Gmail.
+// This deletes them locally and does IMAP DELETE from source without COPY —
+// effectively removing the label while the message stays in other labels.
+func (a *App) gmailRemoveLabel(messages []*message.Message) error {
+	log := logging.WithComponent("app.gmailRemoveLabel")
+
+	if len(messages) == 0 {
 		return nil
+	}
+
+	// Group by source folder
+	byFolder := make(map[string][]*message.Message)
+	for _, m := range messages {
+		byFolder[m.FolderID] = append(byFolder[m.FolderID], m)
+	}
+
+	// Collect all IDs for local delete
+	ids := make([]string, len(messages))
+	for i, m := range messages {
+		ids[i] = m.ID
+	}
+
+	// Delete from local DB
+	if err := a.messageStore.DeleteBatch(ids); err != nil {
+		return fmt.Errorf("failed to delete messages locally: %w", err)
+	}
+
+	wailsRuntime.EventsEmit(a.ctx, "messages:deleted", ids)
+
+	// Update folder counts
+	go func() {
+		folderCounts := make(map[string]int)
+		for folderID, msgs := range byFolder {
+			unreadCount, countErr := a.messageStore.CountUnreadByFolder(folderID)
+			if countErr != nil {
+				log.Error().Err(countErr).Str("folderID", folderID).Msg("Failed to count unread messages")
+				continue
+			}
+			folderObj, getErr := a.folderStore.Get(folderID)
+			if getErr != nil || folderObj == nil {
+				continue
+			}
+			newTotalCount := folderObj.TotalCount - len(msgs)
+			if newTotalCount < 0 {
+				newTotalCount = 0
+			}
+			if updateErr := a.folderStore.UpdateCounts(folderID, newTotalCount, unreadCount); updateErr != nil {
+				log.Error().Err(updateErr).Str("folderID", folderID).Msg("Failed to update folder counts")
+				continue
+			}
+			folderCounts[folderID] = unreadCount
+		}
+		if len(folderCounts) > 0 {
+			wailsRuntime.EventsEmit(a.ctx, "folders:countsChanged", folderCounts)
+		}
+	}()
+
+	// IMAP: DELETE from source folders (no COPY — just remove the label)
+	go func() {
+		for folderID, msgs := range byFolder {
+			if err := a.removeFromIMAPFolder(msgs, folderID); err != nil {
+				log.Error().Err(err).Str("folderID", folderID).Msg("Failed to remove messages from IMAP folder")
+			}
+		}
+	}()
+
+	return nil
+}
+
+// removeFromIMAPFolder does SELECT + DELETE by UID on the given folder.
+// Unlike deleteMessagesFromIMAP, this does NOT check HasCopiesInOtherFolders —
+// it unconditionally removes the messages from the folder (removes the Gmail label).
+func (a *App) removeFromIMAPFolder(messages []*message.Message, folderID string) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	folderObj, err := a.folderStore.Get(folderID)
+	if err != nil || folderObj == nil {
+		return fmt.Errorf("folder not found")
+	}
+
+	var uids []goImap.UID
+	for _, m := range messages {
+		if m.UID == 0 || int32(m.UID) < 0 {
+			continue
+		}
+		uids = append(uids, goImap.UID(m.UID))
+	}
+	if len(uids) == 0 {
+		return nil
+	}
+
+	return a.withIMAPRetry(messages[0].AccountID, func(conn *imap.Client) error {
+		if _, err := conn.SelectMailbox(a.ctx, folderObj.Path); err != nil {
+			return fmt.Errorf("failed to select mailbox: %w", err)
+		}
+		return conn.DeleteMessagesByUID(uids)
+	})
+}
+
+// MarkAsSpam moves messages to the Spam folder.
+// Returns true if at least one message was moved to spam (show undo toast).
+// Returns false if all messages were just label-removed on Gmail (no undo).
+func (a *App) MarkAsSpam(messageIDs []string) (bool, error) {
+	if len(messageIDs) == 0 {
+		return false, nil
 	}
 
 	messages, err := a.messageStore.GetByIDs(messageIDs[:1])
 	if err != nil || len(messages) == 0 {
-		return fmt.Errorf("failed to get message")
+		return false, fmt.Errorf("failed to get message")
 	}
 
-	spamFolder, err := a.GetSpecialFolder(messages[0].AccountID, folder.TypeSpam)
+	accountID := messages[0].AccountID
+
+	spamFolder, err := a.GetSpecialFolder(accountID, folder.TypeSpam)
 	if err != nil {
-		return fmt.Errorf("failed to get spam folder: %w", err)
+		return false, fmt.Errorf("failed to get spam folder: %w", err)
 	}
 	if spamFolder == nil {
-		return fmt.Errorf("no spam folder configured")
+		return false, fmt.Errorf("no spam folder configured")
 	}
 
-	return a.MoveToFolder(messageIDs, spamFolder.ID)
+	// Non-Gmail: normal move to spam
+	if !a.isGmailAccount(accountID) {
+		return true, a.MoveToFolder(messageIDs, spamFolder.ID)
+	}
+
+	// Gmail: partition messages into copies (label-remove) vs sole copies (move to spam)
+	return a.gmailTrashOrSpam(messageIDs, spamFolder)
 }
 
 // MarkAsNotSpam moves messages from Spam to Inbox
@@ -808,17 +1041,45 @@ func (a *App) deleteMessagesFromIMAP(messages []*message.Message, folderID strin
 		return nil
 	}
 
+	log := logging.WithComponent("app.deleteMessagesFromIMAP")
+
 	folderObj, err := a.folderStore.Get(folderID)
 	if err != nil || folderObj == nil {
 		return fmt.Errorf("folder not found")
 	}
 
-	uids := make([]goImap.UID, len(messages))
-	for i, m := range messages {
-		uids[i] = goImap.UID(m.UID)
+	accountID := messages[0].AccountID
+	isGmail := a.isGmailAccount(accountID)
+
+	var uids []goImap.UID
+	for _, m := range messages {
+		// Skip messages with temp UIDs (negative values from local move operations)
+		// that haven't been reconciled with the IMAP server yet
+		if m.UID == 0 || int32(m.UID) < 0 {
+			continue
+		}
+
+		// For Gmail: skip IMAP delete if the same RFC 822 Message-ID exists in
+		// other local folders. On Gmail there's only ONE underlying message — an
+		// IMAP EXPUNGE here would destroy it across ALL labels (Inbox, etc.).
+		if isGmail && m.MessageID != "" {
+			hasCopies, copyErr := a.messageStore.HasCopiesInOtherFolders(m.MessageID, folderID, accountID)
+			if copyErr != nil {
+				log.Warn().Err(copyErr).Str("messageID", m.MessageID).Msg("Failed to check for copies in other folders")
+			}
+			if hasCopies {
+				log.Debug().Str("messageID", m.MessageID).Msg("Gmail: skipping IMAP delete — message exists in other folders")
+				continue
+			}
+		}
+
+		uids = append(uids, goImap.UID(m.UID))
+	}
+	if len(uids) == 0 {
+		return nil
 	}
 
-	return a.withIMAPRetry(messages[0].AccountID, func(conn *imap.Client) error {
+	return a.withIMAPRetry(accountID, func(conn *imap.Client) error {
 		if _, err := conn.SelectMailbox(a.ctx, folderObj.Path); err != nil {
 			return fmt.Errorf("failed to select mailbox: %w", err)
 		}

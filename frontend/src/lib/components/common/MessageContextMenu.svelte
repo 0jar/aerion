@@ -5,9 +5,6 @@
     ContextMenuContent,
     ContextMenuItem,
     ContextMenuSeparator,
-    ContextMenuSub,
-    ContextMenuSubTrigger,
-    ContextMenuSubContent,
   } from '$lib/components/ui/context-menu'
   import {
     GetFolders,
@@ -28,8 +25,10 @@
   import { folder } from '../../../../wailsjs/go/models'
   import { toasts } from '$lib/stores/toast'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
+  import FolderPickerDialog from './FolderPickerDialog.svelte'
   import type { Snippet } from 'svelte'
   import { _ } from '$lib/i18n'
+  import { dialogGuardOpen, dialogGuardClose } from '$lib/stores/dialogGuard'
 
   interface Props {
     messageIds: string[]
@@ -64,6 +63,25 @@
 
   // Permanent delete confirmation
   let showDeleteConfirm = $state(false)
+
+  // Folder picker dialog state
+  let showFolderPicker = $state(false)
+  let folderPickerMode = $state<'move' | 'copy'>('move')
+
+  // Track dialog open/close to prevent background reloads from dismissing dialogs
+  $effect(() => {
+    if (showFolderPicker) dialogGuardOpen()
+    return () => {
+      if (showFolderPicker) dialogGuardClose()
+    }
+  })
+
+  $effect(() => {
+    if (showDeleteConfirm) dialogGuardOpen()
+    return () => {
+      if (showDeleteConfirm) dialogGuardClose()
+    }
+  })
 
   // Folder type to icon mapping
   const folderIcons: Record<string, string> = {
@@ -170,8 +188,10 @@
       showDeleteConfirm = true
     } else {
       try {
-        await Trash(messageIds)
-        toasts.success($_('toast.movedToTrash'), [{ label: $_('common.undo'), onClick: handleUndo }])
+        const movedToTrash = await Trash(messageIds)
+        const toastMsg = movedToTrash ? $_('toast.movedToTrash') : $_('toast.deletedFromFolder')
+        const actions = movedToTrash ? [{ label: $_('common.undo'), onClick: handleUndo }] : []
+        toasts.success(toastMsg, actions)
         onActionComplete?.(true)
       } catch (err) {
         console.error('Delete failed:', err)
@@ -199,11 +219,14 @@
         // If we're in spam folder, mark as NOT spam
         await MarkAsNotSpam(messageIds)
         toasts.success($_('toast.markedAsNotSpam'), [{ label: $_('common.undo'), onClick: handleUndo }])
-      } else {
-        // Otherwise, mark as spam
-        await MarkAsSpam(messageIds)
-        toasts.success($_('toast.markedAsSpam'), [{ label: $_('common.undo'), onClick: handleUndo }])
+        onActionComplete?.(true)
+        return
       }
+      // Otherwise, mark as spam
+      const movedToSpam = await MarkAsSpam(messageIds)
+      const toastMsg = movedToSpam ? $_('toast.markedAsSpam') : $_('toast.deletedFromFolder')
+      const actions = movedToSpam ? [{ label: $_('common.undo'), onClick: handleUndo }] : []
+      toasts.success(toastMsg, actions)
       onActionComplete?.(true)
     } catch (err) {
       console.error('Spam toggle failed:', err)
@@ -240,6 +263,28 @@
     } catch (err) {
       console.error('Read status toggle failed:', err)
       toasts.error($_('toast.failedToUpdateReadStatus'))
+    }
+  }
+
+  function openMoveTo() {
+    folderPickerMode = 'move'
+    showFolderPicker = true
+  }
+
+  function openCopyTo() {
+    folderPickerMode = 'copy'
+    showFolderPicker = true
+  }
+
+  function handleFolderSelected(folderId: string, folderName: string) {
+    showFolderPicker = false
+    switch (folderPickerMode) {
+      case 'move':
+        handleMoveTo(folderId, folderName)
+        break
+      case 'copy':
+        handleCopyTo(folderId, folderName)
+        break
     }
   }
 
@@ -307,83 +352,17 @@
 
     <ContextMenuSeparator />
 
-    <!-- Move to submenu -->
-    <ContextMenuSub>
-      <ContextMenuSubTrigger>
-        <Icon icon="mdi:folder-move-outline" class="mr-2 h-4 w-4" />
-        {$_('contextMenu.moveTo')}
-      </ContextMenuSubTrigger>
-      <ContextMenuSubContent>
-        {#if foldersLoading}
-          <ContextMenuItem disabled>
-            <Icon icon="mdi:loading" class="mr-2 h-4 w-4 animate-spin" />
-            {$_('common.loading')}
-          </ContextMenuItem>
-        {:else if availableFolders.length === 0}
-          <ContextMenuItem disabled>
-            {$_('contextMenu.noFoldersAvailable')}
-          </ContextMenuItem>
-        {:else}
-          <!-- Special folders -->
-          {#each specialFolders as f (f.id)}
-            <ContextMenuItem onSelect={() => handleMoveTo(f.id, f.name)}>
-              <Icon icon={getFolderIcon(f.type)} class="mr-2 h-4 w-4" />
-              {f.name}
-            </ContextMenuItem>
-          {/each}
-          <!-- Separator if we have custom folders -->
-          {#if customFolders.length > 0 && specialFolders.length > 0}
-            <ContextMenuSeparator />
-          {/if}
-          <!-- Custom folders -->
-          {#each customFolders as f (f.id)}
-            <ContextMenuItem onSelect={() => handleMoveTo(f.id, f.name)}>
-              <Icon icon={getFolderIcon(f.type)} class="mr-2 h-4 w-4" />
-              {f.name}
-            </ContextMenuItem>
-          {/each}
-        {/if}
-      </ContextMenuSubContent>
-    </ContextMenuSub>
+    <!-- Move to folder picker -->
+    <ContextMenuItem onSelect={openMoveTo}>
+      <Icon icon="mdi:folder-move-outline" class="mr-2 h-4 w-4" />
+      {$_('contextMenu.moveTo')}
+    </ContextMenuItem>
 
-    <!-- Copy to submenu -->
-    <ContextMenuSub>
-      <ContextMenuSubTrigger>
-        <Icon icon="mdi:content-copy" class="mr-2 h-4 w-4" />
-        {$_('contextMenu.copyTo')}
-      </ContextMenuSubTrigger>
-      <ContextMenuSubContent>
-        {#if foldersLoading}
-          <ContextMenuItem disabled>
-            <Icon icon="mdi:loading" class="mr-2 h-4 w-4 animate-spin" />
-            {$_('common.loading')}
-          </ContextMenuItem>
-        {:else if availableFolders.length === 0}
-          <ContextMenuItem disabled>
-            {$_('contextMenu.noFoldersAvailable')}
-          </ContextMenuItem>
-        {:else}
-          <!-- Special folders -->
-          {#each specialFolders as f (f.id)}
-            <ContextMenuItem onSelect={() => handleCopyTo(f.id, f.name)}>
-              <Icon icon={getFolderIcon(f.type)} class="mr-2 h-4 w-4" />
-              {f.name}
-            </ContextMenuItem>
-          {/each}
-          <!-- Separator if we have custom folders -->
-          {#if customFolders.length > 0 && specialFolders.length > 0}
-            <ContextMenuSeparator />
-          {/if}
-          <!-- Custom folders -->
-          {#each customFolders as f (f.id)}
-            <ContextMenuItem onSelect={() => handleCopyTo(f.id, f.name)}>
-              <Icon icon={getFolderIcon(f.type)} class="mr-2 h-4 w-4" />
-              {f.name}
-            </ContextMenuItem>
-          {/each}
-        {/if}
-      </ContextMenuSubContent>
-    </ContextMenuSub>
+    <!-- Copy to folder picker -->
+    <ContextMenuItem onSelect={openCopyTo}>
+      <Icon icon="mdi:content-copy" class="mr-2 h-4 w-4" />
+      {$_('contextMenu.copyTo')}
+    </ContextMenuItem>
 
     <ContextMenuSeparator />
 
@@ -414,4 +393,14 @@
   variant="destructive"
   onConfirm={handleConfirmPermanentDelete}
   onCancel={() => (showDeleteConfirm = false)}
+/>
+
+<!-- Folder Picker Dialog -->
+<FolderPickerDialog
+  bind:open={showFolderPicker}
+  title={$_(folderPickerMode === 'move' ? 'contextMenu.moveTo' : 'contextMenu.copyTo')}
+  {foldersLoading}
+  {specialFolders}
+  {customFolders}
+  onSelect={handleFolderSelected}
 />

@@ -278,6 +278,7 @@
     "archived": "Archived",
     "conversationArchived": "Conversation archived",
     "movedToTrash": "Moved to trash",
+    "deletedFromFolder": "Deleted from folder",
     "permanentlyDeleted": "Permanently deleted",
     "trashEmptied": "Trash emptied",
     "markedAsRead": "Marked as read",

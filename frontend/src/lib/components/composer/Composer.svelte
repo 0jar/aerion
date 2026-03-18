@@ -694,21 +694,17 @@
     })
   })
 
-  // Select identity based on reply/forward recipient matching
+  // Select identity based on the From address the backend determined for reply/forward
   function selectIdentityForReply(): account.Identity | null {
     if (!initialMessage) return null
-    
-    // Get all recipient addresses from the original message
-    // Include To, Cc, AND Bcc - user may have been Bcc'd on the original
-    const recipientEmails = [
-      ...(initialMessage.to || []).map((a: any) => (a.address || a.email || '').toLowerCase()),
-      ...(initialMessage.cc || []).map((a: any) => (a.address || a.email || '').toLowerCase()),
-      ...(initialMessage.bcc || []).map((a: any) => (a.address || a.email || '').toLowerCase()),
-    ].filter(e => e)
-    
-    // Find an identity that matches one of the recipient addresses
-    return identities.find(identity => 
-      recipientEmails.includes(identity.email.toLowerCase())
+
+    // PrepareReply already determines the correct From based on the account
+    // that owns the message. Match it to a local identity.
+    const fromEmail = ((initialMessage.from as any)?.address || (initialMessage.from as any)?.email || '').toLowerCase()
+    if (!fromEmail) return null
+
+    return identities.find(identity =>
+      identity.email.toLowerCase() === fromEmail
     ) || null
   }
 

@@ -128,6 +128,19 @@
   </provides>
 
   <releases>
+    <release version="0.1.37" date="2026-03-18">
+      <description>
+        <ul>
+          <li>Changed copy to and move to folder selection to dialog box instead</li>
+          <li>Improved moved message handling</li>
+          <li>Fixed copy and delete logic for Gmail</li>
+          <li>Fixed threading copies of message across folders together</li>
+          <li>Fixed post bulk delete focus - #81</li>
+          <li>Fixed post send conversation refresh</li>
+          <li>Fixed default from identity for replies</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.36" date="2026-03-17">
       <description>
         <ul>

@@ -277,6 +277,7 @@
     "archived": "已封存",
     "conversationArchived": "對話已封存",
     "movedToTrash": "已移至垃圾桶",
+    "deletedFromFolder": "已從資料夾中刪除",
     "permanentlyDeleted": "已永久刪除",
     "trashEmptied": "垃圾桶已清空",
     "markedAsRead": "已標記為已讀",

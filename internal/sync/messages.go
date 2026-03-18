@@ -10,6 +10,7 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	"github.com/hkdb/aerion/internal/folder"
 	imapPkg "github.com/hkdb/aerion/internal/imap"
 	"github.com/hkdb/aerion/internal/message"
 )
@@ -185,8 +186,32 @@ func (e *Engine) SyncMessages(ctx context.Context, accountID, folderID string, s
 			Msg("About to delete more than 50% of local messages - this may indicate a sync issue")
 	}
 
+	// Check if this is a Gmail account — messages hidden by Trash/Spam label
+	// still exist but are invisible in other IMAP mailbox views.
+	isGmail := false
+	if acc, accErr := e.accountStore.Get(accountID); accErr == nil && acc != nil {
+		isGmail = acc.IMAPHost == "imap.gmail.com"
+	}
+
 	// Delete removed messages
 	for _, uid := range deletedUIDs {
+		// For Gmail: before deleting, check if the message exists in Trash or Spam.
+		// Gmail hides messages from all other IMAP views when Trash/Spam label is
+		// added, so the UID disappears from this folder's server listing even though
+		// the message isn't truly deleted. Skip local deletion to preserve it.
+		if isGmail {
+			msg, msgErr := e.messageStore.GetByUID(folderID, uid)
+			if msgErr == nil && msg != nil && msg.MessageID != "" {
+				inTrash, _ := e.messageStore.ExistsInFolder(msg.MessageID, string(folder.TypeTrash), accountID)
+				inSpam, _ := e.messageStore.ExistsInFolder(msg.MessageID, string(folder.TypeSpam), accountID)
+				if inTrash || inSpam {
+					e.log.Debug().Uint32("uid", uid).Str("messageID", msg.MessageID).
+						Msg("Gmail: skipping local delete — message hidden by Trash/Spam label")
+					continue
+				}
+			}
+		}
+
 		if err := e.messageStore.DeleteByUID(folderID, uid); err != nil {
 			e.log.Warn().Err(err).Uint32("uid", uid).Msg("Failed to delete message")
 		}
@@ -651,7 +676,7 @@ func (e *Engine) fetchMessageHeaders(ctx context.Context, client *imapclient.Cli
 		applyFlagsToMessage(m, flags)
 
 		// Save to store immediately (don't wait for all messages)
-		if err := e.messageStore.Create(m); err != nil {
+		if err := e.messageStore.Upsert(m); err != nil {
 			e.log.Warn().Err(err).Uint32("uid", m.UID).Msg("Failed to save message header")
 			continue
 		}

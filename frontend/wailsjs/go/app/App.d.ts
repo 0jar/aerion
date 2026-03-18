@@ -299,7 +299,7 @@ export function MarkAsNotSpam(arg1:Array<string>):Promise<void>;
 
 export function MarkAsRead(arg1:Array<string>):Promise<void>;
 
-export function MarkAsSpam(arg1:Array<string>):Promise<void>;
+export function MarkAsSpam(arg1:Array<string>):Promise<boolean>;
 
 export function MarkAsUnread(arg1:Array<string>):Promise<void>;
 
@@ -461,7 +461,7 @@ export function TestOAuthConnection(arg1:string):Promise<void>;
 
 export function TestSMTPConnection(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<void>;
 
-export function Trash(arg1:Array<string>):Promise<void>;
+export function Trash(arg1:Array<string>):Promise<boolean>;
 
 export function Undo():Promise<string>;
 

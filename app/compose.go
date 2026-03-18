@@ -549,6 +549,11 @@ func (a *App) syncSentFolder(accountID string) error {
 		"folderId":  sentFolder.ID,
 	})
 
+	// Notify conversation viewer that sent folder synced (for cross-folder thread refresh)
+	wailsRuntime.EventsEmit(a.ctx, "sent:synced", map[string]interface{}{
+		"accountId": accountID,
+	})
+
 	return nil
 }
 

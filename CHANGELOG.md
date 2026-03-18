@@ -1,6 +1,18 @@
 # CHANGELOG
 
 
+**v0.1.37 - 03-18-2026**
+---
+
+- Changed copy to and move to folder selection to dialog box instead
+- Improved moved message handling
+- Fixed copy and delete logic for Gmail
+- Fixed threading copies of message across folders together
+- Fixed post bulk delete focus - [#81](https://github.com/hkdb/aerion/issues/81)
+- Fixed post send conversation refresh
+- Fixed default from identity for replies
+
+
 **v0.1.36 - 03-17-2026**
 ---
 

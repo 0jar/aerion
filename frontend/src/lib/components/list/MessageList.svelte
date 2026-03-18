@@ -17,6 +17,7 @@
   import { getMessageListDensity, getMessageListSortOrder, setMessageListSortOrder } from '$lib/stores/settings.svelte'
   import { accountStore } from '$lib/stores/accounts.svelte'
   import { getLayoutMode, hideViewer } from '$lib/stores/layout.svelte'
+  import { isDialogGuardActive } from '$lib/stores/dialogGuard'
 
   interface Props {
     accountId?: string | null
@@ -79,6 +80,10 @@
 
   // Debounce timer for coalescing sync event reloads (fixes event flooding with 3+ accounts)
   let syncReloadTimer: ReturnType<typeof setTimeout> | null = null
+
+  // Deferred reload: when a dialog (e.g. folder picker) is open, defer the reload
+  // so the component tree isn't destroyed mid-interaction
+  let pendingReload = false
 
   // Buffer for flag changes that arrive while loadConversations() is in-flight.
   // On notification click, loadConversations (folder change) and MarkAsRead race —
@@ -143,7 +148,12 @@
 
   // Schedule a debounced reload — coalesces rapid sync events from multiple accounts
   // into a single loadConversations() call after they settle (300ms).
+  // Defers if a dialog guard is active (e.g. folder picker open).
   function scheduleReload() {
+    if (isDialogGuardActive()) {
+      pendingReload = true
+      return
+    }
     if (syncReloadTimer) clearTimeout(syncReloadTimer)
     syncReloadTimer = setTimeout(() => {
       syncReloadTimer = null
@@ -225,7 +235,17 @@
 
     // Check initial FTS index status for current folder
     checkFTSIndexStatus()
+
+    // Flush deferred reloads once dialogs close
+    dialogGuardInterval = setInterval(() => {
+      if (pendingReload && !isDialogGuardActive()) {
+        pendingReload = false
+        scheduleReload()
+      }
+    }, 500)
   })
+
+  let dialogGuardInterval: ReturnType<typeof setInterval> | null = null
 
   onDestroy(() => {
     EventsOff('folder:synced')
@@ -237,6 +257,7 @@
     if (reloadTimer) clearTimeout(reloadTimer)
     if (syncReloadTimer) clearTimeout(syncReloadTimer)
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+    if (dialogGuardInterval) clearInterval(dialogGuardInterval)
   })
 
   // Check FTS index status for current folder
@@ -781,8 +802,9 @@
 
   export function handleActionComplete(autoSelectNext: boolean = false) {
     onRowActionComplete?.()
-    // Get current selection index BEFORE reload (for auto-select after delete/archive/spam)
-    const currentIndex = getSelectedIndex()
+    // Get target index BEFORE reload (for auto-select after delete/archive/spam)
+    // Uses earliest checked item's index so bulk delete doesn't overshoot
+    const currentIndex = getEarliestCheckedIndex()
     const scrollTop = listContainerRef?.scrollTop ?? 0
 
     // If in search mode, refresh search results instead of conversations
@@ -1086,6 +1108,15 @@
     return selectedHasUnread
   }
 
+  // Get index of earliest checked item (for post-delete focus)
+  function getEarliestCheckedIndex(): number {
+    if (checkedThreadIds.size === 0) return getSelectedIndex()
+    for (let i = 0; i < activeList.length; i++) {
+      if (checkedThreadIds.has(activeList[i].threadId)) return i
+    }
+    return getSelectedIndex()
+  }
+
   // Clear all checkboxes
   export function clearChecked() {
     checkedThreadIds = new Set()
@@ -1133,8 +1164,8 @@
     try {
       await DeletePermanently(pendingDeleteIds)
       toasts.success($_('toast.permanentlyDeleted'))
-      clearChecked()
       handleActionComplete(true)
+      clearChecked()
     } catch (err) {
       console.error('Permanent delete failed:', err)
       toasts.error($_('toast.failedToDelete'))
@@ -1148,8 +1179,8 @@
     try {
       await EmptyTrash(accountId, folderId)
       toasts.success($_('toast.trashEmptied'))
-      clearChecked()
       handleActionComplete(true)
+      clearChecked()
     } catch (err) {
       console.error('Empty trash failed:', err)
       toasts.error($_('toast.failedToEmptyTrash'))
@@ -1166,10 +1197,12 @@
       return
     }
     Trash(messageIds)
-      .then(() => {
-        toasts.success($_('toast.movedToTrash'), [{ label: $_('common.undo'), onClick: handleUndo }])
-        clearChecked()
+      .then((movedToTrash) => {
+        const toastMsg = movedToTrash ? $_('toast.movedToTrash') : $_('toast.deletedFromFolder')
+        const actions = movedToTrash ? [{ label: $_('common.undo'), onClick: handleUndo }] : []
+        toasts.success(toastMsg, actions)
         handleActionComplete(true)
+        clearChecked()
       })
       .catch((err) => {
         console.error('Delete failed:', err)

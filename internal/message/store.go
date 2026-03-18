@@ -623,6 +623,61 @@ func (s *Store) Create(m *Message) error {
 	return nil
 }
 
+// Upsert inserts a message or updates it if a row with the same (folder_id, uid) already exists.
+// This handles cases where a previous copy was deleted but the stale row remains, or where
+// the IMAP server reuses UIDs after EXPUNGE.
+func (s *Store) Upsert(m *Message) error {
+	if m.ID == "" {
+		m.ID = uuid.New().String()
+	}
+	if m.ReceivedAt.IsZero() {
+		m.ReceivedAt = time.Now().UTC()
+	}
+
+	query := `
+		INSERT INTO messages (
+			id, account_id, folder_id, uid, message_id, in_reply_to, references_list, thread_id,
+			subject, from_name, from_email, to_list, cc_list, bcc_list, reply_to, date,
+			snippet, is_read, is_starred, is_answered, is_forwarded, is_draft, is_deleted,
+			size, has_attachments, body_text, body_html, body_fetched,
+			read_receipt_to, read_receipt_handled, received_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(folder_id, uid) DO UPDATE SET
+			id=excluded.id, account_id=excluded.account_id,
+			message_id=excluded.message_id, in_reply_to=excluded.in_reply_to,
+			references_list=excluded.references_list, thread_id=excluded.thread_id,
+			subject=excluded.subject, from_name=excluded.from_name, from_email=excluded.from_email,
+			to_list=excluded.to_list, cc_list=excluded.cc_list, bcc_list=excluded.bcc_list,
+			reply_to=excluded.reply_to, date=excluded.date,
+			snippet=excluded.snippet, is_read=excluded.is_read, is_starred=excluded.is_starred,
+			is_answered=excluded.is_answered, is_forwarded=excluded.is_forwarded,
+			is_draft=excluded.is_draft, is_deleted=excluded.is_deleted,
+			size=excluded.size, has_attachments=excluded.has_attachments,
+			body_text=excluded.body_text, body_html=excluded.body_html,
+			body_fetched=excluded.body_fetched,
+			read_receipt_to=excluded.read_receipt_to, read_receipt_handled=excluded.read_receipt_handled,
+			received_at=excluded.received_at
+	`
+
+	_, err := s.db.Exec(query,
+		m.ID, m.AccountID, m.FolderID, m.UID,
+		nullString(m.MessageID), nullString(m.InReplyTo), nullString(m.References), nullString(m.ThreadID),
+		m.Subject, m.FromName, m.FromEmail,
+		nullString(m.ToList), nullString(m.CcList), nullString(m.BccList), nullString(m.ReplyTo),
+		m.Date, nullString(m.Snippet),
+		m.IsRead, m.IsStarred, m.IsAnswered, m.IsForwarded, m.IsDraft, m.IsDeleted,
+		m.Size, m.HasAttachments,
+		nullString(m.BodyText), nullString(m.BodyHTML), m.BodyFetched,
+		nullString(m.ReadReceiptTo), m.ReadReceiptHandled,
+		m.ReceivedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert message: %w", err)
+	}
+
+	return nil
+}
+
 // Update updates an existing message
 func (s *Store) Update(m *Message) error {
 	query := `
@@ -771,6 +826,37 @@ func (s *Store) DeleteByFolder(folderID string) error {
 		return fmt.Errorf("failed to delete messages: %w", err)
 	}
 	return nil
+}
+
+// ExistsInFolder checks if a message with the given RFC 822 Message-ID exists
+// in a folder of the specified type (e.g., "trash", "spam") for the account.
+func (s *Store) ExistsInFolder(messageID string, folderType string, accountID string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE m.message_id = ? AND f.folder_type = ? AND m.account_id = ?
+	`, messageID, folderType, accountID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("failed to check message in folder type: %w", err)
+	}
+	return count > 0, nil
+}
+
+// HasCopiesInOtherFolders checks if a message with the same RFC 822 Message-ID
+// exists in any other folder (excluding the specified folder) for the account.
+// Used by Gmail-aware permanent delete to avoid destroying the underlying message
+// when it's still visible in other labels.
+func (s *Store) HasCopiesInOtherFolders(messageIDHeader string, excludeFolderID string, accountID string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM messages
+		WHERE message_id = ? AND folder_id != ? AND account_id = ? AND uid > 0
+	`, messageIDHeader, excludeFolderID, accountID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("failed to check for copies: %w", err)
+	}
+	return count > 0, nil
 }
 
 // GetAllUIDs returns all UIDs for a folder
@@ -1337,7 +1423,7 @@ func (s *Store) CountConversationsByFolder(folderID, filter string) (int, error)
 	return count, nil
 }
 
-// GetConversation returns all messages in a conversation/thread across all folders
+// GetConversation returns messages in a conversation/thread from the specified folder plus Sent and Drafts
 func (s *Store) GetConversation(threadID, folderID string) (*Conversation, error) {
 	s.log.Debug().
 		Str("threadID", threadID).
@@ -1370,14 +1456,18 @@ func (s *Store) GetConversation(threadID, folderID string) (*Conversation, error
 		Str("accountID", accountID).
 		Msg("GetConversation normalized")
 
-	// Get conversation summary across ALL folders in this account
-	// This includes sent messages, drafts, etc.
+	// Get conversation summary from current folder + Sent + Drafts
+	// This gives full conversation context without cross-folder bleed
 	// Exclude messages in Trash folder unless we're viewing Trash
 	// Use COALESCE to handle NULL values from aggregate functions when no rows match
 	trashFilter := ""
 	if folderType != "trash" {
 		trashFilter = "AND f.folder_type != 'trash'"
 	}
+
+	// Scope to current folder + Sent + Drafts (for full conversation context)
+	folderFilter := "AND (m.folder_id = ? OR f.folder_type IN ('sent', 'drafts'))"
+
 	summaryQuery := fmt.Sprintf(`
 		SELECT
 			COALESCE(MIN(m.subject), '') as subject,
@@ -1394,13 +1484,13 @@ func (s *Store) GetConversation(threadID, folderID string) (*Conversation, error
 			OR REPLACE(REPLACE(m.message_id, '<', ''), '>', '') = ?
 			OR REPLACE(REPLACE(m.in_reply_to, '<', ''), '>', '') = ?
 		)
-		%s
-	`, trashFilter)
+		%s %s
+	`, trashFilter, folderFilter)
 
 	c := &Conversation{ThreadID: threadID}
 	var latestDateStr sql.NullString
 
-	err = s.db.QueryRow(summaryQuery, accountID, normalizedThreadID, normalizedThreadID, normalizedThreadID).Scan(
+	err = s.db.QueryRow(summaryQuery, accountID, normalizedThreadID, normalizedThreadID, normalizedThreadID, folderID).Scan(
 		&c.Subject,
 		&c.Snippet,
 		&c.MessageCount,
@@ -1419,8 +1509,8 @@ func (s *Store) GetConversation(threadID, folderID string) (*Conversation, error
 		c.LatestDate = parseTimeString(latestDateStr.String)
 	}
 
-	// Get all messages in the thread from ALL folders in this account
-	// This gives us the complete conversation including sent replies
+	// Get messages in the thread from current folder + Sent + Drafts
+	// This gives full conversation context without cross-folder bleed
 	// Exclude messages in Trash folder unless we're viewing Trash
 	messagesQuery := fmt.Sprintf(`
 		SELECT m.id, m.account_id, m.folder_id, m.uid, m.message_id, m.in_reply_to, m.references_list, m.thread_id,
@@ -1440,11 +1530,11 @@ func (s *Store) GetConversation(threadID, folderID string) (*Conversation, error
 			OR REPLACE(REPLACE(m.message_id, '<', ''), '>', '') = ?
 			OR REPLACE(REPLACE(m.in_reply_to, '<', ''), '>', '') = ?
 		)
-		%s
+		%s %s
 		ORDER BY m.date ASC
-	`, trashFilter)
+	`, trashFilter, folderFilter)
 
-	rows, err := s.db.Query(messagesQuery, accountID, normalizedThreadID, normalizedThreadID, normalizedThreadID)
+	rows, err := s.db.Query(messagesQuery, accountID, normalizedThreadID, normalizedThreadID, normalizedThreadID, folderID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query thread messages: %w", err)
 	}
