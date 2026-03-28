@@ -15,6 +15,32 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// deadlineConn wraps a net.Conn and sets per-read/write deadlines before each
+// I/O operation, preventing indefinite blocking on unresponsive servers.
+type deadlineConn struct {
+	net.Conn
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+}
+
+func (c *deadlineConn) Read(b []byte) (int, error) {
+	if c.readTimeout > 0 {
+		if err := c.Conn.SetReadDeadline(time.Now().Add(c.readTimeout)); err != nil {
+			return 0, err
+		}
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *deadlineConn) Write(b []byte) (int, error) {
+	if c.writeTimeout > 0 {
+		if err := c.Conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+			return 0, err
+		}
+	}
+	return c.Conn.Write(b)
+}
+
 // SecurityType represents the connection security method
 type SecurityType string
 
@@ -108,6 +134,13 @@ func (c *Client) Connect() error {
 		if err != nil {
 			return fmt.Errorf("failed to connect: %w", err)
 		}
+	}
+
+	// Wrap connection with deadline enforcement to prevent indefinite blocking
+	conn = &deadlineConn{
+		Conn:         conn,
+		readTimeout:  c.config.ReadTimeout,
+		writeTimeout: c.config.WriteTimeout,
 	}
 
 	// Create SMTP client

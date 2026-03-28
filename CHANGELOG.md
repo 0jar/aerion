@@ -6,6 +6,7 @@
 
 - Fixed identity switch on replies and forwards
 - Fixed draft save and send race condition
+- Added proper smtp connect timeout
 
 
 **v0.1.38 - 03-22-2026**
