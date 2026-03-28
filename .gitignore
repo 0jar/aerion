@@ -1,6 +1,8 @@
 # Context
-context/
+CLAUDE.md
+context
 aerion
+aerion.exe
 
 # Wails build artifacts
 build/bin/
