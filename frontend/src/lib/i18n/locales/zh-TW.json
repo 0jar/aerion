@@ -234,6 +234,8 @@
     "savedLocally": "已儲存至本機",
     "savedLocallyOffline": "已儲存至本機（離線）",
     "failedToInsertImage": "新增圖片為內文失敗",
+    "imageTooLarge": "圖片過大（上限 10 MB）。請改為一般附件。",
+    "attachmentTooLarge": "檔案過大（上限 100 MB）。",
     "failedToAttachFiles": "附加檔案失敗",
     "failedToOpenComposer": "開啟撰寫視窗失敗",
     "selectSenderIdentity": "請選擇寄件身分",

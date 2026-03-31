@@ -269,39 +269,73 @@ func (ic *IdleConnection) ensureConnected(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", creds.Host, creds.Port)
 	var client *imapclient.Client
 
+	// IDLE connections use a longer read timeout (slightly beyond the IDLE cycle)
+	// so deadlines don't fire during normal IDLE waiting, but still catch dead connections.
+	// Write timeout stays short for login/select/IDLE start commands.
+	idleReadTimeout := ic.config.IdleTimeout + 1*time.Minute
+	idleWriteTimeout := 30 * time.Second
+	connectDialer := &net.Dialer{Timeout: 30 * time.Second}
+
 	switch SecurityType(creds.Security) {
 	case SecurityTLS:
-		if creds.TLSConfig != nil {
-			// Use custom TLS config (certificate TOFU) with manual dial
-			dialer := &net.Dialer{Timeout: 30 * time.Second}
-			rawConn, dialErr := tls.DialWithDialer(dialer, "tcp", addr, creds.TLSConfig)
-			if dialErr != nil {
-				return fmt.Errorf("failed to connect with TLS: %w", dialErr)
-			}
-			client = imapclient.New(rawConn, options)
-		} else {
-			client, err = imapclient.DialTLS(addr, options)
+		tlsConfig := creds.TLSConfig
+		if tlsConfig == nil {
+			tlsConfig = &tls.Config{ServerName: creds.Host}
 		}
+		rawConn, dialErr := tls.DialWithDialer(connectDialer, "tcp", addr, tlsConfig)
+		if dialErr != nil {
+			return fmt.Errorf("failed to connect with TLS: %w", dialErr)
+		}
+		wrappedConn := &deadlineConn{
+			Conn:         rawConn,
+			readTimeout:  idleReadTimeout,
+			writeTimeout: idleWriteTimeout,
+		}
+		client = imapclient.New(wrappedConn, options)
+
 	case SecurityStartTLS:
-		if creds.TLSConfig != nil {
-			options.TLSConfig = creds.TLSConfig
-		} else {
+		rawConn, dialErr := connectDialer.Dial("tcp", addr)
+		if dialErr != nil {
+			return fmt.Errorf("failed to connect: %w", dialErr)
+		}
+		wrappedConn := &deadlineConn{
+			Conn:         rawConn,
+			readTimeout:  idleReadTimeout,
+			writeTimeout: idleWriteTimeout,
+		}
+		options.TLSConfig = creds.TLSConfig
+		if options.TLSConfig == nil {
 			options.TLSConfig = &tls.Config{ServerName: creds.Host}
 		}
-		client, err = imapclient.DialStartTLS(addr, options)
+		client, err = imapclient.NewStartTLS(wrappedConn, options)
+
 	case SecurityNone:
-		client, err = imapclient.DialInsecure(addr, options)
-	default:
-		if creds.TLSConfig != nil {
-			dialer := &net.Dialer{Timeout: 30 * time.Second}
-			rawConn, dialErr := tls.DialWithDialer(dialer, "tcp", addr, creds.TLSConfig)
-			if dialErr != nil {
-				return fmt.Errorf("failed to connect with TLS: %w", dialErr)
-			}
-			client = imapclient.New(rawConn, options)
-		} else {
-			client, err = imapclient.DialTLS(addr, options)
+		rawConn, dialErr := connectDialer.Dial("tcp", addr)
+		if dialErr != nil {
+			return fmt.Errorf("failed to connect: %w", dialErr)
 		}
+		wrappedConn := &deadlineConn{
+			Conn:         rawConn,
+			readTimeout:  idleReadTimeout,
+			writeTimeout: idleWriteTimeout,
+		}
+		client = imapclient.New(wrappedConn, options)
+
+	default:
+		tlsConfig := creds.TLSConfig
+		if tlsConfig == nil {
+			tlsConfig = &tls.Config{ServerName: creds.Host}
+		}
+		rawConn, dialErr := tls.DialWithDialer(connectDialer, "tcp", addr, tlsConfig)
+		if dialErr != nil {
+			return fmt.Errorf("failed to connect with TLS: %w", dialErr)
+		}
+		wrappedConn := &deadlineConn{
+			Conn:         rawConn,
+			readTimeout:  idleReadTimeout,
+			writeTimeout: idleWriteTimeout,
+		}
+		client = imapclient.New(wrappedConn, options)
 	}
 
 	if err != nil {

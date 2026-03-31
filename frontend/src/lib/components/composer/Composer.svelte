@@ -334,6 +334,12 @@
   
   // 10-second debounce like Geary
   const DRAFT_SAVE_DELAY = 10000
+
+  // Max inline image size (10 MB) — larger files should be added as regular attachments
+  const MAX_INLINE_IMAGE_SIZE = 10 * 1024 * 1024
+
+  // Max attachment size (100 MB) — server enforces its own limits for smaller caps
+  const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024
   
   // Confirmation dialogs state
   let showEmptySubjectDialog = $state(false)
@@ -426,20 +432,22 @@
     }
 
     // Convert ComposerAttachment to smtp.Attachment format (regular attachments)
+    // Use content_base64 (string) instead of content (number[]) to avoid
+    // pathologically slow JSON serialization of large byte arrays through Wails RPC.
     const smtpAttachments: smtp.Attachment[] = attachments.map(att => new smtp.Attachment({
       filename: att.filename,
       content_type: att.contentType,
-      content: base64ToBytes(att.data),
+      content_base64: att.data,
       content_id: '',
       inline: false,
     }))
-    
+
     // Add inline images as inline attachments with Content-ID
     for (const img of inlineImages) {
       smtpAttachments.push(new smtp.Attachment({
         filename: img.filename,
         content_type: img.contentType,
-        content: base64ToBytes(img.data),
+        content_base64: img.data,
         content_id: img.cid,
         inline: true,
       }))
@@ -1262,6 +1270,14 @@
   
   // Handle an inline image file (from paste or drop)
   async function handleInlineImageFile(file: File) {
+    if (file.size > MAX_INLINE_IMAGE_SIZE) {
+      addToast({
+        type: 'error',
+        message: $_('composer.imageTooLarge'),
+      })
+      return
+    }
+
     try {
       const dataUrl = await readFileAsDataUrl(file)
       const cid = generateCID()
@@ -1302,6 +1318,11 @@
   
   // Handle a non-image File dropped on the editor (add as attachment)
   async function handleDroppedFile(file: File) {
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      addToast({ type: 'error', message: $_('composer.attachmentTooLarge') })
+      return
+    }
+
     try {
       const data = await readFileAsBase64(file)
       attachments = [...attachments, {
@@ -1325,6 +1346,15 @@
         if (!att) continue
 
         if (att.contentType.startsWith('image/')) {
+          // Check size before inserting inline
+          const imageBytes = Math.ceil((att.data.length * 3) / 4) // Estimate decoded size from base64
+          if (imageBytes > MAX_INLINE_IMAGE_SIZE) {
+            addToast({
+              type: 'error',
+              message: $_('composer.imageTooLarge'),
+            })
+            continue
+          }
           // Insert as inline image
           const dataUrl = `data:${att.contentType};base64,${att.data}`
           const cid = generateCID()
@@ -1339,6 +1369,10 @@
           continue
         }
         // Add as regular attachment
+        if (att.size > MAX_ATTACHMENT_SIZE) {
+          addToast({ type: 'error', message: $_('composer.attachmentTooLarge') })
+          continue
+        }
         attachments = [...attachments, {
           filename: att.filename,
           contentType: att.contentType,
@@ -1374,6 +1408,10 @@
       try {
         const newAttachments: typeof attachments = []
         for (const file of Array.from(fileList)) {
+          if (file.size > MAX_ATTACHMENT_SIZE) {
+            addToast({ type: 'error', message: $_('composer.attachmentTooLarge') })
+            continue
+          }
           const dataUrl = await readFileAsDataUrl(file)
           const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
           if (!matches) continue
@@ -1431,6 +1469,10 @@
     if (files && files.length > 0) {
       const newAttachments: ComposerAttachment[] = []
       for (const file of Array.from(files)) {
+        if (file.size > MAX_ATTACHMENT_SIZE) {
+          addToast({ type: 'error', message: $_('composer.attachmentTooLarge') })
+          continue
+        }
         try {
           const data = await readFileAsBase64(file)
           newAttachments.push({
@@ -1462,6 +1504,10 @@
           try {
             const att = await api.readFileAsAttachment(filePath)
             if (!att) continue
+            if (att.size > MAX_ATTACHMENT_SIZE) {
+              addToast({ type: 'error', message: $_('composer.attachmentTooLarge') })
+              continue
+            }
             attachments = [...attachments, {
               filename: att.filename,
               contentType: att.contentType,

@@ -234,6 +234,8 @@
     "savedLocally": "Saved locally",
     "savedLocallyOffline": "Saved locally (offline)",
     "failedToInsertImage": "Failed to insert image",
+    "imageTooLarge": "Image is too large (max 10 MB). Add it as a regular attachment instead.",
+    "attachmentTooLarge": "File is too large (max 100 MB).",
     "failedToAttachFiles": "Failed to attach files",
     "failedToOpenComposer": "Failed to open composer window",
     "selectSenderIdentity": "Please select a sender identity",

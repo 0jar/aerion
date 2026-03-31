@@ -234,6 +234,8 @@
     "savedLocally": "已保存到本地",
     "savedLocallyOffline": "已保存到本地（离线）",
     "failedToInsertImage": "插入图片失败",
+    "imageTooLarge": "图片过大（上限 10 MB）。请改为普通附件。",
+    "attachmentTooLarge": "文件过大（上限 100 MB）。",
     "failedToAttachFiles": "附加文件失败",
     "failedToOpenComposer": "打开撰写窗口失败",
     "selectSenderIdentity": "请选择发件身份",

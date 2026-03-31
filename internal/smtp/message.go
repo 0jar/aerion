@@ -35,11 +35,24 @@ func (a Address) String() string {
 
 // Attachment represents a file attachment
 type Attachment struct {
-	Filename    string `json:"filename"`
-	ContentType string `json:"content_type"`
-	Content     []byte `json:"content"`
-	ContentID   string `json:"content_id"` // For inline attachments
-	Inline      bool   `json:"inline"`
+	Filename      string `json:"filename"`
+	ContentType   string `json:"content_type"`
+	Content       []byte `json:"content"`
+	ContentBase64 string `json:"content_base64,omitempty"` // Base64 string for efficient Wails RPC transfer
+	ContentID     string `json:"content_id"`               // For inline attachments
+	Inline        bool   `json:"inline"`
+}
+
+// ResolveContent returns the attachment's binary content.
+// It prefers the Content field; if empty, decodes ContentBase64.
+func (a *Attachment) ResolveContent() ([]byte, error) {
+	if len(a.Content) > 0 {
+		return a.Content, nil
+	}
+	if a.ContentBase64 != "" {
+		return base64.StdEncoding.DecodeString(a.ContentBase64)
+	}
+	return nil, nil
 }
 
 // ComposeMessage represents an email message to be composed and sent
@@ -390,9 +403,14 @@ func writeAttachment(w *multipart.Writer, att Attachment) error {
 		return err
 	}
 
+	content, err := att.ResolveContent()
+	if err != nil {
+		return fmt.Errorf("failed to resolve attachment content: %w", err)
+	}
+
 	// Write base64 encoded content
 	encoder := base64.NewEncoder(base64.StdEncoding, &base64LineWrapper{Writer: part})
-	_, err = encoder.Write(att.Content)
+	_, err = encoder.Write(content)
 	if err != nil {
 		return err
 	}
@@ -432,9 +450,14 @@ func writeInlineAttachment(w *multipart.Writer, att Attachment) error {
 		return err
 	}
 
+	content, err := att.ResolveContent()
+	if err != nil {
+		return fmt.Errorf("failed to resolve inline attachment content: %w", err)
+	}
+
 	// Write base64 encoded content
 	encoder := base64.NewEncoder(base64.StdEncoding, &base64LineWrapper{Writer: part})
-	_, err = encoder.Write(att.Content)
+	_, err = encoder.Write(content)
 	if err != nil {
 		return err
 	}

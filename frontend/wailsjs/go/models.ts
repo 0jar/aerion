@@ -1800,6 +1800,7 @@ export namespace smtp {
 	    filename: string;
 	    content_type: string;
 	    content: number[];
+	    content_base64?: string;
 	    content_id: string;
 	    inline: boolean;
 	
@@ -1812,6 +1813,7 @@ export namespace smtp {
 	        this.filename = source["filename"];
 	        this.content_type = source["content_type"];
 	        this.content = source["content"];
+	        this.content_base64 = source["content_base64"];
 	        this.content_id = source["content_id"];
 	        this.inline = source["inline"];
 	    }

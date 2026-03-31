@@ -7,6 +7,9 @@
 - Fixed identity switch on replies and forwards
 - Fixed draft save and send race condition
 - Added proper smtp connect timeout
+- Added proper IMAP STARTTLS connect timeout
+- Fixed inefficient serilization for inline images and attachments
+- Added inline image and attachment size limit
 
 
 **v0.1.38 - 03-22-2026**

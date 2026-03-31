@@ -144,12 +144,25 @@ func (c *Client) Connect() error {
 		c.client = imapclient.New(wrappedConn, options)
 
 	case SecurityStartTLS:
-		// Connect plain first, then upgrade (port 143)
+		// Connect plain first, wrap with deadline, then upgrade to TLS (port 143)
+		rawConn, dialErr := dialer.Dial("tcp", addr)
+		if dialErr != nil {
+			return fmt.Errorf("failed to connect: %w", dialErr)
+		}
+
+		// Wrap with deadline connection for read/write timeouts
+		wrappedConn := &deadlineConn{
+			Conn:         rawConn,
+			readTimeout:  c.config.ReadTimeout,
+			writeTimeout: c.config.WriteTimeout,
+		}
+
 		// Use custom TLSConfig if provided (for certificate TOFU)
 		if c.config.TLSConfig != nil {
 			options.TLSConfig = c.config.TLSConfig
 		}
-		c.client, err = imapclient.DialStartTLS(addr, options)
+
+		c.client, err = imapclient.NewStartTLS(wrappedConn, options)
 		if err != nil {
 			return fmt.Errorf("failed to connect with STARTTLS: %w", err)
 		}
