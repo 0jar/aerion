@@ -6,6 +6,7 @@
 
 - Added image block logic to composer to avoid leaks
 - Added folder subscription for auto sync
+- Improved copy/move to folder selection dialog
 - Improved invalid encoding handling
 - Fixed another ghost message issue
 - Fixed invalid e-mail date hang

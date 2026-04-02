@@ -273,7 +273,8 @@
     "markAsUnread": "標記為未讀",
     "markAllAsRead": "全部標記為已讀",
     "markAllAsUnread": "全部標記為未讀",
-    "noFoldersAvailable": "沒有可用的資料夾"
+    "noFoldersAvailable": "沒有可用的資料夾",
+    "searchFolders": "搜尋資料夾..."
   },
   "toast": {
     "archived": "已封存",

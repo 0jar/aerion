@@ -274,7 +274,8 @@
     "markAsUnread": "Mark as Unread",
     "markAllAsRead": "Mark All as Read",
     "markAllAsUnread": "Mark All as Unread",
-    "noFoldersAvailable": "No folders available"
+    "noFoldersAvailable": "No folders available",
+    "searchFolders": "Search folders..."
   },
   "toast": {
     "archived": "Archived",

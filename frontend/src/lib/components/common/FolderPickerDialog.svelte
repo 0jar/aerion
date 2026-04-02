@@ -27,22 +27,71 @@
   let focusedIndex = $state(-1)
   let active = $state(false)
   let listEl: HTMLDivElement | undefined = $state()
+  let searchQuery = $state('')
+  let searchInput: HTMLInputElement | null = $state(null)
 
-  const allFolders = $derived([...specialFolders, ...customFolders])
+  // Combine and sort all folders by path for hierarchy display
+  const allFolders = $derived(
+    [...specialFolders, ...customFolders].sort((a, b) => a.path.localeCompare(b.path))
+  )
 
-  // Reset focus index when dialog opens/closes, with setTimeout guard to prevent
-  // the Enter keydown that opened the dialog from immediately selecting a folder.
-  // setTimeout(0) schedules in the next macrotask, after all event bubbling completes.
-  // tick() (microtask) can resolve during the same event phase — not robust enough.
+  // Detect the IMAP delimiter from folder paths
+  const delimiter = $derived(() => {
+    for (const f of allFolders) {
+      if (f.path.includes('/')) return '/'
+      if (f.path.includes('.')) return '.'
+    }
+    return '/'
+  })
+
+  // Calculate depth for each folder based on path separators
+  function getDepth(path: string): number {
+    const d = delimiter()
+    // Don't count depth for paths like [Gmail]/Sent — treat [Gmail] prefix as depth 0
+    const normalized = path.replace(/^\[.*?\]\//, '')
+    if (!normalized.includes(d)) return 0
+    return normalized.split(d).length - 1
+  }
+
+  // Format path for search results (readable breadcrumb)
+  function formatPath(path: string): string {
+    const d = delimiter()
+    return path.replace(/\[.*?\]\//g, '').split(d).join(' / ')
+  }
+
+  // Filtered folders when searching
+  const isSearching = $derived(searchQuery.trim().length > 0)
+  const displayFolders = $derived(() => {
+    if (!isSearching) return allFolders
+    const query = searchQuery.trim().toLowerCase()
+    return allFolders.filter(f =>
+      f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query)
+    )
+  })
+
+  // Reset state when dialog opens/closes
   $effect(() => {
     if (!open) {
       active = false
+      searchQuery = ''
       return
     }
-    focusedIndex = allFolders.length > 0 ? 0 : -1
+    const folders = displayFolders()
+    focusedIndex = folders.length > 0 ? 0 : -1
     active = false
-    const timer = setTimeout(() => { active = true }, 0)
+    const timer = setTimeout(() => {
+      active = true
+      searchInput?.focus()
+    }, 0)
     return () => clearTimeout(timer)
+  })
+
+  // Reset focus when search changes
+  $effect(() => {
+    // Track searchQuery to re-run
+    searchQuery
+    const folders = displayFolders()
+    focusedIndex = folders.length > 0 ? 0 : -1
   })
 
   // Scroll focused item into view
@@ -60,6 +109,7 @@
     archive: 'mdi:archive-outline',
     spam: 'mdi:alert-octagon-outline',
     all: 'mdi:email-multiple-outline',
+    starred: 'mdi:star-outline',
     folder: 'mdi:folder-outline',
   }
 
@@ -68,26 +118,26 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (!active || allFolders.length === 0) return
+    if (!active) return
+    const folders = displayFolders()
+    if (folders.length === 0) return
 
     switch (e.key) {
       case 'ArrowDown':
-      case 'j':
         e.preventDefault()
         e.stopPropagation()
-        focusedIndex = (focusedIndex + 1) % allFolders.length
+        focusedIndex = (focusedIndex + 1) % folders.length
         break
       case 'ArrowUp':
-      case 'k':
         e.preventDefault()
         e.stopPropagation()
-        focusedIndex = (focusedIndex - 1 + allFolders.length) % allFolders.length
+        focusedIndex = (focusedIndex - 1 + folders.length) % folders.length
         break
       case 'Enter':
         e.preventDefault()
         e.stopPropagation()
-        if (focusedIndex >= 0 && focusedIndex < allFolders.length) {
-          const f = allFolders[focusedIndex]
+        if (focusedIndex >= 0 && focusedIndex < folders.length) {
+          const f = folders[focusedIndex]
           onSelect(f.id, f.name)
         }
         break
@@ -103,8 +153,19 @@
       <Dialog.Title>{title}</Dialog.Title>
     </Dialog.Header>
 
+    <!-- Search input -->
+    <div class="relative">
+      <Icon icon="mdi:magnify" class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      <input
+        bind:this={searchInput}
+        bind:value={searchQuery}
+        placeholder={$_('contextMenu.searchFolders')}
+        class="flex h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      />
+    </div>
+
     <div
-      class="border border-border rounded-md divide-y divide-border max-h-64 overflow-y-auto"
+      class="border border-border rounded-md max-h-64 overflow-y-auto"
       bind:this={listEl}
       role="listbox"
     >
@@ -113,21 +174,27 @@
           <Icon icon="mdi:loading" class="h-4 w-4 animate-spin" />
           {$_('common.loading')}
         </div>
-      {:else if allFolders.length === 0}
+      {:else if displayFolders().length === 0}
         <div class="p-3 text-sm text-muted-foreground">
           {$_('contextMenu.noFoldersAvailable')}
         </div>
       {:else}
-        {#each allFolders as f, i (f.id)}
+        {#each displayFolders() as f, i (f.id)}
+          {@const depth = isSearching ? 0 : getDepth(f.path)}
           <button
             type="button"
             role="option"
             aria-selected={i === focusedIndex}
-            class="w-full flex items-center gap-3 p-3 text-left text-sm hover:bg-muted/50 transition-colors {i === focusedIndex ? 'bg-muted/50' : ''}"
+            class="w-full flex items-center gap-2 py-2 pr-3 text-left text-sm hover:bg-muted/50 transition-colors {i === focusedIndex ? 'bg-muted/50' : ''}"
+            style="padding-left: {12 + depth * 16}px"
             onclick={() => onSelect(f.id, f.name)}
           >
             <Icon icon={getFolderIcon(f.type)} class="h-4 w-4 shrink-0" />
-            {f.name}
+            {#if isSearching}
+              <span class="truncate">{formatPath(f.path)}</span>
+            {:else}
+              <span class="truncate">{f.name}</span>
+            {/if}
           </button>
         {/each}
       {/if}
