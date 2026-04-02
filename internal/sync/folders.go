@@ -38,6 +38,12 @@ func (e *Engine) SyncFolders(ctx context.Context, accountID string) error {
 		return fmt.Errorf("failed to list mailboxes: %w", err)
 	}
 
+	// Fetch subscribed mailbox set (for caching subscription state locally)
+	subscribedSet, subErr := conn.Client().ListSubscribedMailboxes()
+	if subErr != nil {
+		e.log.Debug().Err(subErr).Str("account", accountID).Msg("Failed to list subscribed mailboxes, subscription state will not be cached")
+	}
+
 	totalFolders := len(mailboxes)
 	if totalFolders == 0 {
 		e.log.Info().Str("account", accountID).Msg("No folders found")
@@ -126,11 +132,15 @@ func (e *Engine) SyncFolders(ctx context.Context, accountID string) error {
 
 		status := result.status
 
+		// Update subscription state from server
+		isSubscribed := subscribedSet != nil && subscribedSet[mb.Name]
+
 		// Check if folder exists locally
 		if existing, ok := localByPath[mb.Name]; ok {
 			// Update existing folder
 			existing.Name = extractFolderName(mb.Name, mb.Delimiter)
 			existing.Type = folderType
+			existing.Subscribed = isSubscribed
 
 			// Recompute parent (self-healing for broken parent links)
 			if mb.Delimiter != "" {
@@ -157,10 +167,11 @@ func (e *Engine) SyncFolders(ctx context.Context, accountID string) error {
 		} else {
 			// Create new folder
 			f := &folder.Folder{
-				AccountID: accountID,
-				Name:      extractFolderName(mb.Name, mb.Delimiter),
-				Path:      mb.Name,
-				Type:      folderType,
+				AccountID:  accountID,
+				Name:       extractFolderName(mb.Name, mb.Delimiter),
+				Path:       mb.Name,
+				Type:       folderType,
+				Subscribed: isSubscribed,
 			}
 			if status != nil {
 				f.UIDValidity = status.UIDValidity

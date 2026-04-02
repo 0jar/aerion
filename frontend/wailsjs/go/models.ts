@@ -17,6 +17,8 @@ export namespace account {
 	    color: string;
 	    syncPeriodDays: number;
 	    syncInterval: number;
+	    syncAllFolders: boolean;
+	    syncFoldersEnabled: boolean;
 	    readReceiptRequestPolicy: string;
 	    sentFolderPath?: string;
 	    draftsFolderPath?: string;
@@ -52,6 +54,8 @@ export namespace account {
 	        this.color = source["color"];
 	        this.syncPeriodDays = source["syncPeriodDays"];
 	        this.syncInterval = source["syncInterval"];
+	        this.syncAllFolders = source["syncAllFolders"];
+	        this.syncFoldersEnabled = source["syncFoldersEnabled"];
 	        this.readReceiptRequestPolicy = source["readReceiptRequestPolicy"];
 	        this.sentFolderPath = source["sentFolderPath"];
 	        this.draftsFolderPath = source["draftsFolderPath"];
@@ -98,6 +102,8 @@ export namespace account {
 	    color: string;
 	    syncPeriodDays: number;
 	    syncInterval: number;
+	    syncAllFolders: boolean;
+	    syncFoldersEnabled: boolean;
 	    readReceiptRequestPolicy: string;
 	    sentFolderPath?: string;
 	    draftsFolderPath?: string;
@@ -128,6 +134,8 @@ export namespace account {
 	        this.color = source["color"];
 	        this.syncPeriodDays = source["syncPeriodDays"];
 	        this.syncInterval = source["syncInterval"];
+	        this.syncAllFolders = source["syncAllFolders"];
+	        this.syncFoldersEnabled = source["syncFoldersEnabled"];
 	        this.readReceiptRequestPolicy = source["readReceiptRequestPolicy"];
 	        this.sentFolderPath = source["sentFolderPath"];
 	        this.draftsFolderPath = source["draftsFolderPath"];
@@ -986,6 +994,7 @@ export namespace folder {
 	    unreadCount: number;
 	    // Go type: time
 	    lastSync?: any;
+	    subscribed: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Folder(source);
@@ -1005,6 +1014,7 @@ export namespace folder {
 	        this.totalCount = source["totalCount"];
 	        this.unreadCount = source["unreadCount"];
 	        this.lastSync = this.convertValues(source["lastSync"], null);
+	        this.subscribed = source["subscribed"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

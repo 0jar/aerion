@@ -120,3 +120,95 @@ func (a *App) GetSpecialFolder(accountID string, folderType folder.Type) (*folde
 	// Fall back to auto-detected type
 	return a.folderStore.GetByType(accountID, folderType)
 }
+
+// SubscribeFolder subscribes to an IMAP folder for automatic sync.
+func (a *App) SubscribeFolder(accountID, folderID string) error {
+	log := logging.WithComponent("app")
+
+	f, err := a.folderStore.Get(folderID)
+	if err != nil {
+		return fmt.Errorf("failed to get folder: %w", err)
+	}
+	if f == nil {
+		return fmt.Errorf("folder not found: %s", folderID)
+	}
+
+	// Subscribe on IMAP server
+	conn, connErr := a.syncEngine.GetPoolConnection(a.ctx, accountID)
+	if connErr != nil {
+		return fmt.Errorf("failed to get IMAP connection: %w", connErr)
+	}
+	defer a.syncEngine.ReleasePoolConnection(conn)
+
+	if subErr := conn.Client().Subscribe(f.Path); subErr != nil {
+		return fmt.Errorf("IMAP SUBSCRIBE failed: %w", subErr)
+	}
+
+	// Update local cache
+	if dbErr := a.folderStore.UpdateSubscribed(folderID, true); dbErr != nil {
+		log.Warn().Err(dbErr).Msg("Failed to update local subscription cache")
+	}
+
+
+	log.Info().Str("folder", f.Path).Msg("Subscribed to folder")
+	return nil
+}
+
+// UnsubscribeFolder unsubscribes from an IMAP folder for automatic sync.
+func (a *App) UnsubscribeFolder(accountID, folderID string) error {
+	log := logging.WithComponent("app")
+
+	f, err := a.folderStore.Get(folderID)
+	if err != nil {
+		return fmt.Errorf("failed to get folder: %w", err)
+	}
+	if f == nil {
+		return fmt.Errorf("folder not found: %s", folderID)
+	}
+
+	// Unsubscribe on IMAP server
+	conn, connErr := a.syncEngine.GetPoolConnection(a.ctx, accountID)
+	if connErr != nil {
+		return fmt.Errorf("failed to get IMAP connection: %w", connErr)
+	}
+	defer a.syncEngine.ReleasePoolConnection(conn)
+
+	if subErr := conn.Client().Unsubscribe(f.Path); subErr != nil {
+		return fmt.Errorf("IMAP UNSUBSCRIBE failed: %w", subErr)
+	}
+
+	// Update local cache
+	if dbErr := a.folderStore.UpdateSubscribed(folderID, false); dbErr != nil {
+		log.Warn().Err(dbErr).Msg("Failed to update local subscription cache")
+	}
+
+	log.Info().Str("folder", f.Path).Msg("Unsubscribed from folder")
+	return nil
+}
+
+// SubscribeAllFolders subscribes to all IMAP folders for an account.
+func (a *App) SubscribeAllFolders(accountID string) error {
+	log := logging.WithComponent("app")
+
+	folders, err := a.folderStore.List(accountID)
+	if err != nil {
+		return fmt.Errorf("failed to list folders: %w", err)
+	}
+
+	conn, connErr := a.syncEngine.GetPoolConnection(a.ctx, accountID)
+	if connErr != nil {
+		return fmt.Errorf("failed to get IMAP connection: %w", connErr)
+	}
+	defer a.syncEngine.ReleasePoolConnection(conn)
+
+	for _, f := range folders {
+		if subErr := conn.Client().Subscribe(f.Path); subErr != nil {
+			log.Warn().Err(subErr).Str("folder", f.Path).Msg("Failed to subscribe")
+			continue
+		}
+		a.folderStore.UpdateSubscribed(f.ID, true)
+	}
+
+	log.Info().Str("accountID", accountID).Int("count", len(folders)).Msg("Subscribed to all folders")
+	return nil
+}

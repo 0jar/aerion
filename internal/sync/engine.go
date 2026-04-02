@@ -2,6 +2,7 @@
 package sync
 
 import (
+	"context"
 	"io"
 
 	gomessage "github.com/emersion/go-message"
@@ -56,6 +57,7 @@ type ParsedBody struct {
 	SMIMEEncrypted bool                  // Whether the message is encrypted
 	PGPRawBody     []byte                // Raw PGP body for on-view processing
 	PGPEncrypted   bool                  // Whether the message is PGP encrypted
+	UnsafeContent  bool                  // True if message has non-compliant encoding
 }
 
 // Retry limits for error recovery
@@ -103,6 +105,17 @@ func NewEngine(pool *imapPkg.Pool, accountStore *account.Store, folderStore *fol
 		sanitizer:       email.NewSanitizer(),
 		log:             logging.WithComponent("sync"),
 	}
+}
+
+// GetPoolConnection acquires a connection from the IMAP connection pool.
+// Caller must release with ReleasePoolConnection when done.
+func (e *Engine) GetPoolConnection(ctx context.Context, accountID string) (*imapPkg.PooledConnection, error) {
+	return e.pool.GetConnection(ctx, accountID)
+}
+
+// ReleasePoolConnection returns a connection to the pool.
+func (e *Engine) ReleasePoolConnection(conn *imapPkg.PooledConnection) {
+	e.pool.Release(conn)
 }
 
 // SetProgressCallback sets the callback function for progress updates

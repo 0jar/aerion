@@ -78,15 +78,19 @@ func (pc *PooledConnection) IsHealthy() bool {
 	return pc.isHealthyLocked()
 }
 
-// isHealthyLocked checks health without acquiring lock (caller must hold lock)
+// isHealthyLocked checks health without acquiring lock (caller must hold lock).
+// Sends a NOOP to verify the connection is alive — catches closed sockets
+// that still have non-nil client references (e.g., after server-side disconnect).
 func (pc *PooledConnection) isHealthyLocked() bool {
 	if pc.client == nil || pc.client.client == nil {
 		return false
 	}
 
-	// Check if connection is still alive
-	// A simple way is to check if the underlying client is not nil
-	// For more robust checking, we could send a NOOP
+	// Send NOOP to verify the connection is actually alive.
+	// This catches closed sockets (e.g., Proton Bridge dropping idle connections).
+	if err := pc.client.client.Noop().Wait(); err != nil {
+		return false
+	}
 	return true
 }
 

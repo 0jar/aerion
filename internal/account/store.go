@@ -34,6 +34,13 @@ func nullableString(s string) interface{} {
 	return s
 }
 
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // getNextColor returns the next color in the rotation based on account count
 func (s *Store) getNextColor() string {
 	var count int
@@ -90,6 +97,8 @@ func (s *Store) Create(config *AccountConfig) (*Account, error) {
 		Color:                    color,
 		SyncPeriodDays:           config.SyncPeriodDays,
 		SyncInterval:             config.SyncInterval,
+		SyncAllFolders:           config.SyncAllFolders,
+		SyncFoldersEnabled:      config.SyncFoldersEnabled,
 		ReadReceiptRequestPolicy: config.ReadReceiptRequestPolicy,
 		SentFolderPath:           config.SentFolderPath,
 		DraftsFolderPath:         config.DraftsFolderPath,
@@ -108,19 +117,19 @@ func (s *Store) Create(config *AccountConfig) (*Account, error) {
 			imap_host, imap_port, imap_security,
 			smtp_host, smtp_port, smtp_security,
 			auth_type, username,
-			enabled, order_index, color, sync_period_days, sync_interval,
+			enabled, order_index, color, sync_period_days, sync_interval, sync_all_folders, sync_folders_enabled,
 			read_receipt_request_policy,
 			sent_folder_path, drafts_folder_path, trash_folder_path,
 			spam_folder_path, archive_folder_path, all_mail_folder_path,
 			starred_folder_path,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		account.ID, account.Name, account.Email,
 		account.IMAPHost, account.IMAPPort, account.IMAPSecurity,
 		account.SMTPHost, account.SMTPPort, account.SMTPSecurity,
 		account.AuthType, account.Username,
-		account.Enabled, account.OrderIndex, account.Color, account.SyncPeriodDays, account.SyncInterval,
+		account.Enabled, account.OrderIndex, account.Color, account.SyncPeriodDays, account.SyncInterval, boolToInt(account.SyncAllFolders), boolToInt(account.SyncFoldersEnabled),
 		account.ReadReceiptRequestPolicy,
 		nullableString(account.SentFolderPath), nullableString(account.DraftsFolderPath), nullableString(account.TrashFolderPath),
 		nullableString(account.SpamFolderPath), nullableString(account.ArchiveFolderPath), nullableString(account.AllMailFolderPath),
@@ -157,12 +166,13 @@ func (s *Store) Create(config *AccountConfig) (*Account, error) {
 func (s *Store) Get(id string) (*Account, error) {
 	account := &Account{}
 	var sentPath, draftsPath, trashPath, spamPath, archivePath, allMailPath, starredPath sql.NullString
+	var syncAllFolders, syncFoldersEnabled int
 	err := s.db.QueryRow(`
 		SELECT id, name, email,
 			imap_host, imap_port, imap_security,
 			smtp_host, smtp_port, smtp_security,
 			auth_type, username,
-			enabled, order_index, color, sync_period_days, sync_interval,
+			enabled, order_index, color, sync_period_days, sync_interval, sync_all_folders, sync_folders_enabled,
 			read_receipt_request_policy,
 			sent_folder_path, drafts_folder_path, trash_folder_path,
 			spam_folder_path, archive_folder_path, all_mail_folder_path,
@@ -174,7 +184,7 @@ func (s *Store) Get(id string) (*Account, error) {
 		&account.IMAPHost, &account.IMAPPort, &account.IMAPSecurity,
 		&account.SMTPHost, &account.SMTPPort, &account.SMTPSecurity,
 		&account.AuthType, &account.Username,
-		&account.Enabled, &account.OrderIndex, &account.Color, &account.SyncPeriodDays, &account.SyncInterval,
+		&account.Enabled, &account.OrderIndex, &account.Color, &account.SyncPeriodDays, &account.SyncInterval, &syncAllFolders, &syncFoldersEnabled,
 		&account.ReadReceiptRequestPolicy,
 		&sentPath, &draftsPath, &trashPath,
 		&spamPath, &archivePath, &allMailPath,
@@ -187,6 +197,8 @@ func (s *Store) Get(id string) (*Account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
+	account.SyncAllFolders = syncAllFolders == 1
+	account.SyncFoldersEnabled = syncFoldersEnabled == 1
 	// Map nullable strings to account fields
 	account.SentFolderPath = sentPath.String
 	account.DraftsFolderPath = draftsPath.String
@@ -205,7 +217,7 @@ func (s *Store) List() ([]*Account, error) {
 			imap_host, imap_port, imap_security,
 			smtp_host, smtp_port, smtp_security,
 			auth_type, username,
-			enabled, order_index, color, sync_period_days, sync_interval,
+			enabled, order_index, color, sync_period_days, sync_interval, sync_all_folders, sync_folders_enabled,
 			read_receipt_request_policy,
 			sent_folder_path, drafts_folder_path, trash_folder_path,
 			spam_folder_path, archive_folder_path, all_mail_folder_path,
@@ -222,12 +234,13 @@ func (s *Store) List() ([]*Account, error) {
 	for rows.Next() {
 		account := &Account{}
 		var sentPath, draftsPath, trashPath, spamPath, archivePath, allMailPath, starredPath sql.NullString
+		var syncAllFolders, syncFoldersEnabled int
 		err := rows.Scan(
 			&account.ID, &account.Name, &account.Email,
 			&account.IMAPHost, &account.IMAPPort, &account.IMAPSecurity,
 			&account.SMTPHost, &account.SMTPPort, &account.SMTPSecurity,
 			&account.AuthType, &account.Username,
-			&account.Enabled, &account.OrderIndex, &account.Color, &account.SyncPeriodDays, &account.SyncInterval,
+			&account.Enabled, &account.OrderIndex, &account.Color, &account.SyncPeriodDays, &account.SyncInterval, &syncAllFolders, &syncFoldersEnabled,
 			&account.ReadReceiptRequestPolicy,
 			&sentPath, &draftsPath, &trashPath,
 			&spamPath, &archivePath, &allMailPath,
@@ -237,7 +250,9 @@ func (s *Store) List() ([]*Account, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan account: %w", err)
 		}
-		// Map nullable strings to account fields
+		// Map nullable strings and booleans to account fields
+		account.SyncAllFolders = syncAllFolders == 1
+		account.SyncFoldersEnabled = syncFoldersEnabled == 1
 		account.SentFolderPath = sentPath.String
 		account.DraftsFolderPath = draftsPath.String
 		account.TrashFolderPath = trashPath.String
@@ -270,7 +285,7 @@ func (s *Store) Update(id string, config *AccountConfig) (*Account, error) {
 			imap_host = ?, imap_port = ?, imap_security = ?,
 			smtp_host = ?, smtp_port = ?, smtp_security = ?,
 			auth_type = ?, username = ?,
-			color = ?, sync_period_days = ?, sync_interval = ?,
+			color = ?, sync_period_days = ?, sync_interval = ?, sync_all_folders = ?, sync_folders_enabled = ?,
 			read_receipt_request_policy = ?,
 			sent_folder_path = ?, drafts_folder_path = ?, trash_folder_path = ?,
 			spam_folder_path = ?, archive_folder_path = ?, all_mail_folder_path = ?,
@@ -282,7 +297,7 @@ func (s *Store) Update(id string, config *AccountConfig) (*Account, error) {
 		config.IMAPHost, config.IMAPPort, config.IMAPSecurity,
 		config.SMTPHost, config.SMTPPort, config.SMTPSecurity,
 		config.AuthType, config.Username,
-		config.Color, config.SyncPeriodDays, config.SyncInterval,
+		config.Color, config.SyncPeriodDays, config.SyncInterval, boolToInt(config.SyncAllFolders), boolToInt(config.SyncFoldersEnabled),
 		config.ReadReceiptRequestPolicy,
 		nullableString(config.SentFolderPath), nullableString(config.DraftsFolderPath), nullableString(config.TrashFolderPath),
 		nullableString(config.SpamFolderPath), nullableString(config.ArchiveFolderPath), nullableString(config.AllMailFolderPath),
@@ -314,6 +329,8 @@ func (s *Store) Update(id string, config *AccountConfig) (*Account, error) {
 	existing.Color = config.Color
 	existing.SyncPeriodDays = config.SyncPeriodDays
 	existing.SyncInterval = config.SyncInterval
+	existing.SyncAllFolders = config.SyncAllFolders
+	existing.SyncFoldersEnabled = config.SyncFoldersEnabled
 	existing.ReadReceiptRequestPolicy = config.ReadReceiptRequestPolicy
 	existing.SentFolderPath = config.SentFolderPath
 	existing.DraftsFolderPath = config.DraftsFolderPath

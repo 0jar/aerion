@@ -162,11 +162,19 @@ func (e *Engine) parseMultipartBody(mr gomessage.MultipartReader, result *Parsed
 	for {
 		part, err := mr.NextPart()
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "EOF") {
-				e.log.Debug().Err(err).Int("partsProcessed", partIndex).Msg("Error reading multipart")
-			} else {
+			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "EOF") {
 				e.log.Debug().Int("partsProcessed", partIndex).Msg("Finished reading multipart parts")
+				break
 			}
+			// go-message returns both the part AND an error for unknown CTE.
+			// Mark as unsafe and stop — don't render content with invalid encoding.
+			if gomessage.IsUnknownEncoding(err) {
+				e.log.Warn().Err(err).Int("partsProcessed", partIndex).Msg("Unknown encoding in multipart part, marking unsafe")
+				result.UnsafeContent = true
+				result.BodyText = "This message uses non-standard encoding and cannot be displayed safely."
+				return
+			}
+			e.log.Debug().Err(err).Int("partsProcessed", partIndex).Msg("Error reading multipart")
 			break
 		}
 		partIndex++
@@ -228,6 +236,19 @@ func (e *Engine) parseMultipartBody(mr gomessage.MultipartReader, result *Parsed
 			continue
 		}
 
+		// Check for invalid Content-Transfer-Encoding before reading.
+		// go-message applies transfer decoding via part.Body, which fails on unknown encodings.
+		// Invalid CTE is a common spammer technique — refuse to render for safety.
+		cte := strings.ToLower(strings.TrimSpace(part.Header.Get("Content-Transfer-Encoding")))
+		if cte != "" && cte != "7bit" && cte != "8bit" && cte != "binary" &&
+			cte != "quoted-printable" && cte != "base64" {
+			e.log.Warn().Str("cte", cte).Int("partIndex", partIndex).Msg("Non-standard Content-Transfer-Encoding, marking unsafe")
+			result.UnsafeContent = true
+			result.BodyText = "This message uses non-standard encoding and cannot be displayed safely."
+			result.BodyHTML = ""
+			return
+		}
+
 		// Read text parts
 		lr := io.LimitReader(part.Body, maxPartSize)
 		partBody, err := io.ReadAll(lr)
@@ -269,6 +290,16 @@ func (e *Engine) parseMultipartBody(mr gomessage.MultipartReader, result *Parsed
 func (e *Engine) parseSinglePartBody(entity *gomessage.Entity, result *ParsedBody) {
 	contentType, params, _ := mime.ParseMediaType(entity.Header.Get("Content-Type"))
 	e.log.Debug().Str("contentType", contentType).Str("charset", params["charset"]).Msg("Processing single-part message")
+
+	// Check for invalid Content-Transfer-Encoding
+	cte := strings.ToLower(strings.TrimSpace(entity.Header.Get("Content-Transfer-Encoding")))
+	if cte != "" && cte != "7bit" && cte != "8bit" && cte != "binary" &&
+		cte != "quoted-printable" && cte != "base64" {
+		e.log.Warn().Str("cte", cte).Msg("Non-standard Content-Transfer-Encoding in single-part, marking unsafe")
+		result.UnsafeContent = true
+		result.BodyText = "This message uses non-standard encoding and cannot be displayed safely."
+		return
+	}
 
 	lr := io.LimitReader(entity.Body, maxPartSize)
 	body, err := io.ReadAll(lr)

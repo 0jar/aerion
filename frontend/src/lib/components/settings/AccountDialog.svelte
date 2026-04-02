@@ -54,6 +54,8 @@
   let smtpSecurity = $state('starttls')
   let syncPeriodDays = $state('180')
   let syncInterval = $state('30')
+  let syncAllFolders = $state(false)
+  let syncFoldersEnabled = $state(false)
   let readReceiptRequestPolicy = $state('never')
   let authType = $state('password')
   
@@ -90,6 +92,8 @@
       smtpSecurity = editAccount.smtpSecurity
       syncPeriodDays = String(editAccount.syncPeriodDays)
       syncInterval = String(editAccount.syncInterval ?? 30)
+      syncAllFolders = editAccount.syncAllFolders || false
+      syncFoldersEnabled = editAccount.syncFoldersEnabled || false
       readReceiptRequestPolicy = editAccount.readReceiptRequestPolicy || 'never'
       authType = editAccount.authType || 'password'
       color = editAccount.color || ''
@@ -163,6 +167,8 @@
         authType,
         syncPeriodDays: Number(syncPeriodDays),
         syncInterval: Number(syncInterval),
+        syncAllFolders,
+        syncFoldersEnabled,
         readReceiptRequestPolicy,
         sentFolderPath,
         draftsFolderPath,
@@ -369,6 +375,10 @@
               onSmtpSecurityChange={(v) => smtpSecurity = v}
               onSyncIntervalChange={(v) => syncInterval = v}
               onReadReceiptPolicyChange={(v) => readReceiptRequestPolicy = v}
+              bind:syncAllFolders
+              onSyncAllFoldersChange={(v) => syncAllFolders = v}
+              bind:syncFoldersEnabled
+              onSyncFoldersEnabledChange={(v) => syncFoldersEnabled = v}
               onFolderMappingChange={(type, v) => {
                 switch (type) {
                   case 'sent': sentFolderPath = v; break

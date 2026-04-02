@@ -91,7 +91,10 @@ import { _ } from '$lib/i18n'
       }
     } catch (err) {
       console.error('Failed to fetch message body:', err)
-      // Don't show error to user, they'll see "loading" and can try again
+      // Message may have been deleted from server — clear it so UI doesn't stay stuck on loading
+      if (message && message.id === id) {
+        message = null
+      }
     } finally {
       fetchingBody = false
     }

@@ -934,7 +934,7 @@ func (s *Store) GetMessagesWithoutBody(folderID string, limit int, sinceDate tim
 			WHERE folder_id = ? AND (
 				body_fetched = 0 OR
 				(body_fetched = 1 AND smime_encrypted = 0 AND pgp_encrypted = 0 AND (body_text IS NULL OR body_text = '') AND (body_html IS NULL OR body_html = ''))
-			) AND date >= ?
+			) AND (date >= ? OR date < '1970-01-01')
 			ORDER BY date DESC
 			LIMIT ?
 		`
@@ -990,7 +990,7 @@ func (s *Store) GetMessagesWithoutBodyAndSize(folderID string, limit int, sinceD
 			WHERE folder_id = ? AND (
 				body_fetched = 0 OR
 				(body_fetched = 1 AND smime_encrypted = 0 AND pgp_encrypted = 0 AND (body_text IS NULL OR body_text = '') AND (body_html IS NULL OR body_html = ''))
-			) AND date >= ?
+			) AND (date >= ? OR date < '1970-01-01')
 			ORDER BY date DESC
 			LIMIT ?
 		`
@@ -1035,7 +1035,7 @@ func (s *Store) CountMessagesWithoutBody(folderID string, sinceDate time.Time) (
 			`SELECT COUNT(*) FROM messages WHERE folder_id = ? AND (
 				body_fetched = 0 OR
 				(body_fetched = 1 AND smime_encrypted = 0 AND pgp_encrypted = 0 AND (body_text IS NULL OR body_text = '') AND (body_html IS NULL OR body_html = ''))
-			) AND date >= ?`,
+			) AND (date >= ? OR date < '1970-01-01')`,
 			folderID, sinceDate,
 		).Scan(&count)
 	}

@@ -30,7 +30,7 @@ func (s *Store) List(accountID string) ([]*Folder, error) {
 	query := `
 		SELECT id, account_id, name, path, folder_type, parent_id,
 		       uid_validity, uid_next, highest_mod_seq,
-		       total_count, unread_count, last_sync
+		       total_count, unread_count, last_sync, subscribed
 		FROM folders
 		WHERE account_id = ?
 		ORDER BY name
@@ -53,7 +53,7 @@ func (s *Store) List(accountID string) ([]*Folder, error) {
 		err := rows.Scan(
 			&f.ID, &f.AccountID, &f.Name, &f.Path, &f.Type, &parentID,
 			&uidValidity, &uidNext, &highestModSeq,
-			&f.TotalCount, &f.UnreadCount, &lastSync,
+			&f.TotalCount, &f.UnreadCount, &lastSync, &f.Subscribed,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan folder: %w", err)
@@ -86,7 +86,7 @@ func (s *Store) Get(id string) (*Folder, error) {
 	query := `
 		SELECT id, account_id, name, path, folder_type, parent_id,
 		       uid_validity, uid_next, highest_mod_seq,
-		       total_count, unread_count, last_sync
+		       total_count, unread_count, last_sync, subscribed
 		FROM folders
 		WHERE id = ?
 	`
@@ -100,7 +100,7 @@ func (s *Store) Get(id string) (*Folder, error) {
 	err := s.db.QueryRow(query, id).Scan(
 		&f.ID, &f.AccountID, &f.Name, &f.Path, &f.Type, &parentID,
 		&uidValidity, &uidNext, &highestModSeq,
-		&f.TotalCount, &f.UnreadCount, &lastSync,
+		&f.TotalCount, &f.UnreadCount, &lastSync, &f.Subscribed,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -133,7 +133,7 @@ func (s *Store) GetByPath(accountID, path string) (*Folder, error) {
 	query := `
 		SELECT id, account_id, name, path, folder_type, parent_id,
 		       uid_validity, uid_next, highest_mod_seq,
-		       total_count, unread_count, last_sync
+		       total_count, unread_count, last_sync, subscribed
 		FROM folders
 		WHERE account_id = ? AND path = ?
 	`
@@ -147,7 +147,7 @@ func (s *Store) GetByPath(accountID, path string) (*Folder, error) {
 	err := s.db.QueryRow(query, accountID, path).Scan(
 		&f.ID, &f.AccountID, &f.Name, &f.Path, &f.Type, &parentID,
 		&uidValidity, &uidNext, &highestModSeq,
-		&f.TotalCount, &f.UnreadCount, &lastSync,
+		&f.TotalCount, &f.UnreadCount, &lastSync, &f.Subscribed,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -184,8 +184,8 @@ func (s *Store) Create(f *Folder) error {
 	query := `
 		INSERT INTO folders (id, account_id, name, path, folder_type, parent_id,
 		                     uid_validity, uid_next, highest_mod_seq,
-		                     total_count, unread_count, last_sync)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                     total_count, unread_count, last_sync, subscribed)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	var parentID interface{}
@@ -201,7 +201,7 @@ func (s *Store) Create(f *Folder) error {
 	_, err := s.db.Exec(query,
 		f.ID, f.AccountID, f.Name, f.Path, f.Type, parentID,
 		f.UIDValidity, f.UIDNext, f.HighestModSeq,
-		f.TotalCount, f.UnreadCount, lastSync,
+		f.TotalCount, f.UnreadCount, lastSync, f.Subscribed,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create folder: %w", err)
@@ -227,7 +227,8 @@ func (s *Store) Update(f *Folder) error {
 			highest_mod_seq = ?,
 			total_count = ?,
 			unread_count = ?,
-			last_sync = ?
+			last_sync = ?,
+			subscribed = ?
 		WHERE id = ?
 	`
 
@@ -244,7 +245,7 @@ func (s *Store) Update(f *Folder) error {
 	_, err := s.db.Exec(query,
 		f.Name, f.Type, parentID,
 		f.UIDValidity, f.UIDNext, f.HighestModSeq,
-		f.TotalCount, f.UnreadCount, lastSync,
+		f.TotalCount, f.UnreadCount, lastSync, f.Subscribed,
 		f.ID,
 	)
 	if err != nil {
@@ -326,7 +327,7 @@ func (s *Store) GetByType(accountID string, folderType Type) (*Folder, error) {
 	query := `
 		SELECT id, account_id, name, path, folder_type, parent_id,
 		       uid_validity, uid_next, highest_mod_seq,
-		       total_count, unread_count, last_sync
+		       total_count, unread_count, last_sync, subscribed
 		FROM folders
 		WHERE account_id = ? AND folder_type = ?
 		LIMIT 1
@@ -341,7 +342,7 @@ func (s *Store) GetByType(accountID string, folderType Type) (*Folder, error) {
 	err := s.db.QueryRow(query, accountID, folderType).Scan(
 		&f.ID, &f.AccountID, &f.Name, &f.Path, &f.Type, &parentID,
 		&uidValidity, &uidNext, &highestModSeq,
-		&f.TotalCount, &f.UnreadCount, &lastSync,
+		&f.TotalCount, &f.UnreadCount, &lastSync, &f.Subscribed,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -367,4 +368,70 @@ func (s *Store) GetByType(accountID string, folderType Type) (*Folder, error) {
 	}
 
 	return f, nil
+}
+
+// ListSubscribed returns only subscribed folders for an account.
+// Core folders (Inbox, Drafts, Sent) are always included regardless of subscription state.
+func (s *Store) ListSubscribed(accountID string) ([]*Folder, error) {
+	query := `
+		SELECT id, account_id, name, path, folder_type, parent_id,
+		       uid_validity, uid_next, highest_mod_seq,
+		       total_count, unread_count, last_sync, subscribed
+		FROM folders
+		WHERE account_id = ? AND (subscribed = 1 OR folder_type IN ('inbox', 'drafts', 'sent'))
+		ORDER BY name
+	`
+
+	rows, err := s.db.Query(query, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query subscribed folders: %w", err)
+	}
+	defer rows.Close()
+
+	var folders []*Folder
+	for rows.Next() {
+		f := &Folder{}
+		var parentID sql.NullString
+		var lastSync sql.NullTime
+		var uidValidity, uidNext sql.NullInt64
+		var highestModSeq sql.NullInt64
+
+		err := rows.Scan(
+			&f.ID, &f.AccountID, &f.Name, &f.Path, &f.Type, &parentID,
+			&uidValidity, &uidNext, &highestModSeq,
+			&f.TotalCount, &f.UnreadCount, &lastSync, &f.Subscribed,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan folder: %w", err)
+		}
+
+		if parentID.Valid {
+			f.ParentID = parentID.String
+		}
+		if lastSync.Valid {
+			f.LastSync = &lastSync.Time
+		}
+		if uidValidity.Valid {
+			f.UIDValidity = uint32(uidValidity.Int64)
+		}
+		if uidNext.Valid {
+			f.UIDNext = uint32(uidNext.Int64)
+		}
+		if highestModSeq.Valid {
+			f.HighestModSeq = uint64(highestModSeq.Int64)
+		}
+
+		folders = append(folders, f)
+	}
+
+	return folders, nil
+}
+
+// UpdateSubscribed updates the IMAP subscription state for a folder.
+func (s *Store) UpdateSubscribed(folderID string, subscribed bool) error {
+	_, err := s.db.Exec(`UPDATE folders SET subscribed = ? WHERE id = ?`, subscribed, folderID)
+	if err != nil {
+		return fmt.Errorf("failed to update folder subscription: %w", err)
+	}
+	return nil
 }

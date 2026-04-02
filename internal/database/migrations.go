@@ -690,4 +690,15 @@ var migrations = []Migration{
 				('https://pgp.mit.edu', 2);
 		`,
 	},
+	{
+		Version: 26,
+		SQL: `
+			ALTER TABLE accounts ADD COLUMN sync_all_folders INTEGER NOT NULL DEFAULT 0;
+			ALTER TABLE folders ADD COLUMN subscribed INTEGER NOT NULL DEFAULT 0;
+		`,
+	},
+	{
+		Version: 27,
+		SQL:     `ALTER TABLE accounts ADD COLUMN sync_folders_enabled INTEGER NOT NULL DEFAULT 0;`,
+	},
 }

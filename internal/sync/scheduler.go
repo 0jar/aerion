@@ -313,12 +313,82 @@ func (s *Scheduler) syncAccountInbox(acc *account.Account) {
 		}
 	}
 
-	// Notify that sync completed (so frontend can clear progress)
+	// Notify that sync completed for Inbox
 	if s.syncCompletedCallback != nil && inbox != nil {
 		s.syncCompletedCallback(acc.ID, inbox.ID, nil)
 	}
 
+	// Sync additional subscribed/all folders (beyond Inbox)
+	s.syncAdditionalFolders(ctx, acc, inbox)
+
 	s.log.Debug().Str("account", acc.Name).Msg("Scheduled sync completed")
+}
+
+// syncAdditionalFolders syncs subscribed or all folders beyond Inbox,
+// based on the account's SyncAllFolders setting.
+func (s *Scheduler) syncAdditionalFolders(ctx context.Context, acc *account.Account, inbox *folder.Folder) {
+	folders, err := s.getAccountSyncFolders(acc)
+	if err != nil {
+		s.log.Warn().Err(err).Str("account", acc.Name).Msg("Failed to get sync folders")
+		return
+	}
+
+	// Filter out Inbox (already synced) and limit to 2 concurrent syncs
+	sem := make(chan struct{}, 2)
+	var wg sync.WaitGroup
+
+	for _, f := range folders {
+		// Skip Inbox — already synced above with notification handling
+		if inbox != nil && f.ID == inbox.ID {
+			continue
+		}
+
+		// Check context
+		if ctx.Err() != nil {
+			break
+		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(f *folder.Folder) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			if syncErr := s.engine.SyncMessages(ctx, acc.ID, f.ID, acc.SyncPeriodDays); syncErr != nil {
+				if ctx.Err() == nil {
+					s.log.Warn().Err(syncErr).Str("folder", f.Path).Msg("Failed to sync additional folder")
+				}
+			}
+			// Notify completion for this folder
+			if s.syncCompletedCallback != nil {
+				s.syncCompletedCallback(acc.ID, f.ID, nil)
+			}
+		}(f)
+	}
+	wg.Wait()
+}
+
+// getAccountSyncFolders returns the folders to sync for an account.
+func (s *Scheduler) getAccountSyncFolders(acc *account.Account) ([]*folder.Folder, error) {
+	if acc.SyncAllFolders {
+		return s.folderStore.List(acc.ID)
+	}
+	if acc.SyncFoldersEnabled {
+		return s.folderStore.ListSubscribed(acc.ID)
+	}
+	// Default: core folders only (backward compatible)
+	coreTypes := []folder.Type{folder.TypeInbox, folder.TypeDrafts, folder.TypeSent}
+	var folders []*folder.Folder
+	for _, ft := range coreTypes {
+		f, err := s.folderStore.GetByType(acc.ID, ft)
+		if err != nil {
+			continue
+		}
+		if f != nil {
+			folders = append(folders, f)
+		}
+	}
+	return folders, nil
 }
 
 // TriggerSync manually triggers a sync for a specific account (non-blocking)

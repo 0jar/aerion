@@ -457,6 +457,57 @@ func (c *Client) ListMailboxes() ([]*Mailbox, error) {
 	return mailboxes, nil
 }
 
+// Subscribe sends an IMAP SUBSCRIBE command for the given mailbox.
+func (c *Client) Subscribe(mailbox string) error {
+	if c.client == nil {
+		return fmt.Errorf("not connected")
+	}
+	if err := c.client.Subscribe(mailbox).Wait(); err != nil {
+		return fmt.Errorf("failed to subscribe to %s: %w", mailbox, err)
+	}
+	c.log.Debug().Str("mailbox", mailbox).Msg("Subscribed to mailbox")
+	return nil
+}
+
+// Unsubscribe sends an IMAP UNSUBSCRIBE command for the given mailbox.
+func (c *Client) Unsubscribe(mailbox string) error {
+	if c.client == nil {
+		return fmt.Errorf("not connected")
+	}
+	if err := c.client.Unsubscribe(mailbox).Wait(); err != nil {
+		return fmt.Errorf("failed to unsubscribe from %s: %w", mailbox, err)
+	}
+	c.log.Debug().Str("mailbox", mailbox).Msg("Unsubscribed from mailbox")
+	return nil
+}
+
+// ListSubscribedMailboxes returns only the subscribed mailboxes.
+func (c *Client) ListSubscribedMailboxes() (map[string]bool, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	c.log.Debug().Msg("Listing subscribed mailboxes")
+
+	listCmd := c.client.List("", "*", &imap.ListOptions{SelectSubscribed: true})
+
+	subscribed := make(map[string]bool)
+	for {
+		mbox := listCmd.Next()
+		if mbox == nil {
+			break
+		}
+		subscribed[mbox.Mailbox] = true
+	}
+
+	if err := listCmd.Close(); err != nil {
+		return nil, fmt.Errorf("failed to list subscribed mailboxes: %w", err)
+	}
+
+	c.log.Debug().Int("count", len(subscribed)).Msg("Listed subscribed mailboxes")
+	return subscribed, nil
+}
+
 // determineFolderType determines the folder type from name and attributes
 func determineFolderType(name string, attrs []imap.MailboxAttr) FolderType {
 	// Check attributes first (RFC 6154 special-use)

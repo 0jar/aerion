@@ -5,6 +5,10 @@
 ---
 
 - Added image block logic to composer to avoid leaks
+- Added folder subscription for auto sync
+- Improved invalid encoding handling
+- Fixed another ghost message issue
+- Fixed invalid e-mail date hang
 - Fixed identity switch on replies and forwards
 - Fixed draft save and send race condition
 - Added proper smtp connect timeout

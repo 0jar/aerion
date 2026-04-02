@@ -439,6 +439,10 @@ export function StartContactsOnlyOAuthFlow(arg1:string):Promise<void>;
 
 export function StartOAuthFlow(arg1:string):Promise<void>;
 
+export function SubscribeAllFolders(arg1:string):Promise<void>;
+
+export function SubscribeFolder(arg1:string,arg2:string):Promise<void>;
+
 export function SyncAccountComplete(arg1:string):Promise<void>;
 
 export function SyncAllComplete():Promise<void>;
@@ -466,6 +470,8 @@ export function Trash(arg1:Array<string>):Promise<boolean>;
 export function Undo():Promise<string>;
 
 export function Unstar(arg1:Array<string>):Promise<void>;
+
+export function UnsubscribeFolder(arg1:string,arg2:string):Promise<void>;
 
 export function UpdateAccount(arg1:string,arg2:account.AccountConfig):Promise<account.Account>;
 

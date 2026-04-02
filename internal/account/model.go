@@ -48,8 +48,10 @@ type Account struct {
 	Color      string `json:"color"` // Hex color for account identification in unified inbox
 
 	// Sync settings
-	SyncPeriodDays int `json:"syncPeriodDays"`
-	SyncInterval   int `json:"syncInterval"` // Minutes between polls (0 = manual only)
+	SyncPeriodDays int  `json:"syncPeriodDays"`
+	SyncInterval   int  `json:"syncInterval"`   // Minutes between polls (0 = manual only)
+	SyncAllFolders     bool `json:"syncAllFolders"`     // Sync all folders instead of just subscribed ones
+	SyncFoldersEnabled bool `json:"syncFoldersEnabled"` // User opted into folder sync management
 
 	// Read receipt settings
 	// Controls whether to request read receipts when sending emails
@@ -166,8 +168,10 @@ type AccountConfig struct {
 
 	Color string `json:"color"` // Hex color for account identification
 
-	SyncPeriodDays int `json:"syncPeriodDays"`
-	SyncInterval   int `json:"syncInterval"` // Minutes between polls (0 = manual only)
+	SyncPeriodDays int  `json:"syncPeriodDays"`
+	SyncInterval   int  `json:"syncInterval"`   // Minutes between polls (0 = manual only)
+	SyncAllFolders     bool `json:"syncAllFolders"`     // Sync all folders instead of just subscribed ones
+	SyncFoldersEnabled bool `json:"syncFoldersEnabled"` // User opted into folder sync management
 
 	// Read receipt settings
 	ReadReceiptRequestPolicy string `json:"readReceiptRequestPolicy"`

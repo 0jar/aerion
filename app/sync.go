@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	gosync "sync"
 	"time"
 
 	"github.com/hkdb/aerion/internal/certificate"
@@ -212,42 +213,46 @@ func (a *App) SyncAccountComplete(accountID string) error {
 		return fmt.Errorf("folder sync failed: %w", err)
 	}
 
-	// 2. Sync core folders in order of importance
-	coreFolderTypes := []folder.Type{
-		folder.TypeInbox,
-		folder.TypeDrafts,
-		folder.TypeSent,
+	// 2. Determine which folders to sync based on account settings
+	foldersToSync, err := a.getSyncFolders(accountID)
+	if err != nil {
+		return fmt.Errorf("failed to determine sync folders: %w", err)
 	}
 
+	log.Info().Str("accountID", accountID).Int("folders", len(foldersToSync)).Msg("Syncing folders")
+
+	// Sync with semaphore (max 2 concurrent to leave pool room for user actions)
+	sem := make(chan struct{}, 2)
 	var syncErrors []string
-	for _, folderType := range coreFolderTypes {
+	var errorsMu gosync.Mutex
+	var wg gosync.WaitGroup
+
+	for _, f := range foldersToSync {
 		// Check if sync was cancelled between folders
 		a.syncMu.Lock()
 		cancelled := a.syncCancelled
 		a.syncMu.Unlock()
 		if cancelled {
 			log.Info().Str("accountID", accountID).Msg("Sync cancelled, stopping folder loop")
-			return fmt.Errorf("sync cancelled")
+			break
 		}
 
-		log.Debug().Str("type", string(folderType)).Msg("Looking for special folder")
-		f, err := a.GetSpecialFolder(accountID, folderType)
-		if err != nil {
-			log.Warn().Err(err).Str("type", string(folderType)).Msg("Failed to get folder")
-			syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", folderType, err))
-			continue
-		}
-		if f == nil {
-			log.Warn().Str("type", string(folderType)).Msg("Folder not found, skipping")
-			continue
-		}
+		wg.Add(1)
+		sem <- struct{}{} // Acquire semaphore
+		go func(f *folder.Folder) {
+			defer wg.Done()
+			defer func() { <-sem }() // Release semaphore
 
-		log.Info().Str("type", string(folderType)).Str("path", f.Path).Str("id", f.ID).Msg("Found special folder, syncing")
-		if err := a.SyncFolder(accountID, f.ID); err != nil {
-			log.Warn().Err(err).Str("folder", f.Path).Msg("Message sync failed")
-			syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", f.Path, err))
-		}
+			log.Info().Str("path", f.Path).Str("id", f.ID).Msg("Syncing folder")
+			if syncErr := a.SyncFolder(accountID, f.ID); syncErr != nil {
+				log.Warn().Err(syncErr).Str("folder", f.Path).Msg("Message sync failed")
+				errorsMu.Lock()
+				syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", f.Path, syncErr))
+				errorsMu.Unlock()
+			}
+		}(f)
 	}
+	wg.Wait()
 
 	if len(syncErrors) > 0 {
 		return fmt.Errorf("some folders failed to sync: %s", strings.Join(syncErrors, "; "))
@@ -255,6 +260,41 @@ func (a *App) SyncAccountComplete(accountID string) error {
 
 	log.Info().Str("accountID", accountID).Msg("Complete account sync finished")
 	return nil
+}
+
+// getSyncFolders returns the folders that should be automatically synced for an account.
+// Three-way logic:
+//   - SyncAllFolders=true → all folders
+//   - SyncFoldersEnabled=true → subscribed folders (respects IMAP subscriptions)
+//   - default → core only (Inbox, Drafts, Sent) — backward compatible
+func (a *App) getSyncFolders(accountID string) ([]*folder.Folder, error) {
+	acct, err := a.accountStore.Get(accountID)
+	if err != nil {
+		return nil, err
+	}
+	if acct.SyncAllFolders {
+		return a.folderStore.List(accountID)
+	}
+	if acct.SyncFoldersEnabled {
+		return a.folderStore.ListSubscribed(accountID)
+	}
+	return a.getCoreOnlyFolders(accountID)
+}
+
+// getCoreOnlyFolders returns core folders (Inbox, Drafts, Sent) — the default sync behavior.
+func (a *App) getCoreOnlyFolders(accountID string) ([]*folder.Folder, error) {
+	coreTypes := []folder.Type{folder.TypeInbox, folder.TypeDrafts, folder.TypeSent}
+	var folders []*folder.Folder
+	for _, ft := range coreTypes {
+		f, err := a.folderStore.GetByType(accountID, ft)
+		if err != nil {
+			continue
+		}
+		if f != nil {
+			folders = append(folders, f)
+		}
+	}
+	return folders, nil
 }
 
 // SyncAllComplete syncs all accounts completely, then syncs CardDAV sources.
