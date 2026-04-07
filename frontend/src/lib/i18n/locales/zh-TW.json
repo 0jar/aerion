@@ -418,6 +418,8 @@
     "selectTheme": "選擇佈景主題",
     "messageListDensity": "郵件清單密度",
     "messageListDensityHelp": "調整郵件清單中的間距和文字大小",
+    "accentBarUnread": "未讀郵件標記線",
+    "accentBarUnreadHelp": "在未讀郵件左側顯示標記線，方便辨識。",
     "selectDensity": "選擇密度",
     "readReceipts": "讀取回條",
     "readReceiptPolicy": "當有人要求讀取回條時",

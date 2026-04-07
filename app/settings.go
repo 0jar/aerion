@@ -49,6 +49,16 @@ func (a *App) SetMessageListDensity(density string) error {
 	return a.settingsStore.SetMessageListDensity(density)
 }
 
+// GetAccentBarUnread returns whether the accent bar for unread messages is enabled
+func (a *App) GetAccentBarUnread() (bool, error) {
+	return a.settingsStore.GetAccentBarUnread()
+}
+
+// SetAccentBarUnread enables or disables the accent bar for unread messages
+func (a *App) SetAccentBarUnread(enabled bool) error {
+	return a.settingsStore.SetAccentBarUnread(enabled)
+}
+
 // GetMessageListSortOrder returns the message list sort order setting
 func (a *App) GetMessageListSortOrder() (string, error) {
 	return a.settingsStore.GetMessageListSortOrder()

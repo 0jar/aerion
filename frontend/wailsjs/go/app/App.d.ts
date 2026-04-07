@@ -99,6 +99,8 @@ export function FetchServerMessage(arg1:string,arg2:string,arg3:number):Promise<
 
 export function ForceSyncFolder(arg1:string,arg2:string):Promise<void>;
 
+export function GetAccentBarUnread():Promise<boolean>;
+
 export function GetAccount(arg1:string):Promise<account.Account>;
 
 export function GetAccountFoldersForMapping(arg1:string):Promise<Array<folder.Folder>>;
@@ -380,6 +382,8 @@ export function SearchUnifiedInbox(arg1:string,arg2:number,arg3:number,arg4:stri
 export function SendMessage(arg1:string,arg2:smtp.ComposeMessage):Promise<void>;
 
 export function SendReadReceipt(arg1:string,arg2:string):Promise<void>;
+
+export function SetAccentBarUnread(arg1:boolean):Promise<void>;
 
 export function SetAccountEnabled(arg1:string,arg2:boolean):Promise<void>;
 

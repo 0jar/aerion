@@ -30,6 +30,7 @@ const (
 	KeyComposerFormat            = "composer_format"
 	KeyNativeTitleBar            = "native_titlebar"
 	KeyAlwaysLoadImages          = "always_load_images"
+	KeyAccentBarUnread           = "accent_bar_unread"
 )
 
 // Density values for message list
@@ -208,6 +209,24 @@ func (s *Store) SetMessageListDensity(density string) error {
 		return fmt.Errorf("invalid density: %s (must be 'micro', 'compact', 'standard', or 'large')", density)
 	}
 	return s.Set(KeyMessageListDensity, density)
+}
+
+// GetAccentBarUnread returns whether the accent bar for unread messages is enabled
+func (s *Store) GetAccentBarUnread() (bool, error) {
+	value, err := s.Get(KeyAccentBarUnread)
+	if err != nil {
+		return false, err
+	}
+	return value == "true", nil
+}
+
+// SetAccentBarUnread enables or disables the accent bar for unread messages
+func (s *Store) SetAccentBarUnread(enabled bool) error {
+	v := "false"
+	if enabled {
+		v = "true"
+	}
+	return s.Set(KeyAccentBarUnread, v)
 }
 
 // GetMessageListSortOrder returns the current message list sort order

@@ -418,6 +418,8 @@
     "selectTheme": "选择主题",
     "messageListDensity": "邮件列表密度",
     "messageListDensityHelp": "调整邮件列表中的间距和字号",
+    "accentBarUnread": "未读邮件标记线",
+    "accentBarUnreadHelp": "在未读邮件左侧显示标记线，方便识别。",
     "selectDensity": "选择密度",
     "readReceipts": "回执",
     "readReceiptPolicy": "当有人请求回执时",

@@ -5,7 +5,8 @@
 ---
 
 - Added image block logic to composer to avoid leaks
-- Added folder subscription for auto sync
+- Added folder subscription for auto sync - [#83](https://github.com/hkdb/aerion/issues/83)
+- Added optional accent bar for unread messages - [#92](https://github.com/hkdb/aerion/issues/92)
 - Improved copy/move to folder selection dialog
 - Improved invalid encoding handling
 - Fixed another ghost message issue
@@ -19,7 +20,8 @@
 - Fixed inline images on replies and forwards
 - Fixed forward signature placement
 - Added AttachConsole to for Windows builds for debug output
-- Fixed murena.io CardDav [#86](https://github.com/hkdb/aerion/issues/86)
+- Fixed murena.io CardDav - [#86](https://github.com/hkdb/aerion/issues/86)
+- Fixed some HK translations
 
 
 **v0.1.38 - 03-22-2026**

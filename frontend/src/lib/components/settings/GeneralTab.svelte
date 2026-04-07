@@ -25,6 +25,7 @@
     onStartHiddenChange: (value: boolean) => void
     onAutostartChange: (value: boolean) => void
     onLanguageChange: (value: string) => void
+    accentBarUnread: boolean
   }
 
   let {
@@ -45,6 +46,7 @@
     onStartHiddenChange,
     onAutostartChange,
     onLanguageChange,
+    accentBarUnread = $bindable(),
   }: Props = $props()
 
   // Message list density options
@@ -241,6 +243,22 @@
       <p class="text-xs text-muted-foreground">
         {$_('settingsGeneral.messageListDensityHelp')}
       </p>
+    </div>
+
+    <!-- Accent bar for unread messages -->
+    <div class="space-y-2">
+      <div class="flex items-center justify-between">
+        <div>
+          <Label for="accent-bar-unread">{$_('settingsGeneral.accentBarUnread')}</Label>
+          <p class="text-xs text-muted-foreground">
+            {$_('settingsGeneral.accentBarUnreadHelp')}
+          </p>
+        </div>
+        <Switch
+          id="accent-bar-unread"
+          bind:checked={accentBarUnread}
+        />
+      </div>
     </div>
   </div>
 

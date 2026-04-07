@@ -419,6 +419,8 @@
     "selectTheme": "Select theme",
     "messageListDensity": "Message list density",
     "messageListDensityHelp": "Adjust the spacing and text size in the message list",
+    "accentBarUnread": "Accent bar for unread messages",
+    "accentBarUnreadHelp": "Shows a bar on the left side of unread messages for easier identification.",
     "selectDensity": "Select density",
     "readReceipts": "Read Receipts",
     "readReceiptPolicy": "When someone requests a read receipt",

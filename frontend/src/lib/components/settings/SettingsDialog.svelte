@@ -5,9 +5,9 @@
   import * as Tabs from '$lib/components/ui/tabs'
   import { Button } from '$lib/components/ui/button'
   // @ts-ignore - wailsjs path
-  import { GetReadReceiptResponsePolicy, SetReadReceiptResponsePolicy, GetMarkAsReadDelay, SetMarkAsReadDelay, GetMessageListDensity, SetMessageListDensity, GetThemeMode, SetThemeMode, GetShowTitleBar, SetShowTitleBar, GetRunBackground, SetRunBackground, GetStartHidden, SetStartHidden, GetAutostart, SetAutostart, GetLanguage, SetLanguage, GetComposerMode, SetComposerMode, GetMailtoMode, SetMailtoMode, GetComposerFormat, SetComposerFormat, GetNativeTitleBar, SetNativeTitleBar, GetAlwaysLoadImages, SetAlwaysLoadImages, QuitApp } from '../../../../wailsjs/go/app/App.js'
+  import { GetReadReceiptResponsePolicy, SetReadReceiptResponsePolicy, GetMarkAsReadDelay, SetMarkAsReadDelay, GetMessageListDensity, SetMessageListDensity, GetThemeMode, SetThemeMode, GetShowTitleBar, SetShowTitleBar, GetRunBackground, SetRunBackground, GetStartHidden, SetStartHidden, GetAutostart, SetAutostart, GetLanguage, SetLanguage, GetComposerMode, SetComposerMode, GetMailtoMode, SetMailtoMode, GetComposerFormat, SetComposerFormat, GetNativeTitleBar, SetNativeTitleBar, GetAlwaysLoadImages, SetAlwaysLoadImages, GetAccentBarUnread, SetAccentBarUnread, QuitApp } from '../../../../wailsjs/go/app/App.js'
   import { addToast } from '$lib/stores/toast'
-  import { setMessageListDensity as updateDensityStore, setThemeMode as updateThemeStore, setShowTitleBar as updateShowTitleBarStore, setRunBackground as updateRunBackgroundStore, setStartHidden as updateStartHiddenStore, setAutostart as updateAutostartStore, setLanguage as updateLanguageStore, setComposerMode as updateComposerModeStore, setMailtoMode as updateMailtoModeStore, setComposerFormat as updateComposerFormatStore, setNativeTitleBar as updateNativeTitleBarStore, setAlwaysLoadImages as updateAlwaysLoadImagesStore, type MessageListDensity, type ThemeMode, type ComposerMode, type ComposerFormat } from '$lib/stores/settings.svelte'
+  import { setMessageListDensity as updateDensityStore, setThemeMode as updateThemeStore, setShowTitleBar as updateShowTitleBarStore, setRunBackground as updateRunBackgroundStore, setStartHidden as updateStartHiddenStore, setAutostart as updateAutostartStore, setLanguage as updateLanguageStore, setComposerMode as updateComposerModeStore, setMailtoMode as updateMailtoModeStore, setComposerFormat as updateComposerFormatStore, setNativeTitleBar as updateNativeTitleBarStore, setAlwaysLoadImages as updateAlwaysLoadImagesStore, setAccentBarUnread as updateAccentBarUnreadStore, type MessageListDensity, type ThemeMode, type ComposerMode, type ComposerFormat } from '$lib/stores/settings.svelte'
   import { _ } from '$lib/i18n'
   import ConfirmDialog from '$lib/components/ui/confirm-dialog/ConfirmDialog.svelte'
   import GeneralTab from './GeneralTab.svelte'
@@ -44,6 +44,7 @@
   let composerFormat = $state<string>('rich')
   let nativeTitleBar = $state<boolean>(false)
   let alwaysLoadImages = $state<boolean>(false)
+  let accentBarUnread = $state<boolean>(false)
   let originalNativeTitleBar = false
   let showRestartDialog = $state(false)
   let loading = $state(true)
@@ -65,7 +66,7 @@
   async function loadSettings() {
     loading = true
     try {
-      const [policy, delayMs, density, theme, titleBar, runBg, startHid, autoSt, lang, comp, mail, compFmt, nativeTB, alwaysImages] = await Promise.all([
+      const [policy, delayMs, density, theme, titleBar, runBg, startHid, autoSt, lang, comp, mail, compFmt, nativeTB, alwaysImages, accentBar] = await Promise.all([
         GetReadReceiptResponsePolicy(),
         GetMarkAsReadDelay(),
         GetMessageListDensity(),
@@ -80,6 +81,7 @@
         GetComposerFormat(),
         GetNativeTitleBar(),
         GetAlwaysLoadImages(),
+        GetAccentBarUnread(),
       ])
       readReceiptResponsePolicy = policy
       // Convert ms to seconds for display
@@ -96,6 +98,7 @@
       composerFormat = compFmt || 'rich'
       nativeTitleBar = nativeTB ?? false
       alwaysLoadImages = alwaysImages ?? false
+      accentBarUnread = accentBar ?? false
       originalNativeTitleBar = nativeTitleBar
     } catch (err) {
       console.error('Failed to load settings:', err)
@@ -127,6 +130,7 @@
       await SetComposerFormat(composerFormat)
       await SetNativeTitleBar(nativeTitleBar)
       await SetAlwaysLoadImages(alwaysLoadImages)
+      await SetAccentBarUnread(accentBarUnread)
       // Update the reactive stores so UI updates immediately
       updateDensityStore(messageListDensity as MessageListDensity)
       updateThemeStore(themeMode as ThemeMode)
@@ -142,6 +146,7 @@
       updateComposerFormatStore(composerFormat as ComposerFormat)
       updateNativeTitleBarStore(nativeTitleBar)
       updateAlwaysLoadImagesStore(alwaysLoadImages)
+      updateAccentBarUnreadStore(accentBarUnread)
       addToast({
         type: 'success',
         message: $_('toast.settingsSaved'),
@@ -240,6 +245,7 @@
               onStartHiddenChange={(v) => { startHidden = v; if (v) runBackground = true }}
               onAutostartChange={(v) => autostart = v}
               onLanguageChange={(v) => language = v}
+              bind:accentBarUnread
             />
           </Tabs.Content>
 

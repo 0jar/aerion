@@ -2,13 +2,14 @@
   import Icon from '@iconify/svelte'
   import { formatRelativeDate } from '$lib/utils/date'
   import type { MessageHeader } from '$lib/types'
-  
+  import { getAccentBarUnread } from '$lib/stores/settings.svelte'
+
   interface Props {
     message: MessageHeader
     selected: boolean
     onSelect: () => void
   }
-  
+
   let { message, selected, onSelect }: Props = $props()
   
   function getInitials(name: string): string {
@@ -42,10 +43,10 @@
 
 <div
   class="w-full flex items-start gap-3 px-4 py-3 text-left border-b border-border transition-colors cursor-pointer {
-    selected 
-      ? 'bg-primary/10' 
+    selected
+      ? 'bg-primary/10'
       : 'hover:bg-muted/50'
-  }"
+  } {getAccentBarUnread() && message.unread ? 'border-l-2 border-l-foreground' : ''}"
   onclick={onSelect}
   onkeydown={(e) => e.key === 'Enter' && onSelect()}
   role="button"

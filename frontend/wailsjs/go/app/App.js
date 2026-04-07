@@ -166,6 +166,10 @@ export function ForceSyncFolder(arg1, arg2) {
   return window['go']['app']['App']['ForceSyncFolder'](arg1, arg2);
 }
 
+export function GetAccentBarUnread() {
+  return window['go']['app']['App']['GetAccentBarUnread']();
+}
+
 export function GetAccount(arg1) {
   return window['go']['app']['App']['GetAccount'](arg1);
 }
@@ -728,6 +732,10 @@ export function SendMessage(arg1, arg2) {
 
 export function SendReadReceipt(arg1, arg2) {
   return window['go']['app']['App']['SendReadReceipt'](arg1, arg2);
+}
+
+export function SetAccentBarUnread(arg1) {
+  return window['go']['app']['App']['SetAccentBarUnread'](arg1);
 }
 
 export function SetAccountEnabled(arg1, arg2) {

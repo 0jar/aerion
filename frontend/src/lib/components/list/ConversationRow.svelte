@@ -8,6 +8,7 @@
   import { Star, Unstar } from '../../../../wailsjs/go/app/App'
   import MessageContextMenu from '$lib/components/common/MessageContextMenu.svelte'
   import { toasts } from '$lib/stores/toast'
+  import { getAccentBarUnread } from '$lib/stores/settings.svelte'
 
   interface Props {
     conversation: message.Conversation
@@ -267,7 +268,7 @@
     data-conversation-row
     class="group w-full flex items-start {densityClasses.row[density]} text-left border-b border-border transition-colors duration-300 cursor-pointer outline-none {selected
       ? 'bg-primary/20'
-      : 'hover:bg-muted/50'}"
+      : 'hover:bg-muted/50'} {getAccentBarUnread() && hasUnread ? 'border-l-2 border-l-foreground' : ''}"
     onclick={(e) => onSelect(e)}
     onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect() }}}
     role="button"

@@ -2,7 +2,7 @@
 // Provides reactive state for application settings
 
 // @ts-ignore - wailsjs path
-import { GetMessageListDensity, GetMessageListSortOrder, GetThemeMode, GetShowTitleBar, GetRunBackground, GetStartHidden, GetAutostart, GetLanguage, GetComposerMode, GetMailtoMode, GetComposerFormat, GetNativeTitleBar, GetAlwaysLoadImages } from '../../../wailsjs/go/app/App'
+import { GetMessageListDensity, GetMessageListSortOrder, GetThemeMode, GetShowTitleBar, GetRunBackground, GetStartHidden, GetAutostart, GetLanguage, GetComposerMode, GetMailtoMode, GetComposerFormat, GetNativeTitleBar, GetAlwaysLoadImages, GetAccentBarUnread } from '../../../wailsjs/go/app/App'
 import { setLocale as setI18nLocale } from '$lib/i18n'
 import { loadDateFnsLocale, getDateFnsLocale } from '$lib/i18n/dateFnsLocale'
 import type { Locale } from 'date-fns'
@@ -30,6 +30,7 @@ let mailtoMode = $state<ComposerMode>('inline')
 let composerFormat = $state<ComposerFormat>('rich')
 let nativeTitleBar = $state<boolean>(false)
 let alwaysLoadImages = $state<boolean>(false)
+let accentBarUnread = $state<boolean>(false)
 
 // Getter functions to access the state
 export function getMessageListDensity(): MessageListDensity {
@@ -82,6 +83,10 @@ export function getNativeTitleBar(): boolean {
 
 export function getAlwaysLoadImages(): boolean {
   return alwaysLoadImages
+}
+
+export function getAccentBarUnread(): boolean {
+  return accentBarUnread
 }
 
 export function getCurrentDateFnsLocale(): Locale | undefined {
@@ -145,10 +150,14 @@ export function setAlwaysLoadImages(v: boolean) {
   alwaysLoadImages = v
 }
 
+export function setAccentBarUnread(v: boolean) {
+  accentBarUnread = v
+}
+
 // Load settings from backend (call on app startup)
 export async function loadSettings(): Promise<ThemeMode> {
   try {
-    const [density, sortOrder, theme, titleBar, runBg, startHid, autoSt, lang, compMode, mailMode, compFormat, nativeTB, alwaysImages] = await Promise.all([
+    const [density, sortOrder, theme, titleBar, runBg, startHid, autoSt, lang, compMode, mailMode, compFormat, nativeTB, alwaysImages, accentBar] = await Promise.all([
       GetMessageListDensity(),
       GetMessageListSortOrder(),
       GetThemeMode(),
@@ -162,6 +171,7 @@ export async function loadSettings(): Promise<ThemeMode> {
       GetComposerFormat(),
       GetNativeTitleBar(),
       GetAlwaysLoadImages(),
+      GetAccentBarUnread(),
     ])
     messageListDensity = (density as MessageListDensity) || 'standard'
     messageListSortOrder = (sortOrder as MessageListSortOrder) || 'newest'
@@ -175,6 +185,7 @@ export async function loadSettings(): Promise<ThemeMode> {
     composerFormat = (compFormat as ComposerFormat) || 'rich'
     nativeTitleBar = nativeTB ?? false
     alwaysLoadImages = alwaysImages ?? false
+    accentBarUnread = accentBar ?? false
     // Apply saved language (if set, overrides system detection from initI18n)
     if (lang) {
       language = lang
