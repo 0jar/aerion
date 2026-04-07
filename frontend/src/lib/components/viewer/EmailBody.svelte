@@ -38,11 +38,12 @@
   let tooltipX = $state(0)
   let tooltipY = $state(0)
 
-  // Link context menu state
-  let linkContextMenuVisible = $state(false)
-  let linkContextMenuUrl = $state('')
-  let linkContextMenuX = $state(0)
-  let linkContextMenuY = $state(0)
+  // Context menu state (unified for text selection and links)
+  let ctxMenuVisible = $state(false)
+  let ctxMenuText = $state('')
+  let ctxMenuUrl = $state('')
+  let ctxMenuX = $state(0)
+  let ctxMenuY = $state(0)
   
   // Derived state
   let hasRemoteImages = $derived(checkForRemoteImages(bodyHtml))
@@ -191,19 +192,23 @@
         }
       });
 
-      // Handle right-click context menu for links
+      // Handle right-click context menu for text selection and links
       document.addEventListener('contextmenu', function(e) {
+        var selection = window.getSelection();
+        var selectedText = (selection && selection.toString().trim().length > 0) ? selection.toString() : '';
         var link = e.target.closest('a');
-        if (link && link.href) {
-          e.preventDefault();
-          var rect = link.getBoundingClientRect();
-          window.parent.postMessage({
-            type: 'link-contextmenu',
-            url: link.href,
-            x: e.clientX,
-            y: e.clientY
-          }, '*');
-        }
+        var linkUrl = (link && link.href) ? link.href : '';
+
+        if (!selectedText && !linkUrl) return;
+
+        e.preventDefault();
+        window.parent.postMessage({
+          type: 'contextmenu',
+          text: selectedText,
+          url: linkUrl,
+          x: e.clientX,
+          y: e.clientY
+        }, '*');
       });
 
       // Forward keyboard events to parent for global shortcuts (only modifier keys and Escape)
@@ -385,14 +390,15 @@ ${processedHtml}
     } else if (event.data?.type === 'link-hover-end') {
       // Hide tooltip
       tooltipVisible = false
-    } else if (event.data?.type === 'link-contextmenu') {
-      // Show context menu for link - adjust coordinates relative to iframe position
+    } else if (event.data?.type === 'contextmenu') {
+      // Show unified context menu for text selection and/or links
       if (iframeElement) {
         const iframeRect = iframeElement.getBoundingClientRect()
-        linkContextMenuUrl = event.data.url
-        linkContextMenuX = iframeRect.left + event.data.x
-        linkContextMenuY = iframeRect.top + event.data.y
-        linkContextMenuVisible = true
+        ctxMenuText = event.data.text || ''
+        ctxMenuUrl = event.data.url || ''
+        ctxMenuX = iframeRect.left + event.data.x
+        ctxMenuY = iframeRect.top + event.data.y
+        ctxMenuVisible = true
       }
     }
   }
@@ -576,15 +582,25 @@ ${processedHtml}
     return escaped
   }
 
+  // Copy selected text to clipboard
+  async function copyTextToClipboard() {
+    if (!ctxMenuText) return
+    try {
+      await navigator.clipboard.writeText(ctxMenuText)
+      ctxMenuVisible = false
+    } catch (err) {
+      console.error('[EmailBody] Failed to copy text:', err)
+    }
+  }
+
   // Copy link to clipboard
   async function copyLinkToClipboard() {
-    if (linkContextMenuUrl) {
-      try {
-        await navigator.clipboard.writeText(linkContextMenuUrl)
-        linkContextMenuVisible = false
-      } catch (err) {
-        console.error('[EmailBody] Failed to copy link:', err)
-      }
+    if (!ctxMenuUrl) return
+    try {
+      await navigator.clipboard.writeText(ctxMenuUrl)
+      ctxMenuVisible = false
+    } catch (err) {
+      console.error('[EmailBody] Failed to copy link:', err)
     }
   }
 </script>
@@ -655,38 +671,42 @@ ${processedHtml}
     </div>
   {/if}
 
-  <!-- Link context menu -->
-  {#if linkContextMenuVisible}
+  <!-- Context menu (text copy and/or link copy) -->
+  {#if ctxMenuVisible}
     <div
       class="fixed z-50 bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]"
-      style="left: {linkContextMenuX}px; top: {linkContextMenuY}px;"
+      style="left: {ctxMenuX}px; top: {ctxMenuY}px;"
       role="menu"
     >
-      <button
-        class="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-        onclick={copyLinkToClipboard}
-      >
-        <Icon icon="mdi:content-copy" class="w-4 h-4" />
-        {$_('viewer.copyLink')}
-      </button>
-      <button
-        class="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-        onclick={() => linkContextMenuVisible = false}
-      >
-        <Icon icon="mdi:close" class="w-4 h-4" />
-        {$_('common.cancel')}
-      </button>
+      {#if ctxMenuText}
+        <button
+          class="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+          onclick={copyTextToClipboard}
+        >
+          <Icon icon="mdi:content-copy" class="w-4 h-4" />
+          {$_('viewer.copy')}
+        </button>
+      {/if}
+      {#if ctxMenuUrl}
+        <button
+          class="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+          onclick={copyLinkToClipboard}
+        >
+          <Icon icon="mdi:link-variant" class="w-4 h-4" />
+          {$_('viewer.copyLink')}
+        </button>
+      {/if}
     </div>
   {/if}
 </div>
 
 <!-- Click outside to close context menu -->
-{#if linkContextMenuVisible}
+{#if ctxMenuVisible}
   <button
     type="button"
     class="fixed inset-0 z-40 cursor-default"
     aria-label={$_('aria.closeContextMenu')}
-    onclick={() => linkContextMenuVisible = false}
-    onkeydown={(e) => { if (e.key === 'Escape') linkContextMenuVisible = false }}
+    onclick={() => ctxMenuVisible = false}
+    onkeydown={(e) => { if (e.key === 'Escape') ctxMenuVisible = false }}
   ></button>
 {/if}

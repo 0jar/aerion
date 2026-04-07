@@ -161,6 +161,7 @@
     "failedToLoadMessages": "Failed to load messages.",
     "noContent": "No content available",
     "downloadingContent": "Downloading message content...",
+    "copy": "Copy",
     "copyLink": "Copy Link",
     "remoteImagesBlocked": "Remote images are blocked for privacy.",
     "loadImages": "Load Images",
