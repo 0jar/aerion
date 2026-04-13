@@ -20,20 +20,19 @@ By participating in this project, you agree to maintain a respectful and inclusi
 2. Determine if your request is a brand new feature or an enahncement to an existing feature
 3. Create a new issue with the `feature request` or `enhancement` template depending on step 2.
 
-### Pull Requests
+### Translation Pull Requests
 
-Aerion is currently in the rapid development state and the workflow is not yet setup to accept pull requests. However, in the near future, we will transition to a workflow that will make accepting PRs possible.
+`v0.1.39` is a milestone release. As basic features are complete and all seem to be relatively stable, starting with the `v0.2.0` branch, Aerion is ready for translation contributions.
 
-There will be 2 phases of opening up for PRs:
+Please read the [Translation Contribution Guide](docs/LANGAUGE.md) thoroughly prior to submitting any pull requests.
 
-1. Translation - Once ready, we will create language branches that will accept PRs for translation contributions.
-2. General - Transition to a workflow that makes accepting PRs for the rest of the porject possible.
+### General Pull Requests
 
-Meanwhile, below are some guidelines for contributions when we become ready to accept PRs.
+Aerion is currently in the rapid development state and aside from translation contributions, the workflow is not yet setup to accept pull requests. However, in the near future, we will transition to a workflow that will make accepting general PRs possible.
+
+Meanwhile, below are some guidelines for contributions when we become ready to accept general PRs.
 
 ## Areas for Contribution
-
-We welcome contributions in these areas:
 
 - **Bug fixes** - Check issues labeled `bug`
 - **Documentation** - README, code comments, guides
@@ -43,6 +42,18 @@ We welcome contributions in these areas:
 - **Features** - Check issues labeled `enhancement`
 
 In order to ensure that we don't waste your efforts, prior to working on a PR, first submit an issue with the `Contribution` template and describe what you want to work on and any relevant details that will help the maintainer understand what you will achieve. A maintainer will review your issue and work with you to ensure there aren't any issues or overlapping efforts with your proposal. This will greatly increase the chances of you submitting a PR that yields positive results.
+
+## Principles
+
+Regardless of bug fix or feature implementation, all contributions must follow these principles:
+
+- Security: always take a security-first approach
+- Privacy: user privacy is a top priority
+- Minimalist: always take the simplest approach and put forth best effort to have a clutter-free UI
+- Lightweight: maintain one of the core values of Aerion -- keep the app lightweight in all aspects
+- Efficiency: battery life on laptops is also a top priority -- minimize unnecessary resource consumption
+- Flexible: accommodate a reasonable range of mainstream user preferences through configurable options
+- Keyboard: ensure new UI components, features, and flows are fully accessible via keyboard
 
 ## Coding Standards
 

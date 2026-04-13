@@ -1,6 +1,47 @@
-# Adding a New Language to Aerion
+# Contributing Translations
 
-This guide walks through adding a new language to Aerion's frontend. The i18n system uses `svelte-i18n` with JSON locale files and lazy loading — only the active locale is loaded at runtime.
+If you'd like to submit a translation PR:
+
+## Branch Target
+
+- **Fork from and submit PRs to the latest release branch** (e.g., `v0.2.0`), never `main`.
+- The `main` branch tracks the current production release and is not the target for new contributions.
+- Check the repository for the latest release branch name before starting, then fork from that branch to ensure your PR has the correct base.
+
+## Before Submitting
+
+Thoroughly review and verify your work:
+
+1. **Review all translated strings** — check for accuracy, natural phrasing, correct placeholder positioning, and consistent terminology throughout
+2. **Run the checks**:
+   ```bash
+   cd frontend
+   npm run check    # TypeScript/Svelte type checking
+   npm run build    # Production build
+   ```
+3. **Run backend tests** (to verify metainfo.xml and desktop file validity):
+   ```bash
+   go test ./...
+   ```
+4. **Test in the running app** — launch with `make dev`, switch to your language in Settings > General > Language, and verify:
+   - All UI strings display correctly
+   - Dynamic strings with `{placeholders}` interpolate properly
+   - Date/time formatting works
+   - The detached composer also uses the correct language
+5. **Verify platform files** — confirm your metainfo.xml entries render correctly in GNOME Software or `appstreamcli validate`
+
+## PR Description
+
+Include in your PR:
+- The language being added (name + locale code)
+- Confirmation that you ran the checks and tested the app
+- Any translation decisions worth noting (e.g., terminology choices for technical terms)
+
+---
+
+## Adding a New Language to Aerion
+
+The following sections walks through adding a new language to Aerion's frontend. The i18n system uses `svelte-i18n` with JSON locale files and lazy loading — only the active locale is loaded at runtime.
 
 ## Prerequisites
 
@@ -108,7 +149,51 @@ if (lang === 'zh') return 'zh-TW'
 
 For most languages, no changes are needed here.
 
-### 6. Verify
+### 6. Translate Platform Files
+
+These files are shown in Linux app stores and desktop environments. They need translated entries for your language.
+
+#### A. AppStream Metainfo (`build/flatpak/io.github.hkdb.Aerion.metainfo.xml`)
+
+This file is displayed in software centers (Flathub, GNOME Software). Add `xml:lang` variants for the following elements, placed directly after each English element:
+
+- `<summary>` — one-line app description
+- `<p>` blocks inside `<description>` — app description paragraphs
+- `<li>` items inside `<description>` — feature list items
+- `<caption>` inside `<screenshot>` — screenshot caption
+- `<keyword>` entries — search keywords
+
+**Example** (adding Japanese):
+```xml
+<summary>Lightweight open-source email client for Linux</summary>
+<summary xml:lang="ja">Linux 向けの軽量オープンソースメールクライアント</summary>
+
+<li>Multiple email accounts with unified inbox</li>
+<li xml:lang="ja">統合受信箱を備えた複数メールアカウント対応</li>
+
+<keyword>email</keyword>
+<keyword xml:lang="ja">メール</keyword>
+<keyword xml:lang="ja">電子メール</keyword>
+```
+
+Refer to the existing `zh-TW`, `zh-HK`, and `zh-CN` entries as working examples.
+
+#### B. Desktop Entry (`build/linux/aerion.desktop`)
+
+This file is shown in app launchers and menus. Add `[locale_code]` suffixed keys. Note: desktop files use underscore (`_`) not hyphen for locale codes (e.g., `zh_TW` not `zh-TW`).
+
+**Keys to translate:**
+
+```ini
+GenericName[ja]=メール
+Comment[ja]=モダンなクロスプラットフォームメールクライアント
+Keywords[ja]=メール;電子メール;IMAP;SMTP;CardDAV;
+
+[Desktop Action compose]
+Name[ja]=新規メール作成
+```
+
+### 7. Verify
 
 ```bash
 cd frontend
@@ -126,9 +211,11 @@ Then run the app, open Settings > General, and select the new language from the 
 
 | File | Change |
 |------|--------|
-| `frontend/src/lib/i18n/locales/<code>.json` | **New** — translated strings |
+| `frontend/src/lib/i18n/locales/<code>.json` | **New** — translated strings (~900+ keys) |
 | `frontend/src/lib/i18n/index.ts` | Add `register()` + `supportedLocales` entry |
 | `frontend/src/lib/i18n/dateFnsLocale.ts` | Add `case` for date-fns locale |
+| `build/flatpak/io.github.hkdb.Aerion.metainfo.xml` | Add `xml:lang` entries for app store listing |
+| `build/linux/aerion.desktop` | Add `[locale]` suffixed keys for desktop integration |
 
 No backend changes are needed. The language setting is stored via the existing `GetLanguage`/`SetLanguage` Wails bindings in `app/settings.go`.
 
