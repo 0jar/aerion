@@ -167,7 +167,10 @@ func (enc *Encryptor) EncryptMessage(accountID, fromEmail string, recipientEmail
 	}
 
 	// Build the PGP/MIME encrypted message (RFC 3156)
-	boundary := generateEncryptedBoundary()
+	boundary, err := generateEncryptedBoundary()
+	if err != nil {
+		return nil, err
+	}
 	var result bytes.Buffer
 
 	// Write non-content headers from the original message
@@ -210,8 +213,10 @@ func (enc *Encryptor) EncryptMessageToSelf(accountID, fromEmail string, rawMsg [
 }
 
 // generateEncryptedBoundary creates a random MIME boundary for encrypted messages
-func generateEncryptedBoundary() string {
+func generateEncryptedBoundary() (string, error) {
 	buf := make([]byte, 24)
-	rand.Read(buf)
-	return fmt.Sprintf("----=_pgpenc_%x", buf)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("failed to generate boundary: %w", err)
+	}
+	return fmt.Sprintf("----=_pgpenc_%x", buf), nil
 }

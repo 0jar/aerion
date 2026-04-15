@@ -156,6 +156,7 @@
           <li>Fixed non-UTF filename attachment open and download</li>
           <li>Fixed save to sent folder behavior - #98</li>
           <li>Improve composer formatting</li>
+          <li>Fixed unchecked rand.Read() in Cryptographic Code</li>
         </ul>
       </description>
     </release>

@@ -109,7 +109,10 @@ func (s *Signer) SignMessage(accountID, fromEmail string, rawMsg []byte) ([]byte
 	}
 
 	// Build the multipart/signed message
-	boundary := generateBoundary()
+	boundary, err := generateBoundary()
+	if err != nil {
+		return nil, err
+	}
 	var result bytes.Buffer
 
 	// Write non-content headers from the original message
@@ -143,8 +146,10 @@ func (s *Signer) SignMessage(accountID, fromEmail string, rawMsg []byte) ([]byte
 }
 
 // generateBoundary creates a random MIME boundary string
-func generateBoundary() string {
+func generateBoundary() (string, error) {
 	buf := make([]byte, 24)
-	rand.Read(buf)
-	return fmt.Sprintf("----=_pgp_%x", buf)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("failed to generate boundary: %w", err)
+	}
+	return fmt.Sprintf("----=_pgp_%x", buf), nil
 }
