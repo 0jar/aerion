@@ -44,7 +44,7 @@ func boolToInt(b bool) int {
 // getNextColor returns the next color in the rotation based on account count
 func (s *Store) getNextColor() string {
 	var count int
-	s.db.QueryRow("SELECT COUNT(*) FROM accounts").Scan(&count)
+	_ = s.db.QueryRow("SELECT COUNT(*) FROM accounts").Scan(&count)
 	return defaultColors[count%len(defaultColors)]
 }
 
@@ -71,7 +71,9 @@ func (s *Store) Create(config *AccountConfig) (*Account, error) {
 
 	// Get next order index
 	var maxOrder int
-	s.db.QueryRow("SELECT COALESCE(MAX(order_index), -1) FROM accounts").Scan(&maxOrder)
+	if err := s.db.QueryRow("SELECT COALESCE(MAX(order_index), -1) FROM accounts").Scan(&maxOrder); err != nil {
+		return nil, fmt.Errorf("failed to get max account order: %w", err)
+	}
 
 	// Auto-assign color if not provided
 	color := config.Color
@@ -558,7 +560,9 @@ func (s *Store) CreateIdentity(accountID string, config *IdentityConfig) (*Ident
 
 	// Get next order index
 	var maxOrder int
-	s.db.QueryRow("SELECT COALESCE(MAX(order_index), -1) FROM identities WHERE account_id = ?", accountID).Scan(&maxOrder)
+	if err := s.db.QueryRow("SELECT COALESCE(MAX(order_index), -1) FROM identities WHERE account_id = ?", accountID).Scan(&maxOrder); err != nil {
+		return nil, fmt.Errorf("failed to get max identity order: %w", err)
+	}
 
 	now := time.Now()
 	identity := &Identity{

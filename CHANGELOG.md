@@ -30,6 +30,7 @@
 - Fixed save to sent folder behavior - [#98](https://github.com/hkdb/aerion/issues/98)
 - Improved composer formating
 - Fixed unchecked rand.Read() in Cryptographic Code
+- Backfilled missing DB error handling
 
 
 **v0.1.38 - 03-22-2026**
