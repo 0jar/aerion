@@ -1,3 +1,4 @@
+import yahooIcon from '$lib/icons/providers/yahoo.svg?url'
 import icloudIcon from '$lib/icons/providers/icloud.svg?url'
 import protonmailIcon from '$lib/icons/providers/protonmail.svg?url'
 import fastmailIcon from '$lib/icons/providers/fastmail.svg?url'
@@ -64,6 +65,7 @@ export const providers: EmailProvider[] = [
     id: 'yahoo',
     name: 'Yahoo Mail',
     icon: 'logos:yahoo',
+    iconSrc: yahooIcon,
     domains: ['yahoo.com', 'ymail.com', 'yahoo.co.uk', 'yahoo.ca'],
     imap: { host: 'imap.mail.yahoo.com', port: 993, security: 'tls' },
     smtp: { host: 'smtp.mail.yahoo.com', port: 587, security: 'starttls' },
