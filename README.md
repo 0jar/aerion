@@ -58,7 +58,7 @@ Although Linux is a first-class citizen here, it also works on:
     - Fastmail 🧪
     - Zoho Mail 🧪
     - AOL Mail 🧪
-    - GMX Mail 🧪
+    - GMX Mail 
     - Mail.com 🧪
 - Unified Inbox (Color Code Accounts)
 - Conversation Threads
