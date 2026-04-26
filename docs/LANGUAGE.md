@@ -2,6 +2,20 @@
 
 If you'd like to submit a translation PR:
 
+## Checklist
+
+Use this checklist to ensure your submission is complete:
+
+- [ ] **Locale JSON** — `frontend/src/lib/i18n/locales/<code>.json` created with all ~900+ keys translated
+- [ ] **Register locale** — added `register()` call in `frontend/src/lib/i18n/index.ts`
+- [ ] **Supported locales** — added entry to `supportedLocales` array in the same file
+- [ ] **date-fns locale** — added `case` in `frontend/src/lib/i18n/dateFnsLocale.ts`
+- [ ] **AppStream metainfo** — added `xml:lang` entries in `build/flatpak/io.github.hkdb.Aerion.metainfo.xml`
+- [ ] **Desktop entry** — added `[locale]` suffixed keys in `build/linux/aerion.desktop`
+- [ ] **Checks pass** — `npm run check`, `npm run build`, and `go test ./...` all pass
+- [ ] **Live tested** — app launched with `make dev`, language switched, all strings verified
+- [ ] **Detached composer** — composer window also displays the correct language
+
 ## Branch Target
 
 - **Fork from and submit PRs to the latest release branch** (e.g., `v0.2.0`), never `main`.
@@ -41,7 +55,7 @@ Include in your PR:
 
 ## Adding a New Language to Aerion
 
-The following sections walks through adding a new language to Aerion's frontend. The i18n system uses `svelte-i18n` with JSON locale files and lazy loading — only the active locale is loaded at runtime.
+The following sections walk through adding a new language to Aerion's frontend. The i18n system uses `svelte-i18n` with JSON locale files and lazy loading — only the active locale is loaded at runtime.
 
 ## Prerequisites
 
