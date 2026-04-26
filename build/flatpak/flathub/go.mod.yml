@@ -13,7 +13,7 @@
   type: archive
   url: https://proxy.golang.org/github.com/!microsoft/go-winio/@v/v0.6.2.zip
 - dest: vendor/github.com/ProtonMail/go-crypto
-  sha256: a7b989d1685dfb29d396d479f9922f30a2dcea9ba28f98535232493d631b3744
+  sha256: 70bbdc0f9e926738193aed968f7901efab41493752277c4c94c9b751aa55c42a
   strip-components: 3
   type: archive
   url: https://proxy.golang.org/github.com/!proton!mail/go-crypto/@v/v1.4.1.zip
