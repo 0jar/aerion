@@ -133,6 +133,8 @@ Potential features in the future:
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png)](https://www.buymeacoffee.com/3dfosi)
 
+Google verification requires apps like Aerion to recertify for CASA Tier 2 every year which cost US$540 this year. This cost was sponsored one time by [3DF](https://3df.io). Starting next year, we will have to depend on community or corporate sponsorship. If you want your "Buy Me a Coffee" donation to go specifically and only towards the annual CASA Tier 2 certification, in the "Say something nice..." field of the Buy Me A Coffee donation page, put, "For CASA" as the first line. You can leave the rest of the field empty or put whatever message you want to send us in the lines after.
+
 
 ### 🙏 Issue Contributors
 ---
