@@ -6,6 +6,7 @@ If you'd like to submit a translation PR:
 
 Use this checklist to ensure your submission is complete:
 
+- [ ] **Claimed language** — filed a [Translation issue](https://github.com/hkdb/aerion/issues/new?template=translation.yml) to avoid duplicate efforts
 - [ ] **Locale JSON** — `frontend/src/lib/i18n/locales/<code>.json` created with all ~900+ keys translated
 - [ ] **Register locale** — added `register()` call in `frontend/src/lib/i18n/index.ts`
 - [ ] **Supported locales** — added entry to `supportedLocales` array in the same file
@@ -15,6 +16,12 @@ Use this checklist to ensure your submission is complete:
 - [ ] **Checks pass** — `npm run check`, `npm run build`, and `go test ./...` all pass
 - [ ] **Live tested** — app launched with `make dev`, language switched, all strings verified
 - [ ] **Detached composer** — composer window also displays the correct language
+
+## Claim Your Language
+
+Before starting any translation work, **file a [Translation issue](https://github.com/hkdb/aerion/issues/new?template=translation.yml)** to declare your intent. This prevents duplicate efforts and lets maintainers coordinate contributors.
+
+Check [existing translation issues](https://github.com/hkdb/aerion/issues?q=label%3Atranslate) first — if someone is already working on your language, consider collaborating with them instead.
 
 ## Branch Target
 

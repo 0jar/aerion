@@ -1,0 +1,33 @@
+name: Translation Contribution
+description: Declare your intent to contribute a translation
+title: "Contribution | Translation: "
+labels: ["contribution", "translate"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before submitting**, please search [existing issues](https://github.com/hkdb/aerion/issues?q=label%3Atranslate) to make sure no one is already working on this language.
+  - type: input
+    id: language
+    attributes:
+      label: Language
+      description: The language you want to translate (e.g., Japanese, Korean, French, German)
+      placeholder: e.g., Japanese
+    validations:
+      required: true
+  - type: input
+    id: locale-code
+    attributes:
+      label: Locale Code
+      description: BCP 47 locale code (e.g., ja, ko, fr, de, pt-BR)
+      placeholder: e.g., ja
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes
+      description: Any relevant details (e.g., regional variant, partial translation, timeline)
+      placeholder: Optional
+    validations:
+      required: false
