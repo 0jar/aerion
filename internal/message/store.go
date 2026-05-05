@@ -82,9 +82,10 @@ func (s *Store) ListByFolder(folderID string, offset, limit int) ([]*MessageHead
 		m := &MessageHeader{}
 		var dateStr sql.NullString
 		var snippet sql.NullString
+		var uidI64 int64
 
 		err := rows.Scan(
-			&m.ID, &m.AccountID, &m.FolderID, &m.UID,
+			&m.ID, &m.AccountID, &m.FolderID, &uidI64,
 			&m.Subject, &m.FromName, &m.FromEmail,
 			&dateStr, &snippet,
 			&m.IsRead, &m.IsStarred, &m.HasAttachments,
@@ -92,6 +93,7 @@ func (s *Store) ListByFolder(folderID string, offset, limit int) ([]*MessageHead
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
+		m.UID = uint32(uidI64)
 
 		if dateStr.Valid && dateStr.String != "" {
 			m.Date = parseTimeString(dateStr.String)
@@ -360,9 +362,10 @@ func (s *Store) Get(id string) (*Message, error) {
 	var smimeStatus, smimeSignerEmail, smimeSignerSubject sql.NullString
 	var pgpStatus, pgpSignerEmail, pgpSignerKeyID sql.NullString
 	var dateStr, receivedAtStr sql.NullString
+	var uidI64 int64
 
 	err := s.db.QueryRow(query, id).Scan(
-		&m.ID, &m.AccountID, &m.FolderID, &m.UID, &messageID, &inReplyTo, &threadID,
+		&m.ID, &m.AccountID, &m.FolderID, &uidI64, &messageID, &inReplyTo, &threadID,
 		&m.Subject, &m.FromName, &m.FromEmail, &toList, &ccList, &bccList, &replyTo, &dateStr,
 		&snippet, &m.IsRead, &m.IsStarred, &m.IsAnswered, &m.IsForwarded, &m.IsDraft, &m.IsDeleted,
 		&m.Size, &m.HasAttachments, &bodyText, &bodyHTML, &m.BodyFetched,
@@ -379,6 +382,7 @@ func (s *Store) Get(id string) (*Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}
+	m.UID = uint32(uidI64)
 
 	if messageID.Valid {
 		m.MessageID = messageID.String
@@ -463,9 +467,10 @@ func (s *Store) GetByUID(folderID string, uid uint32) (*Message, error) {
 	var smimeStatus, smimeSignerEmail, smimeSignerSubject sql.NullString
 	var pgpStatus, pgpSignerEmail, pgpSignerKeyID sql.NullString
 	var dateStr, receivedAtStr sql.NullString
+	var uidI64 int64
 
 	err := s.db.QueryRow(query, folderID, uid).Scan(
-		&m.ID, &m.AccountID, &m.FolderID, &m.UID, &messageID, &inReplyTo, &threadID,
+		&m.ID, &m.AccountID, &m.FolderID, &uidI64, &messageID, &inReplyTo, &threadID,
 		&m.Subject, &m.FromName, &m.FromEmail, &toList, &ccList, &bccList, &replyTo, &dateStr,
 		&snippet, &m.IsRead, &m.IsStarred, &m.IsAnswered, &m.IsForwarded, &m.IsDraft, &m.IsDeleted,
 		&m.Size, &m.HasAttachments, &bodyText, &bodyHTML, &m.BodyFetched,
@@ -482,6 +487,7 @@ func (s *Store) GetByUID(folderID string, uid uint32) (*Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message: %w", err)
 	}
+	m.UID = uint32(uidI64)
 
 	// Populate optional fields
 	if messageID.Valid {
@@ -1055,19 +1061,19 @@ func (s *Store) DeleteOlderThan(accountID string, before time.Time) (int, error)
 
 // GetMessageUIDAndFolder returns the UID and folder_id for a message
 func (s *Store) GetMessageUIDAndFolder(messageID string) (uint32, string, error) {
-	var uid uint32
+	var uidI64 int64
 	var folderID string
 	err := s.db.QueryRow(
 		"SELECT uid, folder_id FROM messages WHERE id = ?",
 		messageID,
-	).Scan(&uid, &folderID)
+	).Scan(&uidI64, &folderID)
 	if err == sql.ErrNoRows {
 		return 0, "", fmt.Errorf("message not found: %s", messageID)
 	}
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to get message: %w", err)
 	}
-	return uid, folderID, nil
+	return uint32(uidI64), folderID, nil
 }
 
 // UIDInfo holds UID and folder information for a message
@@ -1104,12 +1110,12 @@ func (s *Store) GetMessageUIDsAndFolder(messageIDs []string) (map[string]UIDInfo
 	result := make(map[string]UIDInfo)
 	for rows.Next() {
 		var id string
-		var uid uint32
+		var uidI64 int64
 		var folderID string
-		if err := rows.Scan(&id, &uid, &folderID); err != nil {
+		if err := rows.Scan(&id, &uidI64, &folderID); err != nil {
 			return nil, fmt.Errorf("failed to scan message UID: %w", err)
 		}
-		result[id] = UIDInfo{UID: uid, FolderID: folderID}
+		result[id] = UIDInfo{UID: uint32(uidI64), FolderID: folderID}
 	}
 
 	return result, nil
@@ -1510,9 +1516,10 @@ func (s *Store) GetConversation(threadID, folderID string) (*Conversation, error
 		var smimeStatus, smimeSignerEmail, smimeSignerSubject sql.NullString
 		var pgpStatus, pgpSignerEmail, pgpSignerKeyID sql.NullString
 		var dateStr, receivedAtStr sql.NullString
+		var uidI64 int64
 
 		err := rows.Scan(
-			&m.ID, &m.AccountID, &m.FolderID, &m.UID, &messageID, &inReplyTo, &references, &threadIDVal,
+			&m.ID, &m.AccountID, &m.FolderID, &uidI64, &messageID, &inReplyTo, &references, &threadIDVal,
 			&m.Subject, &m.FromName, &m.FromEmail, &toList, &ccList, &bccList, &replyTo, &dateStr,
 			&snippetVal, &m.IsRead, &m.IsStarred, &m.IsAnswered, &m.IsForwarded, &m.IsDraft, &m.IsDeleted,
 			&m.Size, &m.HasAttachments, &bodyText, &bodyHTML, &m.BodyFetched,
@@ -1526,6 +1533,7 @@ func (s *Store) GetConversation(threadID, folderID string) (*Conversation, error
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
+		m.UID = uint32(uidI64)
 
 		if messageID.Valid {
 			m.MessageID = messageID.String
@@ -1837,7 +1845,33 @@ func (s *Store) UpdateFlagsBatch(ids []string, isRead, isStarred *bool) error {
 	return nil
 }
 
-// MoveMessages updates the folder_id for multiple messages
+// MoveMessages updates the folder_id for multiple messages.
+//
+// Design note — temp UIDs:
+// When a message is moved locally, it lives in the destination folder before
+// the IMAP server has assigned a real UID for it there. To bridge that gap
+// without using NULL or colliding with real UIDs, this function writes
+// `uid = -rowid` — a guaranteed-unique negative value derived from SQLite's
+// auto-increment row id. Real IMAP UIDs are positive uint32, so the sign
+// distinguishes "temp" from "synced" cleanly:
+//
+//   - WHERE uid > 0   → only real, server-assigned UIDs
+//   - WHERE uid < 0   → only locally-moved rows awaiting reconciliation
+//   - DeleteTempUIDs cleans up uid < 0 rows
+//   - app/actions.go skips rows where int32(m.UID) < 0 before sending to IMAP
+//
+// The Go layer reads uid into uint32 (the IMAP type), so a stored int64(-37727)
+// becomes uint32(0xFFFF6CE1) = 4_294_929_569 in memory. The int32() recast in
+// the skip check correctly identifies these. Scan sites that read the uid
+// column must use an int64 intermediary first — scanning a negative int64
+// directly into uint32 fails on modernc.org/sqlite's converter (the lower 32
+// bits of the int64 are preserved by the explicit uint32 cast).
+//
+// Potential future refactor: split this into a dedicated `pending_move BOOLEAN`
+// (or `sync_state TEXT`) column. The current design works fine; the
+// motivation for refactoring would be onboarding clarity — making the
+// temp-marker concept explicit in the schema rather than implicit in the sign
+// of the uid column.
 func (s *Store) MoveMessages(ids []string, newFolderID string) error {
 	if len(ids) == 0 {
 		return nil
@@ -1979,9 +2013,10 @@ func (s *Store) GetByIDs(ids []string) ([]*Message, error) {
 		var smimeStatus, smimeSignerEmail, smimeSignerSubject sql.NullString
 		var pgpStatus, pgpSignerEmail, pgpSignerKeyID sql.NullString
 		var dateStr, receivedAtStr sql.NullString
+		var uidI64 int64
 
 		err := rows.Scan(
-			&m.ID, &m.AccountID, &m.FolderID, &m.UID, &messageID, &inReplyTo, &references, &threadID,
+			&m.ID, &m.AccountID, &m.FolderID, &uidI64, &messageID, &inReplyTo, &references, &threadID,
 			&m.Subject, &m.FromName, &m.FromEmail, &toList, &ccList, &bccList, &replyTo, &dateStr,
 			&snippet, &m.IsRead, &m.IsStarred, &m.IsAnswered, &m.IsForwarded, &m.IsDraft, &m.IsDeleted,
 			&m.Size, &m.HasAttachments, &bodyText, &bodyHTML, &m.BodyFetched,
@@ -1995,6 +2030,7 @@ func (s *Store) GetByIDs(ids []string) ([]*Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan message: %w", err)
 		}
+		m.UID = uint32(uidI64)
 
 		if messageID.Valid {
 			m.MessageID = messageID.String
