@@ -168,7 +168,10 @@
     "loadImages": "載入圖片",
     "alwaysLoad": "永遠載入",
     "forDomain": "針對 {domain}",
-    "forSender": "針對 {email}"
+    "forSender": "針對 {email}",
+    "focusThread": "專注模式（對話）",
+    "focusMessage": "專注模式（訊息）",
+    "exitFocus": "退出專注模式"
   },
   "composer": {
     "newMessage": "新郵件",

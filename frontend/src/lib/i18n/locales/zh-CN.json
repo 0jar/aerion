@@ -168,7 +168,10 @@
     "loadImages": "加载图片",
     "alwaysLoad": "始终加载",
     "forDomain": "针对 {domain}",
-    "forSender": "针对 {email}"
+    "forSender": "针对 {email}",
+    "focusThread": "专注模式（对话）",
+    "focusMessage": "专注模式（消息）",
+    "exitFocus": "退出专注模式"
   },
   "composer": {
     "newMessage": "新邮件",

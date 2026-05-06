@@ -168,7 +168,10 @@
     "loadImages": "Charger les images",
     "alwaysLoad": "Toujours charger",
     "forDomain": "Pour {domain}",
-    "forSender": "Pour {email}"
+    "forSender": "Pour {email}",
+    "focusThread": "Mode focus (conversation)",
+    "focusMessage": "Mode focus (message)",
+    "exitFocus": "Quitter le mode focus"
   },
   "composer": {
     "newMessage": "Nouveau message",

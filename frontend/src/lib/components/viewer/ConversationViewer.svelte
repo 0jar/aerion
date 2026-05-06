@@ -31,6 +31,12 @@
     isFlashing?: boolean
     showBackButton?: boolean
     onBack?: () => void
+    // Focus mode (whole thread or single message takes full window)
+    inFocusMode?: boolean
+    focusModeKind?: 'thread' | 'message' | null
+    focusedMessageIdInFocus?: string | null
+    onToggleThreadFocus?: () => void
+    onToggleMessageFocus?: (messageId: string) => void
   }
 
   let {
@@ -46,6 +52,11 @@
     isFlashing = false,
     showBackButton = false,
     onBack,
+    inFocusMode = false,
+    focusModeKind = null,
+    focusedMessageIdInFocus = null,
+    onToggleThreadFocus,
+    onToggleMessageFocus,
   }: Props = $props()
 
   // Track which messages have had their remote images loaded by the user
@@ -693,6 +704,10 @@
     return focusedMessageId !== null
   }
 
+  export function getFocusedMessageId(): string | null {
+    return focusedMessageId
+  }
+
   export function selectAllText() {
     const targetId = focusedMessageId ?? getLastMessageId()
     if (!targetId || !expandedMessages.has(targetId)) return
@@ -990,6 +1005,15 @@
   // Computed: is this the Spam folder?
   const isSpamFolder = $derived(folderType === 'spam')
 
+  // Computed: messages visible in the viewer.
+  // In message-focus mode, narrow to the single targeted message.
+  // Otherwise show the whole thread.
+  const visibleMessages = $derived(
+    inFocusMode && focusModeKind === 'message' && focusedMessageIdInFocus
+      ? (conversation?.messages?.filter(m => m.id === focusedMessageIdInFocus) ?? [])
+      : (conversation?.messages ?? [])
+  )
+
   // Reference to the scrollable content area
   let contentContainerRef = $state<HTMLDivElement | null>(null)
   const SCROLL_AMOUNT = 100 // pixels to scroll per keypress
@@ -1278,6 +1302,13 @@
         {/if}
         <button
           class="p-2 rounded-md hover:bg-muted transition-colors"
+          title={inFocusMode && focusModeKind === 'thread' ? $_('viewer.exitFocus') : $_('viewer.focusThread')}
+          onclick={onToggleThreadFocus}
+        >
+          <Icon icon={inFocusMode && focusModeKind === 'thread' ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'} class="w-5 h-5 text-muted-foreground" />
+        </button>
+        <button
+          class="p-2 rounded-md hover:bg-muted transition-colors"
           title={$_('viewer.print')}
           onclick={handlePrint}
         >
@@ -1304,8 +1335,9 @@
         <!-- Stacked Messages -->
         {#if conversation.messages}
           <div class="space-y-4">
-            {#each conversation.messages as msg, _index (msg.id)}
+            {#each visibleMessages as msg, _index (msg.id)}
               {@const isExpanded = expandedMessages.has(msg.id)}
+              {@const isFocusedMsg = inFocusMode && focusModeKind === 'message' && focusedMessageIdInFocus === msg.id}
 
               <!-- Wrap each message in its own context menu -->
               <MessageContextMenu
@@ -1450,6 +1482,13 @@
                         <Icon icon="mdi:pencil" class="w-4 h-4 text-muted-foreground" />
                       </button>
                     {/if}
+                    <button
+                      class="p-1 rounded hover:bg-muted transition-colors"
+                      title={isFocusedMsg ? $_('viewer.exitFocus') : $_('viewer.focusMessage')}
+                      onclick={(e) => { e.stopPropagation(); onToggleMessageFocus?.(msg.id) }}
+                    >
+                      <Icon icon={isFocusedMsg ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'} class="w-4 h-4 text-muted-foreground" />
+                    </button>
                     <Icon
                       icon={isExpanded ? 'mdi:chevron-up' : 'mdi:chevron-down'}
                       class="w-5 h-5 text-muted-foreground"

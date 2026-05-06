@@ -68,6 +68,41 @@
   let composerDraftId = $state<string | null>(null)
   let composerImagesLoaded = $state(false)
 
+  // Focus mode state — viewer (or single message) takes the whole window.
+  // Always resets on conversation change, on Esc, on back-arrow, and on app reload.
+  let focusMode = $state<'off' | 'thread' | 'message'>('off')
+  let focusedMessageIdInFocus = $state<string | null>(null)
+  const viewerIsOverlay = $derived(isResponsive() || focusMode !== 'off')
+  const viewerIsVisible = $derived(getResponsiveView() === 'viewer' || focusMode !== 'off')
+
+  function toggleThreadFocus() {
+    if (focusMode === 'thread') {
+      focusMode = 'off'
+      focusedMessageIdInFocus = null
+      return
+    }
+    focusMode = 'thread'
+    focusedMessageIdInFocus = null
+  }
+
+  function toggleMessageFocus(messageId: string) {
+    if (focusMode === 'message' && focusedMessageIdInFocus === messageId) {
+      focusMode = 'off'
+      focusedMessageIdInFocus = null
+      return
+    }
+    focusMode = 'message'
+    focusedMessageIdInFocus = messageId
+  }
+
+  // Auto-reset focus mode when the conversation changes (or is closed).
+  // Prevents focus state from leaking across navigation.
+  $effect(() => {
+    void selectedThreadId
+    focusMode = 'off'
+    focusedMessageIdInFocus = null
+  })
+
   // Shutdown state
   let isShuttingDown = $state(false)
 
@@ -539,6 +574,12 @@
     const accountId = resolveAccountId(selectedConversationAccountId) || resolveAccountId(selectedAccountId)
     if (!accountId) return
 
+    // Force detached composer when in focus mode — preserves the focused view
+    if (focusMode !== 'off') {
+      OpenComposerWindow(accountId, mode, messageId, '', '')
+      return
+    }
+
     try {
       // Call backend to prepare the reply message (backend gets account from message)
       const composeMessage = await PrepareReply(messageId, mode)
@@ -819,6 +860,8 @@
 
     // Handle Alt shortcuts (pane/folder navigation, always work)
     if (e.altKey) {
+      // Pane navigation is meaningless in focus mode (other panes hidden)
+      if (focusMode !== 'off') return
       switch (e.key) {
         case 'ArrowLeft':
         case 'h':
@@ -882,8 +925,13 @@
     if (inInput) return
 
     // Handle Escape (context-dependent, progressive)
-    // Responsive overlays first, then checkboxes, then conversation
+    // Focus mode first, then responsive overlays, then checkboxes, then conversation
     if (e.key === 'Escape') {
+      if (focusMode !== 'off') {
+        focusMode = 'off'
+        focusedMessageIdInFocus = null
+        return
+      }
       if (isResponsive() && getResponsiveView() === 'viewer') {
         hideViewer()
         return
@@ -999,6 +1047,30 @@
           }
         }
         return
+      case 'f':
+        // Toggle thread focus mode (only with a conversation open)
+        if (!hasConversation) return
+        e.preventDefault()
+        toggleThreadFocus()
+        return
+      case 'F': {
+        // Shift+F: toggle message focus on the currently Tab-focused message
+        // (falls back to last message if none focused)
+        if (!hasConversation) return
+        e.preventDefault()
+        if (focusMode === 'message') {
+          focusMode = 'off'
+          focusedMessageIdInFocus = null
+          return
+        }
+        const targetId = (focusedPane === 'viewer' && viewerRef?.hasFocusedMessage())
+          ? viewerRef.getFocusedMessageId()
+          : getLastMessageId()
+        if (!targetId) return
+        focusMode = 'message'
+        focusedMessageIdInFocus = targetId
+        return
+      }
       case 'Backspace':
       case 'Delete': {
         if (focusedPane === 'viewer' && viewerRef?.hasFocusedMessage()) {
@@ -1218,7 +1290,7 @@
 
     <!-- Conversation Viewer -->
     <main
-      class="{isResponsive() ? `responsive-viewer-overlay bg-background ${getResponsiveView() === 'viewer' ? 'responsive-viewer-visible' : ''}` : 'flex-1 min-w-0 bg-background'}"
+      class="{viewerIsOverlay ? `responsive-viewer-overlay bg-background ${viewerIsVisible ? 'responsive-viewer-visible' : ''}` : 'flex-1 min-w-0 bg-background'}"
       role="presentation"
       data-pane="viewer"
       onclick={() => handlePaneClick('viewer')}
@@ -1236,7 +1308,12 @@
         isFocused={getFocusedPane() === 'viewer'}
         isFlashing={isPaneFlashing('viewer')}
         showBackButton={isResponsive()}
-        onBack={hideViewer}
+        onBack={() => { focusMode = 'off'; focusedMessageIdInFocus = null; hideViewer() }}
+        inFocusMode={focusMode !== 'off'}
+        focusModeKind={focusMode === 'off' ? null : focusMode}
+        focusedMessageIdInFocus={focusedMessageIdInFocus}
+        onToggleThreadFocus={toggleThreadFocus}
+        onToggleMessageFocus={toggleMessageFocus}
       />
     </main>
   </div>

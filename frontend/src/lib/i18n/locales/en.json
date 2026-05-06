@@ -168,7 +168,10 @@
     "loadImages": "Load Images",
     "alwaysLoad": "Always Load",
     "forDomain": "For {domain}",
-    "forSender": "For {email}"
+    "forSender": "For {email}",
+    "focusThread": "Focus thread",
+    "focusMessage": "Focus message",
+    "exitFocus": "Exit focus mode"
   },
   "composer": {
     "newMessage": "New Message",
