@@ -158,11 +158,6 @@
           <li>Fixed iCloud Empty Trash - #136</li>
           <li>Added ESLint for frontend linting</li>
         </ul>
-        <p>Note:</p>
-        <ul>
-          <li>As of 2026-04-26, Aerion is CASA Tier 2 certified and verified by Google so OAuth2 signin is no longer blocked.</li>
-          <li>The linting and cleanup in v0.2.1 should bring visiable frontend performance improvements.</li>
-        </ul>
       </description>
     </release>
     <release version="0.2.0" date="2026-04-29">
