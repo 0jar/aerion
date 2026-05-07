@@ -353,6 +353,9 @@
       refreshTimer = null
     }
     messagesWithImagesLoaded.clear()
+    // Reset focused message on thread change so opening a thread starts fresh.
+    // Same-thread refreshes (handled via scheduleRefresh) preserve focus.
+    focusedMessageId = null
 
     if (threadId && folderId) {
       // Setting is already loaded on mount - no need to fetch on every conversation switch
