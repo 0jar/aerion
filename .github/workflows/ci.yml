@@ -29,13 +29,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
 
+      # main.go has `//go:embed all:frontend/dist`, so the frontend build
+      # output must exist before any Go package in the module can typecheck —
+      # including for golangci-lint which runs typecheck as part of linting.
+      - name: Build frontend (required for go:embed)
+        run: cd frontend && npm ci && npm run build
+
       - name: Run Go linter
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
-
-      - name: Install frontend dependencies
-        run: cd frontend && npm ci
 
       - name: Run frontend linter
         run: cd frontend && npm run lint
