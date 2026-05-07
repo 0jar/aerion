@@ -2,7 +2,7 @@
   // Load offline icon data before anything else
   import './lib/iconify-offline'
 
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import TitleBar from './lib/components/common/TitleBar.svelte'
   import Sidebar from './lib/components/sidebar/Sidebar.svelte'
   import MessageList from './lib/components/list/MessageList.svelte'
@@ -101,6 +101,22 @@
     void selectedThreadId
     focusMode = 'off'
     focusedMessageIdInFocus = null
+  })
+
+  // Route keyboard pane focus to the viewer while in focus mode so j/k/arrow
+  // shortcuts scroll the viewer, then restore the prior pane on exit.
+  let focusedPaneBeforeFocusMode: FocusablePane | null = null
+  $effect(() => {
+    const mode = focusMode
+    if (mode !== 'off' && focusedPaneBeforeFocusMode === null) {
+      focusedPaneBeforeFocusMode = untrack(() => getFocusedPane())
+      setFocusedPane('viewer')
+      return
+    }
+    if (mode === 'off' && focusedPaneBeforeFocusMode !== null) {
+      setFocusedPane(focusedPaneBeforeFocusMode)
+      focusedPaneBeforeFocusMode = null
+    }
   })
 
   // Shutdown state

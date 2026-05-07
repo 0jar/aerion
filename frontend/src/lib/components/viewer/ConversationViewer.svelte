@@ -1355,8 +1355,16 @@
                   class="border rounded-lg overflow-hidden transition-all {focusedMessageId === msg.id ? 'border-primary ring-2 ring-primary/20' : 'border-border'}"
                   data-message-id={msg.id}
                   tabindex="-1"
+                  role="button"
+                  aria-expanded={isExpanded}
                   onfocus={() => focusedMessageId = msg.id}
                   onblur={() => { if (focusedMessageId === msg.id) focusedMessageId = null }}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      toggleMessage(msg.id)
+                    }
+                  }}
                 >
                 <!-- Message Header (always visible, clickable to expand/collapse) -->
                 <div
