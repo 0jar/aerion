@@ -288,7 +288,7 @@ func (ops *draftOps) syncToIMAP(ctx context.Context, localDraft *draft.Draft, ms
 	draftsFolder, err := ops.getSpecialFolder(localDraft.AccountID, folder.TypeDrafts)
 	if err != nil || draftsFolder == nil {
 		log.Warn().Err(err).Str("account_id", localDraft.AccountID).Msg("No drafts folder found, skipping IMAP sync")
-		ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", "no drafts folder found")
+		_ = ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", "no drafts folder found")
 		emitStatus(draft.SyncStatusFailed, 0, "no drafts folder found")
 		return nil
 	}
@@ -297,7 +297,7 @@ func (ops *draftOps) syncToIMAP(ctx context.Context, localDraft *draft.Draft, ms
 	poolConn, err := ops.imapPool.GetConnection(ctx, localDraft.AccountID)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to get IMAP connection, will retry later")
-		ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
+		_ = ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
 		emitStatus(draft.SyncStatusFailed, 0, err.Error())
 		return nil
 	}
@@ -318,7 +318,7 @@ func (ops *draftOps) syncToIMAP(ctx context.Context, localDraft *draft.Draft, ms
 	rawMsg, err := msg.ToRFC822()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to build RFC822 message")
-		ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
+		_ = ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
 		emitStatus(draft.SyncStatusFailed, 0, err.Error())
 		return nil
 	}
@@ -343,7 +343,7 @@ func (ops *draftOps) syncToIMAP(ctx context.Context, localDraft *draft.Draft, ms
 		encryptedMsg, encErr := ops.smimeEncryptor.EncryptMessageToSelf(localDraft.AccountID, fromEmail, rawMsg)
 		if encErr != nil {
 			log.Error().Err(encErr).Msg("Failed to encrypt draft for IMAP sync")
-			ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", encErr.Error())
+			_ = ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", encErr.Error())
 			emitStatus(draft.SyncStatusFailed, 0, encErr.Error())
 			return nil
 		}
@@ -366,7 +366,7 @@ func (ops *draftOps) syncToIMAP(ctx context.Context, localDraft *draft.Draft, ms
 		encryptedMsg, encErr := ops.pgpEncryptor.EncryptMessageToSelf(localDraft.AccountID, fromEmail, rawMsg)
 		if encErr != nil {
 			log.Error().Err(encErr).Msg("Failed to PGP encrypt draft for IMAP sync")
-			ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", encErr.Error())
+			_ = ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", encErr.Error())
 			emitStatus(draft.SyncStatusFailed, 0, encErr.Error())
 			return nil
 		}
@@ -391,7 +391,7 @@ func (ops *draftOps) syncToIMAP(ctx context.Context, localDraft *draft.Draft, ms
 	uid, err := conn.AppendMessage(draftsFolder.Path, flags, time.Now(), rawMsg)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to append draft to IMAP")
-		ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
+		_ = ops.draftStore.UpdateSyncStatus(localDraft.ID, draft.SyncStatusFailed, 0, "", err.Error())
 		emitStatus(draft.SyncStatusFailed, 0, err.Error())
 		return nil
 	}

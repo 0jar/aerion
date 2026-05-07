@@ -146,8 +146,8 @@ func (c *BaseClient) Authenticate(ctx context.Context, token string) error {
 	decoder := json.NewDecoder(reader)
 
 	// Set read deadline
-	c.conn.SetReadDeadline(time.Now().Add(AuthTimeout))
-	defer c.conn.SetReadDeadline(time.Time{})
+	_ = c.conn.SetReadDeadline(time.Now().Add(AuthTimeout))
+	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 
 	responseChan := make(chan struct {
 		msg Message

@@ -243,7 +243,7 @@ func (m *Manager) RefreshToken(providerName, refreshToken string) (*TokenRespons
 			Error            string `json:"error"`
 			ErrorDescription string `json:"error_description"`
 		}
-		json.Unmarshal(body, &errResp)
+		_ = json.Unmarshal(body, &errResp)
 		return nil, fmt.Errorf("token refresh failed: %s - %s", errResp.Error, errResp.ErrorDescription)
 	}
 
@@ -309,7 +309,7 @@ func (m *Manager) exchangeCode(provider ProviderConfig, code, codeVerifier strin
 			Error            string `json:"error"`
 			ErrorDescription string `json:"error_description"`
 		}
-		json.Unmarshal(body, &errResp)
+		_ = json.Unmarshal(body, &errResp)
 		return nil, fmt.Errorf("token exchange failed (%d): %s - %s", resp.StatusCode, errResp.Error, errResp.ErrorDescription)
 	}
 

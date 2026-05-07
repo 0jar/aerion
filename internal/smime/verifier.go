@@ -155,7 +155,7 @@ func (v *Verifier) verifyMultipartSigned(raw []byte, params map[string]string) (
 
 	// Skip the first part (NextPart consumes the previous part internally)
 	if p, err := reader.NextPart(); err == nil {
-		io.Copy(io.Discard, p)
+		_, _ = io.Copy(io.Discard, p)
 	}
 
 	// Second part: the PKCS#7 detached signature

@@ -60,7 +60,7 @@ func testKeyring() bool {
 	}
 
 	// Clean up test value
-	gokeyring.Delete(serviceName, testKey)
+	_ = gokeyring.Delete(serviceName, testKey)
 
 	return true
 }
@@ -145,7 +145,7 @@ func (s *Store) GetPassword(accountID string) (string, error) {
 func (s *Store) DeletePassword(accountID string) error {
 	// Delete from OS keyring
 	if s.keyringEnabled {
-		gokeyring.Delete(serviceName, accountID)
+		_ = gokeyring.Delete(serviceName, accountID)
 	}
 
 	// Delete from database
@@ -156,13 +156,13 @@ func (s *Store) DeletePassword(accountID string) error {
 
 // clearDBPassword clears the encrypted password from the database
 func (s *Store) clearDBPassword(accountID string) {
-	s.db.Exec("UPDATE accounts SET encrypted_password = NULL WHERE id = ?", accountID)
+	_, _ = s.db.Exec("UPDATE accounts SET encrypted_password = NULL WHERE id = ?", accountID)
 }
 
 // DeleteAllCredentials removes all credentials for an account
 func (s *Store) DeleteAllCredentials(accountID string) error {
-	s.DeletePassword(accountID)
-	s.DeleteOAuthTokens(accountID)
+	_ = s.DeletePassword(accountID)
+	_ = s.DeleteOAuthTokens(accountID)
 	return nil
 }
 
@@ -254,7 +254,7 @@ func (s *Store) DeleteSMIMEPrivateKey(certID string) error {
 	keyringKey := "smime:" + certID + ":private_key"
 
 	if s.keyringEnabled {
-		gokeyring.Delete(serviceName, keyringKey)
+		_ = gokeyring.Delete(serviceName, keyringKey)
 	}
 
 	s.clearSMIMEDBPrivateKey(certID)
@@ -263,7 +263,7 @@ func (s *Store) DeleteSMIMEPrivateKey(certID string) error {
 
 // clearSMIMEDBPrivateKey clears the encrypted private key from the database
 func (s *Store) clearSMIMEDBPrivateKey(certID string) {
-	s.db.Exec("UPDATE smime_certificates SET encrypted_private_key = NULL WHERE id = ?", certID)
+	_, _ = s.db.Exec("UPDATE smime_certificates SET encrypted_private_key = NULL WHERE id = ?", certID)
 }
 
 // SetPGPPrivateKey stores a PGP private key for a keypair
@@ -349,7 +349,7 @@ func (s *Store) DeletePGPPrivateKey(keyID string) error {
 	keyringKey := "pgp:" + keyID + ":private_key"
 
 	if s.keyringEnabled {
-		gokeyring.Delete(serviceName, keyringKey)
+		_ = gokeyring.Delete(serviceName, keyringKey)
 	}
 
 	s.clearPGPDBPrivateKey(keyID)
@@ -358,7 +358,7 @@ func (s *Store) DeletePGPPrivateKey(keyID string) error {
 
 // clearPGPDBPrivateKey clears the encrypted private key from the database
 func (s *Store) clearPGPDBPrivateKey(keyID string) {
-	s.db.Exec("UPDATE pgp_keys SET encrypted_private_key = NULL WHERE id = ?", keyID)
+	_, _ = s.db.Exec("UPDATE pgp_keys SET encrypted_private_key = NULL WHERE id = ?", keyID)
 }
 
 // SetCardDAVPassword stores a password for a CardDAV contact source
@@ -441,7 +441,7 @@ func (s *Store) GetCardDAVPassword(sourceID string) (string, error) {
 func (s *Store) DeleteCardDAVPassword(sourceID string) error {
 	// Delete from OS keyring
 	if s.keyringEnabled {
-		gokeyring.Delete(serviceName, "carddav:"+sourceID)
+		_ = gokeyring.Delete(serviceName, "carddav:"+sourceID)
 	}
 
 	// Delete from database
@@ -452,5 +452,5 @@ func (s *Store) DeleteCardDAVPassword(sourceID string) error {
 
 // clearCardDAVDBPassword clears the encrypted password from the contact_sources table
 func (s *Store) clearCardDAVDBPassword(sourceID string) {
-	s.db.Exec("UPDATE contact_sources SET encrypted_password = NULL WHERE id = ?", sourceID)
+	_, _ = s.db.Exec("UPDATE contact_sources SET encrypted_password = NULL WHERE id = ?", sourceID)
 }

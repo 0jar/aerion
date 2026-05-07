@@ -134,7 +134,7 @@ func (v *Verifier) verifyMultipartSigned(raw []byte, params map[string]string) (
 
 	// Skip the first part
 	if p, err := reader.NextPart(); err == nil {
-		io.Copy(io.Discard, p)
+		_, _ = io.Copy(io.Discard, p)
 	}
 
 	// Second part: the PGP signature

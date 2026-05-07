@@ -252,7 +252,7 @@ func (a *App) OpenComposerWindow(accountID, mode, messageID, draftID, mailtoURL 
 	go func() {
 		defer recoverPanic("app.ipc", "write IPC token")
 		token := a.ipcTokenMgr.GetToken()
-		stdin.Write([]byte(token))
+		_, _ = stdin.Write([]byte(token))
 		stdin.Close()
 	}()
 
@@ -274,7 +274,7 @@ func (a *App) BroadcastThemeChange(theme string) {
 		return
 	}
 
-	a.ipcServer.Broadcast(msg)
+	_ = a.ipcServer.Broadcast(msg)
 }
 
 // BroadcastAccountUpdated notifies all composer windows that an account was updated.
@@ -290,7 +290,7 @@ func (a *App) BroadcastAccountUpdated(accountID string) {
 		return
 	}
 
-	a.ipcServer.Broadcast(msg)
+	_ = a.ipcServer.Broadcast(msg)
 }
 
 // BroadcastContactsUpdated notifies all composer windows that contacts were updated.
@@ -306,7 +306,7 @@ func (a *App) BroadcastContactsUpdated(accountID string) {
 		return
 	}
 
-	a.ipcServer.Broadcast(msg)
+	_ = a.ipcServer.Broadcast(msg)
 }
 
 // GetIPCAddress returns the IPC server address (for testing/debugging).

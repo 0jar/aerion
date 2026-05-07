@@ -218,8 +218,8 @@ func encodeSubject(subject string) string {
 // writeQuotedPrintable writes content using quoted-printable encoding
 func writeQuotedPrintable(w io.Writer, content string) {
 	qpWriter := quotedprintable.NewWriter(w)
-	qpWriter.Write([]byte(content))
-	qpWriter.Close()
+	_, _ = qpWriter.Write([]byte(content))
+	_ = qpWriter.Close()
 }
 
 // writeMultipartAlternative writes a multipart/alternative message

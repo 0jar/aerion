@@ -75,7 +75,9 @@ func (e *Engine) FetchMessageBody(ctx context.Context, accountID, messageID stri
 	if !ok || result == nil {
 		// Message no longer exists on server — clean up the ghost
 		e.log.Warn().Str("messageID", messageID).Uint32("uid", uid).Msg("Message not found on server, deleting ghost")
-		e.messageStore.Delete(messageID)
+		if delErr := e.messageStore.Delete(messageID); delErr != nil {
+			e.log.Debug().Err(delErr).Str("messageID", messageID).Msg("Failed to delete ghost message")
+		}
 		return nil, fmt.Errorf("message not found on server")
 	}
 

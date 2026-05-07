@@ -200,7 +200,7 @@ func (s *AttachmentStore) CreateBatch(attachments []*Attachment) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO attachments (id, message_id, filename, content_type, size, content_id, is_inline, local_path, content)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/hkdb/aerion/internal/logging"
 	"github.com/hkdb/aerion/internal/pgp"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -68,14 +69,20 @@ func (a *App) ImportPGPKeyFromPath(accountID, filePath, passphrase string) (*pgp
 	if hasPrivate {
 		if err := a.credStore.SetPGPPrivateKey(key.ID, []byte(armoredPrivate)); err != nil {
 			// Rollback: delete the key if private key storage fails
-			a.pgpStore.DeleteKey(key.ID)
+			if delErr := a.pgpStore.DeleteKey(key.ID); delErr != nil {
+				log := logging.WithComponent("app")
+				log.Warn().Err(delErr).Str("keyID", key.ID).Msg("Failed to roll back PGP key after private key storage failure")
+			}
 			return nil, fmt.Errorf("failed to store private key: %w", err)
 		}
 	}
 
 	// If this is the first key, set it as default on the account
 	if key.IsDefault {
-		a.pgpStore.SetDefaultKey(accountID, key.ID)
+		if err := a.pgpStore.SetDefaultKey(accountID, key.ID); err != nil {
+			log := logging.WithComponent("app")
+			log.Warn().Err(err).Str("keyID", key.ID).Msg("Failed to set default PGP key")
+		}
 	}
 
 	return &pgp.ImportResult{

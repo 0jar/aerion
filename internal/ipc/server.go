@@ -219,8 +219,8 @@ func (s *BaseServer) handleConnection(conn net.Conn) {
 // authenticateClient handles the authentication handshake.
 func (s *BaseServer) authenticateClient(client *serverClient) bool {
 	// Set read deadline for authentication
-	client.conn.SetReadDeadline(time.Now().Add(AuthTimeout))
-	defer client.conn.SetReadDeadline(time.Time{}) // Clear deadline
+	_ = client.conn.SetReadDeadline(time.Now().Add(AuthTimeout))
+	defer func() { _ = client.conn.SetReadDeadline(time.Time{}) }() // Clear deadline
 
 	reader := bufio.NewReaderSize(client.conn, ReadBufferSize)
 	decoder := json.NewDecoder(reader)
@@ -261,7 +261,9 @@ func (s *BaseServer) sendAuthResponse(client *serverClient, success bool, errMsg
 		Success: success,
 		Error:   errMsg,
 	})
-	s.sendToClient(client, response)
+	if err := s.sendToClient(client, response); err != nil {
+		slog.Debug("failed to send auth response", "client_id", client.id, "error", err)
+	}
 }
 
 // readLoop reads messages from a client until the connection is closed.
@@ -288,7 +290,9 @@ func (s *BaseServer) readLoop(client *serverClient) {
 		// Handle ping internally
 		if msg.Type == TypePing {
 			pong, _ := NewReply(msg, TypePong, nil)
-			s.sendToClient(client, pong)
+			if err := s.sendToClient(client, pong); err != nil {
+				slog.Debug("failed to send pong", "client_id", client.id, "error", err)
+			}
 			continue
 		}
 

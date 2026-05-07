@@ -14,7 +14,7 @@ func (e *Engine) computeThreadID(accountID string, m *message.Message) string {
 	// Parse references from JSON
 	var references []string
 	if m.References != "" {
-		json.Unmarshal([]byte(m.References), &references)
+		_ = json.Unmarshal([]byte(m.References), &references)
 	}
 
 	// Try to find existing thread

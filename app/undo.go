@@ -104,7 +104,7 @@ func (a *App) MoveLocalMessages(messageIDs []string, folderID string) error {
 				folderObj, err := a.folderStore.Get(sourceFolderID)
 				if err == nil && folderObj != nil {
 					totalCount, _ := a.messageStore.CountByFolder(sourceFolderID)
-					a.folderStore.UpdateCounts(sourceFolderID, totalCount, unreadCount)
+					_ = a.folderStore.UpdateCounts(sourceFolderID, totalCount, unreadCount)
 					folderCounts[sourceFolderID] = unreadCount
 				}
 			}
@@ -116,7 +116,7 @@ func (a *App) MoveLocalMessages(messageIDs []string, folderID string) error {
 			folderObj, err := a.folderStore.Get(folderID)
 			if err == nil && folderObj != nil {
 				totalCount, _ := a.messageStore.CountByFolder(folderID)
-				a.folderStore.UpdateCounts(folderID, totalCount, unreadCount)
+				_ = a.folderStore.UpdateCounts(folderID, totalCount, unreadCount)
 				folderCounts[folderID] = unreadCount
 			}
 		}

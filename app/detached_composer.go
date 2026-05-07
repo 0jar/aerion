@@ -127,7 +127,7 @@ func (c *ComposerApp) Startup(ctx context.Context) {
 	if c.debugMode != nil && c.debugMode() {
 		logLevel = "debug"
 	}
-	logging.Init(logging.Config{
+	_ = logging.Init(logging.Config{
 		Level:   logLevel,
 		Console: true,
 	})
@@ -162,7 +162,11 @@ func (c *ComposerApp) Startup(ctx context.Context) {
 	// Initialize vCard scanner for contact autocomplete (shared .vcf files)
 	vcardScanner := contact.NewVCardScanner(contact.DefaultVCardPaths(), 20*time.Minute)
 	c.contactStore.SetVCardScanner(vcardScanner)
-	go vcardScanner.Scan()
+	go func() {
+		if _, err := vcardScanner.Scan(); err != nil {
+			log.Debug().Err(err).Msg("vCard scan failed")
+		}
+	}()
 
 	// Initialize CardDAV search for contact autocomplete (reads from shared DB)
 	carddavStore := carddav.NewStore(db.DB)
@@ -351,7 +355,7 @@ func (c *ComposerApp) handleIPCMessage(msg ipc.Message) {
 
 	case ipc.TypeShutdown:
 		var payload ipc.ShutdownPayload
-		msg.ParsePayload(&payload)
+		_ = msg.ParsePayload(&payload)
 		log.Info().Str("reason", payload.Reason).Msg("Received shutdown request from main window")
 		// Emit event to frontend to prompt user
 		wailsRuntime.EventsEmit(c.ctx, "app:shutdown", payload.Reason)
@@ -416,7 +420,7 @@ func (c *ComposerApp) notifyReady() {
 	if err != nil {
 		return
 	}
-	c.ipcClient.Send(msg)
+	_ = c.ipcClient.Send(msg)
 }
 
 // notifyClosed sends a closed notification to the main window.
@@ -437,7 +441,7 @@ func (c *ComposerApp) notifyClosed() {
 	if err != nil {
 		return
 	}
-	c.ipcClient.Send(msg)
+	_ = c.ipcClient.Send(msg)
 }
 
 // notifyMessageSent sends a message-sent notification to the main window.
@@ -453,7 +457,7 @@ func (c *ComposerApp) notifyMessageSent(accountID string, folderID int64) {
 	if err != nil {
 		return
 	}
-	c.ipcClient.Send(msg)
+	_ = c.ipcClient.Send(msg)
 }
 
 // notifyDraftSaved sends a draft-saved notification to the main window.
@@ -469,7 +473,7 @@ func (c *ComposerApp) notifyDraftSaved(accountID string, draftID string) {
 	if err != nil {
 		return
 	}
-	c.ipcClient.Send(msg)
+	_ = c.ipcClient.Send(msg)
 }
 
 // notifyDraftDeleted sends a draft-deleted notification to the main window.
@@ -484,7 +488,7 @@ func (c *ComposerApp) notifyDraftDeleted(accountID string) {
 	if err != nil {
 		return
 	}
-	c.ipcClient.Send(msg)
+	_ = c.ipcClient.Send(msg)
 }
 
 // getIMAPCredentials returns IMAP credentials for an account.

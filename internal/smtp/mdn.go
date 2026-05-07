@@ -64,7 +64,7 @@ func BuildMDN(originalMsg *message.Message, fromName, fromEmail string, disposit
 	buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 	buf.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 	buf.WriteString("\r\n")
-	buf.WriteString(fmt.Sprintf("Your message\r\n\r\n"))
+	buf.WriteString("Your message\r\n\r\n")
 	buf.WriteString(fmt.Sprintf("  To: %s\r\n", fromEmail))
 	buf.WriteString(fmt.Sprintf("  Subject: %s\r\n", originalMsg.Subject))
 	buf.WriteString(fmt.Sprintf("  Sent: %s\r\n", originalMsg.Date.Format(time.RFC1123Z)))

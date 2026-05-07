@@ -118,7 +118,7 @@ func (l *linuxSingleInstanceLock) handleConnection(conn net.Conn) {
 	defer conn.Close()
 	log := logging.WithComponent("singleinstance")
 
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	scanner := bufio.NewScanner(conn)
 	// Limit scanner buffer to 2KB — no legitimate command exceeds this
 	scanner.Buffer(make([]byte, 2048), 2048)

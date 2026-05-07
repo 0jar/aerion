@@ -206,7 +206,9 @@ func (a *App) SubscribeAllFolders(accountID string) error {
 			log.Warn().Err(subErr).Str("folder", f.Path).Msg("Failed to subscribe")
 			continue
 		}
-		a.folderStore.UpdateSubscribed(f.ID, true)
+		if err := a.folderStore.UpdateSubscribed(f.ID, true); err != nil {
+			log.Warn().Err(err).Str("folder", f.Path).Msg("Failed to update subscribed flag")
+		}
 	}
 
 	log.Info().Str("accountID", accountID).Int("count", len(folders)).Msg("Subscribed to all folders")

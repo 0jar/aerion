@@ -40,7 +40,9 @@ func (a *App) AddAccount(config account.AccountConfig) (*account.Account, error)
 		if err := a.credStore.SetPassword(acc.ID, config.Password); err != nil {
 			log.Error().Err(err).Str("account_id", acc.ID).Msg("Failed to store password")
 			// Delete the account since we can't store credentials
-			a.accountStore.Delete(acc.ID)
+			if delErr := a.accountStore.Delete(acc.ID); delErr != nil {
+				log.Warn().Err(delErr).Str("account_id", acc.ID).Msg("Failed to roll back account after password storage failure")
+			}
 			return nil, fmt.Errorf("failed to store password: %w", err)
 		}
 	}
@@ -135,7 +137,10 @@ func (a *App) AddMicrosoftSharedMailbox(primaryAccountID, sharedEmail, displayNa
 	// Copy OAuth tokens to the new account
 	if tokenErr := a.credStore.SetOAuthTokens(acc.ID, tokens); tokenErr != nil {
 		// Clean up the account if token storage fails
-		a.accountStore.Delete(acc.ID)
+		if delErr := a.accountStore.Delete(acc.ID); delErr != nil {
+			log := logging.WithComponent("app")
+			log.Warn().Err(delErr).Str("account_id", acc.ID).Msg("Failed to roll back shared mailbox after token storage failure")
+		}
 		return nil, fmt.Errorf("failed to store OAuth tokens for shared mailbox: %w", tokenErr)
 	}
 
@@ -242,7 +247,9 @@ func (a *App) RemoveAccount(id string) error {
 	sharedMailboxes, _ := a.accountStore.ListBySharedMailboxParent(id)
 	for _, sm := range sharedMailboxes {
 		log.Info().Str("sharedID", sm.ID).Str("parentID", id).Msg("Cascade deleting shared mailbox")
-		a.RemoveAccount(sm.ID)
+		if err := a.RemoveAccount(sm.ID); err != nil {
+			log.Warn().Err(err).Str("sharedID", sm.ID).Msg("Failed to cascade-delete shared mailbox")
+		}
 	}
 
 	// Stop IDLE for this account

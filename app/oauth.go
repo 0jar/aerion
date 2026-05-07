@@ -192,7 +192,9 @@ func (a *App) CompleteOAuthAccountSetup(provider, email, accountName, displayNam
 	if err := a.credStore.SetOAuthTokens(acc.ID, tokens); err != nil {
 		// Rollback: delete the account if we can't save tokens
 		log.Error().Err(err).Str("accountID", acc.ID).Msg("Failed to save OAuth tokens, rolling back account creation")
-		a.accountStore.Delete(acc.ID)
+		if delErr := a.accountStore.Delete(acc.ID); delErr != nil {
+			log.Warn().Err(delErr).Str("accountID", acc.ID).Msg("Failed to roll back account after token save failure")
+		}
 		return nil, fmt.Errorf("failed to save OAuth tokens: %w", err)
 	}
 

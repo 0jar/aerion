@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/hkdb/aerion/internal/logging"
 	"github.com/hkdb/aerion/internal/smime"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -93,13 +94,19 @@ func (a *App) storeSMIMECert(accountID string, privateKeyPEM []byte, certChainPE
 	// Store the private key securely
 	if err := a.credStore.SetSMIMEPrivateKey(cert.ID, privateKeyPEM); err != nil {
 		// Rollback: delete the cert if key storage fails
-		a.smimeStore.DeleteCertificate(cert.ID)
+		if delErr := a.smimeStore.DeleteCertificate(cert.ID); delErr != nil {
+			log := logging.WithComponent("app")
+			log.Warn().Err(delErr).Str("certID", cert.ID).Msg("Failed to roll back S/MIME cert after private key storage failure")
+		}
 		return nil, fmt.Errorf("failed to store private key: %w", err)
 	}
 
 	// If this is the first cert, set it as default on the account
 	if cert.IsDefault {
-		a.smimeStore.SetDefaultCertificate(accountID, cert.ID)
+		if err := a.smimeStore.SetDefaultCertificate(accountID, cert.ID); err != nil {
+			log := logging.WithComponent("app")
+			log.Warn().Err(err).Str("certID", cert.ID).Msg("Failed to set default S/MIME cert")
+		}
 	}
 
 	// Count chain length (leaf + intermediates)

@@ -81,5 +81,5 @@ func showGBMFixDialog() {
 			"Then restart Aerion.",
 		"--width=500",
 	)
-	cmd.Start()
+	_ = cmd.Start()
 }

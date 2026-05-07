@@ -411,12 +411,12 @@ func (ops *composeOps) sendMessage(ctx context.Context, accountID string, msg sm
 		}
 	}
 
-	// Add recipients to local contacts
+	// Add recipients to local contacts (best-effort; send already succeeded)
 	for _, to := range msg.To {
-		ops.contactStore.AddOrUpdate(to.Address, to.Name)
+		_ = ops.contactStore.AddOrUpdate(to.Address, to.Name)
 	}
 	for _, cc := range msg.Cc {
-		ops.contactStore.AddOrUpdate(cc.Address, cc.Name)
+		_ = ops.contactStore.AddOrUpdate(cc.Address, cc.Name)
 	}
 
 	// Delete draft if one was provided (send already succeeded — log errors, don't fail)
@@ -498,7 +498,12 @@ func (a *App) SendMessage(accountID string, msg smtp.ComposeMessage) error {
 	if err != nil {
 		return err
 	}
-	go a.syncSentFolder(accountID)
+	go func() {
+		if err := a.syncSentFolder(accountID); err != nil {
+			log := logging.WithComponent("app")
+			log.Debug().Err(err).Str("accountID", accountID).Msg("Sent folder sync failed")
+		}
+	}()
 	return nil
 }
 
@@ -523,7 +528,9 @@ func (a *App) handleExternalMailto(rawURL string) {
 			log.Warn().Msg("No accounts available for mailto")
 			return
 		}
-		a.OpenComposerWindow(accounts[0].ID, "new", "", "", rawURL)
+		if err := a.OpenComposerWindow(accounts[0].ID, "new", "", "", rawURL); err != nil {
+			log.Warn().Err(err).Msg("Failed to open detached composer for mailto")
+		}
 		return
 	}
 
@@ -744,7 +751,7 @@ func (a *App) PrepareReply(messageID, mode string) (*smtp.ComposeMessage, error)
 	var refs []string
 	if msg.References != "" {
 		// References are stored as a JSON array in the DB
-		json.Unmarshal([]byte(msg.References), &refs)
+		_ = json.Unmarshal([]byte(msg.References), &refs)
 	}
 	if msg.MessageID != "" {
 		refs = append(refs, ensureAngleBrackets(msg.MessageID))

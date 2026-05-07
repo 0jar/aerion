@@ -86,14 +86,14 @@ func (k *Keyring) GetOAuthTokens(accountID string) (accessToken, refreshToken st
 
 // DeleteOAuthTokens removes OAuth2 tokens for an account
 func (k *Keyring) DeleteOAuthTokens(accountID string) error {
-	gokeyring.Delete(serviceName, accountID+":access_token")
-	gokeyring.Delete(serviceName, accountID+":refresh_token")
+	_ = gokeyring.Delete(serviceName, accountID+":access_token")
+	_ = gokeyring.Delete(serviceName, accountID+":refresh_token")
 	return nil
 }
 
 // DeleteAllCredentials removes all credentials for an account
 func (k *Keyring) DeleteAllCredentials(accountID string) error {
-	k.DeletePassword(accountID)
-	k.DeleteOAuthTokens(accountID)
+	_ = k.DeletePassword(accountID)
+	_ = k.DeleteOAuthTokens(accountID)
 	return nil
 }

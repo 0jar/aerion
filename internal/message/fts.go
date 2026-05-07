@@ -188,19 +188,18 @@ func (f *FTSIndexer) IndexFolder(ctx context.Context, folderID string) error {
 
 			if err := rows.Scan(&rowid, &subject, &fromName, &fromEmail, &toList, &ccList, &snippet, &bodyText); err != nil {
 				rows.Close()
-				tx.Rollback()
+				_ = tx.Rollback()
 				return fmt.Errorf("failed to scan message: %w", err)
 			}
 
 			// Check if already in FTS index (use INSERT OR REPLACE pattern)
 			// First delete if exists, then insert
-			_, err = tx.ExecContext(ctx, `
+			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_email, to_list, cc_list, snippet, body_text)
 				SELECT 'delete', ?, ?, ?, ?, ?, ?, ?, ?
 				WHERE EXISTS (SELECT 1 FROM messages_fts WHERE rowid = ?)
-			`, rowid, subject.String, fromName.String, fromEmail.String, toList.String, ccList.String, snippet.String, bodyText.String, rowid)
-			if err != nil {
-				// Ignore delete errors, row might not exist
+			`, rowid, subject.String, fromName.String, fromEmail.String, toList.String, ccList.String, snippet.String, bodyText.String, rowid); err != nil {
+				logging.Debug().Err(err).Int64("rowid", rowid).Msg("FTS pre-delete failed (row may not exist)")
 			}
 
 			_, err = tx.ExecContext(ctx, `
@@ -209,7 +208,7 @@ func (f *FTSIndexer) IndexFolder(ctx context.Context, folderID string) error {
 			`, rowid, subject.String, fromName.String, fromEmail.String, toList.String, ccList.String, snippet.String, bodyText.String)
 			if err != nil {
 				rows.Close()
-				tx.Rollback()
+				_ = tx.Rollback()
 				return fmt.Errorf("failed to insert into FTS: %w", err)
 			}
 

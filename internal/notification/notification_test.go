@@ -4,8 +4,11 @@ import "testing"
 
 func TestNotificationStruct(t *testing.T) {
 	tests := []struct {
-		name  string
-		notif Notification
+		name      string
+		notif     Notification
+		wantTitle string
+		wantBody  string
+		wantIcon  string
 	}{
 		{
 			name: "all fields populated",
@@ -19,6 +22,9 @@ func TestNotificationStruct(t *testing.T) {
 					ThreadID:  "thread-42",
 				},
 			},
+			wantTitle: "New Message",
+			wantBody:  "You have a new email from Alice",
+			wantIcon:  "/path/to/icon.png",
 		},
 		{
 			name: "minimal fields",
@@ -26,19 +32,22 @@ func TestNotificationStruct(t *testing.T) {
 				Title: "Alert",
 				Body:  "Something happened",
 			},
+			wantTitle: "Alert",
+			wantBody:  "Something happened",
+			wantIcon:  "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.notif.Title != tt.notif.Title {
-				t.Error("Title field mismatch")
+			if tt.notif.Title != tt.wantTitle {
+				t.Errorf("Title = %q, want %q", tt.notif.Title, tt.wantTitle)
 			}
-			if tt.notif.Body != tt.notif.Body {
-				t.Error("Body field mismatch")
+			if tt.notif.Body != tt.wantBody {
+				t.Errorf("Body = %q, want %q", tt.notif.Body, tt.wantBody)
 			}
-			if tt.notif.Icon != tt.notif.Icon {
-				t.Error("Icon field mismatch")
+			if tt.notif.Icon != tt.wantIcon {
+				t.Errorf("Icon = %q, want %q", tt.notif.Icon, tt.wantIcon)
 			}
 		})
 	}

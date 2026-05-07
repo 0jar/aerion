@@ -320,7 +320,7 @@ func (a *App) Startup(ctx context.Context) {
 	if a.debugMode != nil && a.debugMode() {
 		logLevel = "debug"
 	}
-	logging.Init(logging.Config{
+	_ = logging.Init(logging.Config{
 		Level:   logLevel,
 		Console: true,
 	})
@@ -376,7 +376,11 @@ func (a *App) Startup(ctx context.Context) {
 	vcardScanner := contact.NewVCardScanner(contact.DefaultVCardPaths(), 20*time.Minute)
 	a.contactStore.SetVCardScanner(vcardScanner)
 	// Trigger initial scan in background
-	go vcardScanner.Scan()
+	go func() {
+		if _, err := vcardScanner.Scan(); err != nil {
+			log.Debug().Err(err).Msg("vCard scan failed")
+		}
+	}()
 
 	// Initialize CardDAV support (will be fully set up after credStore is initialized)
 	a.carddavStore = carddav.NewStore(db.DB)
@@ -727,11 +731,13 @@ func (a *App) Shutdown(ctx context.Context) {
 			msg, _ := ipc.NewMessage(ipc.TypeShutdown, ipc.ShutdownPayload{
 				Reason: "main window closing",
 			})
-			a.ipcServer.Broadcast(msg)
+			if err := a.ipcServer.Broadcast(msg); err != nil {
+				log.Debug().Err(err).Msg("Failed to broadcast shutdown to composer windows")
+			}
 			// Give composers a moment to save drafts
 			time.Sleep(500 * time.Millisecond)
 		}
-		a.ipcServer.Stop()
+		_ = a.ipcServer.Stop()
 		log.Info().Msg("IPC server stopped")
 	}
 
@@ -749,19 +755,19 @@ func (a *App) Shutdown(ctx context.Context) {
 
 	// Stop sleep/wake monitor
 	if a.sleepWakeMonitor != nil {
-		a.sleepWakeMonitor.Stop()
+		_ = a.sleepWakeMonitor.Stop()
 		log.Info().Msg("Sleep/wake monitor stopped")
 	}
 
 	// Stop network monitor
 	if a.networkMonitor != nil {
-		a.networkMonitor.Stop()
+		_ = a.networkMonitor.Stop()
 		log.Info().Msg("Network monitor stopped")
 	}
 
 	// Stop theme monitor
 	if a.themeMonitor != nil {
-		a.themeMonitor.Stop()
+		_ = a.themeMonitor.Stop()
 		log.Info().Msg("Theme monitor stopped")
 	}
 

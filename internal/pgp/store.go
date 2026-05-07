@@ -128,7 +128,7 @@ func (s *Store) SetDefaultKey(accountID, keyID string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Clear existing defaults for this account
 	if _, err := tx.Exec(

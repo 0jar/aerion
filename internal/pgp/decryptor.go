@@ -110,7 +110,7 @@ func (d *Decryptor) DecryptMessage(accountID, recipientEmail string, raw []byte)
 
 	// Part 1: PGP/MIME version identification (skip it)
 	if p, err := reader.NextPart(); err == nil {
-		io.Copy(io.Discard, p)
+		_, _ = io.Copy(io.Discard, p)
 	}
 
 	// Part 2: The encrypted data

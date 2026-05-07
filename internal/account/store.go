@@ -460,7 +460,7 @@ func (s *Store) Reorder(ids []string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for i, id := range ids {
 		_, err := tx.Exec("UPDATE accounts SET order_index = ? WHERE id = ?", i, id)
@@ -685,7 +685,7 @@ func (s *Store) SetDefaultIdentity(accountID, identityID string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Unset current default
 	_, err = tx.Exec("UPDATE identities SET is_default = 0 WHERE account_id = ?", accountID)

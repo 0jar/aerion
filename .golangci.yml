@@ -1,0 +1,25 @@
+run:
+  timeout: 5m
+
+linters:
+  disable:
+    # Wails-bound methods, OpenPGP/S/MIME helper APIs, and OAuth flow
+    # callbacks look unused to the linter but are reachable via runtime
+    # bindings or kept as deliberate API surface. Revisit once we have
+    # explicit tagging for Wails-exported methods.
+    - unused
+
+issues:
+  exclude-rules:
+    # CardDAV interop carries deliberate workarounds for non-compliant
+    # servers. Skip lint enforcement here so cleanup edits do not regress
+    # those compatibility paths.
+    - path: internal/carddav/
+      linters:
+        - errcheck
+        - staticcheck
+        - gosimple
+        - ineffassign
+    - path: app/carddav.go
+      linters:
+        - errcheck
