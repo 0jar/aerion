@@ -29,18 +29,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
 
-      - name: Install golangci-lint
+      - name: Run Go linter
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
-          args: --version
-          install-mode: binary
 
       - name: Install frontend dependencies
         run: cd frontend && npm ci
 
-      - name: Run lint
-        run: make lint
+      - name: Run frontend linter
+        run: cd frontend && npm run lint
 
   check:
     name: Type check
@@ -75,10 +73,23 @@ jobs:
           go-version: '1.24'
           cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      # main.go has `//go:embed all:frontend/dist`, so the frontend build
+      # output must exist before any package in the module can compile —
+      # including for `go test ./...`.
+      - name: Build frontend (required for go:embed)
+        run: cd frontend && npm ci && npm run build
 
       - name: Run Go tests
         run: make test
