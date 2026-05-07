@@ -276,35 +276,35 @@
       // Only handle if viewer pane is focused
       if (!isFocused) return
 
-      // Handle Tab for message navigation
+      // Handle Tab for message navigation. preventDefault is called only when
+      // we actually navigate, so at the first/last boundary native Tab passes
+      // through and the user can leave the viewer normally.
       if (e.key === 'Tab' && conversation?.messages) {
-        e.preventDefault()
-
         const messageIds = conversation.messages.map(m => m.id)
         const currentIndex = focusedMessageId ? messageIds.indexOf(focusedMessageId) : -1
 
         if (e.shiftKey) {
-          // Shift+Tab - navigate backward
           if (currentIndex > 0) {
+            e.preventDefault()
             focusedMessageId = messageIds[currentIndex - 1]
-            // Focus the message element
-            ;(document.querySelector(`[data-message-id="${focusedMessageId}"]`) as HTMLElement)?.focus()
-          } else {
-            // At first message, clear focus to let Tab navigate out
-            focusedMessageId = null
-          }
-        } else {
-          // Tab - navigate forward
-          if (currentIndex < messageIds.length - 1) {
-            focusedMessageId = messageIds[currentIndex + 1]
-            // Focus the message element
-            ;(document.querySelector(`[data-message-id="${focusedMessageId}"]`) as HTMLElement)?.focus()
-          } else if (currentIndex === -1 && messageIds.length > 0) {
-            // No message focused yet, focus first message
-            focusedMessageId = messageIds[0]
             ;(document.querySelector(`[data-message-id="${focusedMessageId}"]`) as HTMLElement)?.focus()
           }
+          // currentIndex <= 0: let native Shift+Tab navigate out of the viewer
+          return
         }
+
+        if (currentIndex >= 0 && currentIndex < messageIds.length - 1) {
+          e.preventDefault()
+          focusedMessageId = messageIds[currentIndex + 1]
+          ;(document.querySelector(`[data-message-id="${focusedMessageId}"]`) as HTMLElement)?.focus()
+          return
+        }
+        if (currentIndex === -1 && messageIds.length > 0) {
+          e.preventDefault()
+          focusedMessageId = messageIds[0]
+          ;(document.querySelector(`[data-message-id="${focusedMessageId}"]`) as HTMLElement)?.focus()
+        }
+        // At last message (currentIndex === messageIds.length - 1): let native Tab navigate out
         return
       }
 
@@ -1371,6 +1371,7 @@
                   class="w-full flex items-start gap-3 p-4 text-left hover:bg-muted/50 transition-colors cursor-pointer {!isExpanded ? 'bg-muted/30' : ''}"
                   onclick={() => toggleMessage(msg.id)}
                   onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleMessage(msg.id) }}
+                  onfocus={() => focusedMessageId = msg.id}
                   role="button"
                   tabindex="0"
                 >
