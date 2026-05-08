@@ -4,8 +4,11 @@
 ---
 
 - Made contact circles themeable
+- Added Adwaita Light/Dark themes
 - Added Catppuccin Mocha theme
 - Added Catppuccin Latte theme
+- Added Dracula theme
+- Added Toky Night theme
 
 
 **v0.2.1 - 05-07-2026**

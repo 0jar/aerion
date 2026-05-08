@@ -16,7 +16,7 @@ export type ThemeMode =
   | 'light' | 'light-blue' | 'light-orange' | 'light-balanced' | 'adwaita-light'
   | 'dark' | 'dark-gray' | 'dark-balanced' | 'adwaita-dark'
   | 'catppuccin-latte' | 'catppuccin-mocha'
-  | 'dracula'
+  | 'dracula' | 'tokyo-night'
 
 // Module-level reactive state
 let messageListDensity = $state<MessageListDensity>('standard')

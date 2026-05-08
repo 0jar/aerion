@@ -152,8 +152,11 @@
       <description>
         <ul>
           <li>Made contact circles themeable</li>
+          <li>Added Adwaita Light/Dark themes</li>
           <li>Added Catppuccin Mocha theme</li>
           <li>Added Catppuccin Latte theme</li>
+          <li>Added Dracula theme</li>
+          <li>Added Tokyo Night theme</li>
         </ul>
       </description>
     </release>

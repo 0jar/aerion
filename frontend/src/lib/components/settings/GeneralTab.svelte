@@ -87,6 +87,7 @@
     { value: 'adwaita-dark', label: 'Adwaita (Dark)' },
     { value: 'catppuccin-mocha', label: 'Catppuccin Mocha' },
     { value: 'dracula', label: 'Dracula' },
+    { value: 'tokyo-night', label: 'Tokyo Night' },
   ])
 
   function getDensityLabel(value: string): string {
