@@ -17,6 +17,7 @@ export type ThemeMode =
   | 'dark' | 'dark-gray' | 'dark-balanced' | 'adwaita-dark' | 'breeze-dark'
   | 'catppuccin-latte' | 'catppuccin-mocha'
   | 'dracula' | 'tokyo-night'
+  | 'nord-light' | 'nord-dark'
 
 // Module-level reactive state
 let messageListDensity = $state<MessageListDensity>('standard')
