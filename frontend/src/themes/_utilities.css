@@ -26,6 +26,7 @@
 [data-theme="catppuccin-mocha"] mark,
 [data-theme="dracula"] mark,
 [data-theme="nord-dark"] mark,
+[data-theme="pop-dark"] mark,
 [data-theme="tokyo-night"] mark {
   background-color: hsl(var(--primary) / 0.35);
 }

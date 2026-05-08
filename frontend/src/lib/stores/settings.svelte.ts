@@ -18,6 +18,7 @@ export type ThemeMode =
   | 'catppuccin-latte' | 'catppuccin-mocha'
   | 'dracula' | 'tokyo-night'
   | 'nord-light' | 'nord-dark'
+  | 'pop-light' | 'pop-dark'
 
 // Module-level reactive state
 let messageListDensity = $state<MessageListDensity>('standard')

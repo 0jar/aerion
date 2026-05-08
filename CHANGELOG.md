@@ -9,6 +9,7 @@
 - Added Dracula theme
 - Added Toky Night theme
 - Added Nord Light/Dark themes
+- Added Pop! Light/Dark themes
 - Added Adwaita Light/Dark themes
 - Added Breeze Light/Dark themes
 
