@@ -1,5 +1,13 @@
 # CHANGELOG
 
+**v0.2.2 - 05-09-2026**
+---
+
+- Made contact circles themeable
+- Added Catppuccin Mocha theme
+- Added Catppuccin Latte theme
+
+
 **v0.2.1 - 05-07-2026**
 ---
 

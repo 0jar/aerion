@@ -186,6 +186,47 @@
     --ring: 215 10% 50%;
   }
 
+  /* Catppuccin Latte — palette mapping from catppuccin/shadcn-ui (latte-mauve)
+     with Aerion-specific --ring override (mauve, matching --primary convention). */
+  [data-theme="catppuccin-latte"] {
+    --background: 220 23% 95%;           /* base #EFF1F5 */
+    --foreground: 234 16% 35%;           /* text #4C4F69 */
+    --card: 220 23% 95%;                 /* base */
+    --card-foreground: 234 16% 35%;      /* text */
+    --popover: 220 23% 95%;              /* base */
+    --popover-foreground: 234 16% 35%;   /* text */
+    --primary: 266 85% 58%;              /* mauve #8839EF */
+    --primary-foreground: 220 23% 95%;   /* base */
+    --secondary: 223 16% 83%;            /* surface0 #CCD0DA */
+    --secondary-foreground: 234 16% 35%; /* text */
+    --muted: 223 16% 83%;                /* surface0 */
+    --muted-foreground: 233 13% 41%;     /* subtext1 #5C5F77 */
+    --accent: 223 16% 83%;               /* surface0 */
+    --accent-foreground: 234 16% 35%;    /* text */
+    --destructive: 347 87% 44%;          /* red #D20F39 */
+    --destructive-foreground: 220 23% 95%; /* base */
+    --border: 225 14% 77%;               /* surface1 #BCC0CC */
+    --input: 225 14% 77%;                /* surface1 */
+    --ring: 266 85% 58%;                 /* mauve */
+    /* Avatar palette: 14 distinct Catppuccin Latte colors with white initials.
+       Latte uses saturated mid-lightness colors, so white text works (like Tailwind defaults). */
+    --avatar-fg: 0 0% 100%;              /* white */
+    --avatar-1:  11 56% 67%;             /* rosewater */
+    --avatar-2:  0 60% 67%;              /* flamingo */
+    --avatar-3:  316 73% 69%;            /* pink */
+    --avatar-4:  266 85% 58%;            /* mauve */
+    --avatar-5:  347 87% 44%;            /* red */
+    --avatar-6:  355 76% 59%;            /* maroon */
+    --avatar-7:  22 99% 52%;             /* peach */
+    --avatar-8:  35 77% 49%;             /* yellow */
+    --avatar-9:  109 58% 40%;            /* green */
+    --avatar-10: 183 74% 35%;            /* teal */
+    --avatar-11: 197 97% 46%;            /* sky */
+    --avatar-12: 189 70% 42%;            /* sapphire */
+    --avatar-13: 220 91% 54%;            /* blue */
+    --avatar-14: 231 97% 72%;            /* lavender */
+  }
+
   /* Catppuccin Mocha — palette mapping from catppuccin/shadcn-ui (mocha-mauve)
      with Aerion-specific --ring override (mauve, matching --primary convention). */
   [data-theme="catppuccin-mocha"] {

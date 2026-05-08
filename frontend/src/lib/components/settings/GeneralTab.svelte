@@ -79,6 +79,7 @@
     { value: 'light-blue', label: $_('settingsGeneral.themeLightBlue') },
     { value: 'light-orange', label: $_('settingsGeneral.themeLightOrange') },
     { value: 'light-balanced', label: $_('settingsGeneral.themeLightBalanced') },
+    { value: 'catppuccin-latte', label: 'Catppuccin Latte' },
     { value: 'dark', label: $_('settingsGeneral.themeDark') },
     { value: 'dark-gray', label: $_('settingsGeneral.themeDarkGray') },
     { value: 'dark-balanced', label: $_('settingsGeneral.themeDarkBalanced') },
