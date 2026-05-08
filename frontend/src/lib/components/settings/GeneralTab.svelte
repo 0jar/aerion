@@ -90,8 +90,8 @@
     { value: 'breeze-dark', label: 'Breeze (Dark)' },
     { value: 'catppuccin-mocha', label: 'Catppuccin Mocha' },
     { value: 'dracula', label: 'Dracula' },
-    { value: 'tokyo-night', label: 'Tokyo Night' },
     { value: 'nord-dark', label: 'Nord (Dark)' },
+    { value: 'tokyo-night', label: 'Tokyo Night' },
   ])
 
   function getDensityLabel(value: string): string {
