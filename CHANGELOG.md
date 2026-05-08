@@ -1,5 +1,22 @@
 # CHANGELOG
 
+**v0.2.2 - 05-09-2026**
+---
+
+- Made contact circles themeable
+- Added live theme change preview
+- Added Adwaita themes (Light/Dark)
+- Added Breeze themes (Light/Dark)
+- Added Catppuccin themes (Latte/Frappe/Macchiato/Mocha)
+- Added Dracula theme
+- Added Github themes (Light/Soft Dark/Dark)
+- Added Tokyo Night theme
+- Added Nord themes (Light/Dark)
+- Added Pop! themes (Light/Dark)
+- Added VS Code themes (Light/Dark)
+- Added Yaru themes (Light/Dark)
+
+
 **v0.2.1 - 05-07-2026**
 ---
 
