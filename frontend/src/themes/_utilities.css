@@ -28,9 +28,11 @@
 [data-theme="catppuccin-mocha"] mark,
 [data-theme="dracula"] mark,
 [data-theme="github-dark"] mark,
+[data-theme="github-soft-dark"] mark,
 [data-theme="nord-dark"] mark,
 [data-theme="pop-dark"] mark,
 [data-theme="tokyo-night"] mark,
+[data-theme="vs-code-dark"] mark,
 [data-theme="yaru-dark"] mark {
   background-color: hsl(var(--primary) / 0.35);
 }

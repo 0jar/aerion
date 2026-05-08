@@ -85,6 +85,7 @@
     { value: 'github-light', label: 'GitHub (Light)' },
     { value: 'nord-light', label: 'Nord (Light)' },
     { value: 'pop-light', label: 'Pop! (Light)' },
+    { value: 'vs-code-light', label: 'VS Code (Light)' },
     { value: 'yaru-light', label: 'Yaru (Light)' },
     { value: 'dark', label: $_('settingsGeneral.themeDark') },
     { value: 'dark-gray', label: $_('settingsGeneral.themeDarkGray') },
@@ -96,9 +97,11 @@
     { value: 'catppuccin-mocha', label: 'Catppuccin Mocha' },
     { value: 'dracula', label: 'Dracula' },
     { value: 'github-dark', label: 'GitHub (Dark)' },
+    { value: 'github-soft-dark', label: 'GitHub (Soft Dark)' },
     { value: 'nord-dark', label: 'Nord (Dark)' },
     { value: 'pop-dark', label: 'Pop! (Dark)' },
     { value: 'tokyo-night', label: 'Tokyo Night' },
+    { value: 'vs-code-dark', label: 'VS Code (Dark)' },
     { value: 'yaru-dark', label: 'Yaru (Dark)' },
   ])
 

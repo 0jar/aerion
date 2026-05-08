@@ -16,10 +16,11 @@ export type ThemeMode =
   | 'light' | 'light-blue' | 'light-orange' | 'light-balanced' | 'adwaita-light' | 'breeze-light'
   | 'dark' | 'dark-gray' | 'dark-balanced' | 'adwaita-dark' | 'breeze-dark'
   | 'catppuccin-latte' | 'catppuccin-frappe' | 'catppuccin-macchiato' | 'catppuccin-mocha'
-  | 'dracula' | 'github-light' | 'github-dark' | 'tokyo-night'
+  | 'dracula' | 'github-light' | 'github-dark' | 'github-soft-dark' | 'tokyo-night'
   | 'nord-light' | 'nord-dark'
   | 'pop-light' | 'pop-dark'
   | 'yaru-light' | 'yaru-dark'
+  | 'vs-code-light' | 'vs-code-dark'
 
 // Module-level reactive state
 let messageListDensity = $state<MessageListDensity>('standard')

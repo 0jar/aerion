@@ -76,6 +76,7 @@ const (
 	ThemeModeDracula         = "dracula"          // Dracula
 	ThemeModeGithubLight     = "github-light"     // GitHub Light
 	ThemeModeGithubDark      = "github-dark"      // GitHub Dark
+	ThemeModeGithubSoftDark  = "github-soft-dark" // GitHub Soft Dark
 	ThemeModeTokyoNight      = "tokyo-night"      // Tokyo Night
 	ThemeModeNordLight       = "nord-light"       // Nord Light
 	ThemeModeNordDark        = "nord-dark"        // Nord Dark
@@ -83,6 +84,8 @@ const (
 	ThemeModePopDark         = "pop-dark"         // Pop! Dark
 	ThemeModeYaruLight       = "yaru-light"       // Yaru Light
 	ThemeModeYaruDark        = "yaru-dark"        // Yaru Dark
+	ThemeModeVSCodeLight     = "vs-code-light"    // VS Code Light
+	ThemeModeVSCodeDark      = "vs-code-dark"     // VS Code Dark
 )
 
 // DefaultThemeMode is the default theme mode
@@ -332,12 +335,12 @@ func (s *Store) SetThemeMode(mode string) error {
 		ThemeModeAdwaitaLight, ThemeModeBreezeLight,
 		ThemeModeDark, ThemeModeDarkGray, ThemeModeDarkBalanced, ThemeModeAdwaitaDark, ThemeModeBreezeDark,
 		ThemeModeCatppuccinLatte, ThemeModeCatppuccinFrappe, ThemeModeCatppuccinMacchiato, ThemeModeCatppuccinMocha,
-		ThemeModeDracula, ThemeModeGithubLight, ThemeModeGithubDark, ThemeModeTokyoNight,
+		ThemeModeDracula, ThemeModeGithubLight, ThemeModeGithubDark, ThemeModeGithubSoftDark, ThemeModeTokyoNight,
 		ThemeModeNordLight, ThemeModeNordDark, ThemeModePopLight, ThemeModePopDark,
-		ThemeModeYaruLight, ThemeModeYaruDark:
+		ThemeModeVSCodeLight, ThemeModeVSCodeDark, ThemeModeYaruLight, ThemeModeYaruDark:
 		return s.Set(KeyThemeMode, mode)
 	default:
-		return fmt.Errorf("invalid theme mode: %s (must be 'system', 'light', 'light-blue', 'light-orange', 'light-balanced', 'adwaita-light', 'breeze-light', 'dark', 'dark-gray', 'dark-balanced', 'adwaita-dark', 'breeze-dark', 'catppuccin-latte', 'catppuccin-frappe', 'catppuccin-macchiato', 'catppuccin-mocha', 'dracula', 'github-light', 'github-dark', 'tokyo-night', 'nord-light', 'nord-dark', 'pop-light', 'pop-dark', 'yaru-light', or 'yaru-dark')", mode)
+		return fmt.Errorf("invalid theme mode: %s (must be 'system', 'light', 'light-blue', 'light-orange', 'light-balanced', 'adwaita-light', 'breeze-light', 'dark', 'dark-gray', 'dark-balanced', 'adwaita-dark', 'breeze-dark', 'catppuccin-latte', 'catppuccin-frappe', 'catppuccin-macchiato', 'catppuccin-mocha', 'dracula', 'github-light', 'github-dark', 'github-soft-dark', 'tokyo-night', 'nord-light', 'nord-dark', 'pop-light', 'pop-dark', 'vs-code-light', 'vs-code-dark', 'yaru-light', or 'yaru-dark')", mode)
 	}
 }
 
