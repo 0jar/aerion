@@ -614,6 +614,10 @@ export function MoveToFolder(arg1, arg2) {
   return window['go']['app']['App']['MoveToFolder'](arg1, arg2);
 }
 
+export function NotifyStartupComplete() {
+  return window['go']['app']['App']['NotifyStartupComplete']();
+}
+
 export function OpenAttachment(arg1) {
   return window['go']['app']['App']['OpenAttachment'](arg1);
 }

@@ -114,6 +114,10 @@ export function LookupWKD(arg1) {
   return window['go']['app']['ComposerApp']['LookupWKD'](arg1);
 }
 
+export function NotifyStartupComplete() {
+  return window['go']['app']['ComposerApp']['NotifyStartupComplete']();
+}
+
 export function PickAttachmentFiles() {
   return window['go']['app']['ComposerApp']['PickAttachmentFiles']();
 }

@@ -66,6 +66,8 @@ export function LookupPGPKey(arg1:string):Promise<string>;
 
 export function LookupWKD(arg1:string):Promise<string>;
 
+export function NotifyStartupComplete():Promise<void>;
+
 export function PickAttachmentFiles():Promise<Array<app.ComposerAttachment>>;
 
 export function PickRecipientCertFile():Promise<string>;

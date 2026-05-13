@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"flag"
 	"io/fs"
@@ -124,11 +123,8 @@ func runMainMode(mailtoData *app.MailtoData, rawMailtoArg string) {
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        application.Startup,
-		OnDomReady: func(ctx context.Context) {
-			platform.NotifyStartupComplete()
-		},
-		OnShutdown:    application.Shutdown,
-		OnBeforeClose: application.BeforeClose,
+		OnShutdown:       application.Shutdown,
+		OnBeforeClose:    application.BeforeClose,
 		Bind: []interface{}{
 			application,
 			dummyComposerApp, // For binding generation

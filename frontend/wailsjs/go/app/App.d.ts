@@ -323,6 +323,8 @@ export function MoveMessagesToFolder(arg1:Array<string>,arg2:string):Promise<voi
 
 export function MoveToFolder(arg1:Array<string>,arg2:string):Promise<void>;
 
+export function NotifyStartupComplete():Promise<void>;
+
 export function OpenAttachment(arg1:string):Promise<void>;
 
 export function OpenComposerWindow(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<void>;

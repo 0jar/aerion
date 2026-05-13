@@ -576,6 +576,13 @@ func (c *ComposerApp) IsFlatpak() bool {
 	return platform.IsFlatpak()
 }
 
+// NotifyStartupComplete signals the desktop environment that startup is done.
+// Called from the frontend after WindowShow() so KDE/Plasma sees the placeholder
+// → real window handoff cleanly (avoiding the taskbar-icon flash from #154).
+func (c *ComposerApp) NotifyStartupComplete() {
+	platform.NotifyStartupComplete()
+}
+
 // GetOriginalMessage returns the original message for reply/forward.
 func (c *ComposerApp) GetOriginalMessage() (*message.Message, error) {
 	if c.originalMessage != nil {

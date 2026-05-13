@@ -635,6 +635,13 @@ func (a *App) BeforeClose(ctx context.Context) bool {
 	return true
 }
 
+// NotifyStartupComplete signals the desktop environment that startup is done.
+// Called from the frontend after WindowShow() so KDE/Plasma sees the placeholder
+// → real window handoff cleanly (avoiding the taskbar-icon flash from #154).
+func (a *App) NotifyStartupComplete() {
+	platform.NotifyStartupComplete()
+}
+
 // ShowWindow brings the window to the foreground from hidden/minimized state.
 // Used by single-instance activation, notification clicks, etc.
 func (a *App) ShowWindow() {

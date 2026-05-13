@@ -12,7 +12,7 @@
   import { getShowTitleBar, getNativeTitleBar, setShowTitleBar, setNativeTitleBar } from '$lib/stores/settings.svelte'
   import { initTheme, handleThemeChanged, type ThemeMode } from '$lib/stores/theme.svelte'
   // @ts-ignore - wailsjs imports
-  import { GetComposeMode, PrepareReply, GetDraft, CloseWindow, GetThemeMode, GetSystemTheme, GetShowTitleBar, GetNativeTitleBar, RefreshWindowConstraints } from '../wailsjs/go/app/ComposerApp.js'
+  import { GetComposeMode, PrepareReply, GetDraft, CloseWindow, GetThemeMode, GetSystemTheme, GetShowTitleBar, GetNativeTitleBar, RefreshWindowConstraints, NotifyStartupComplete } from '../wailsjs/go/app/ComposerApp.js'
   // @ts-ignore - wailsjs imports
   import { smtp, app } from '../wailsjs/go/models'
   // @ts-ignore - wailsjs runtime
@@ -79,6 +79,10 @@
 
     // Show window after theme is applied (prevents white flash on startup)
     WindowShow()
+
+    // Clear the desktop-environment startup indicator. Called after WindowShow()
+    // so KDE/Plasma sees the placeholder → real window handoff cleanly (#154).
+    NotifyStartupComplete()
 
     // Remove GTK max size constraints that Wails v2 sets at startup
     RefreshWindowConstraints()
