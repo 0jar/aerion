@@ -7,7 +7,7 @@
     ContextMenuSeparator,
   } from '$lib/components/ui/context-menu'
   import {
-    GetFolders,
+    GetAccounts,
     MarkAsRead,
     MarkAsUnread,
     Star,
@@ -22,7 +22,7 @@
     Undo,
   } from '../../../../wailsjs/go/app/App'
   // @ts-ignore - wailsjs path
-  import { folder } from '../../../../wailsjs/go/models'
+  import { account } from '../../../../wailsjs/go/models'
   import { toasts } from '$lib/stores/toast'
   import { ConfirmDialog } from '$lib/components/ui/confirm-dialog'
   import FolderPickerDialog from './FolderPickerDialog.svelte'
@@ -56,10 +56,11 @@
     children,
   }: Props = $props()
 
-  // Folders state for move/copy submenus
-  let folders = $state<folder.Folder[]>([])
-  let foldersLoading = $state(false)
-  let foldersLoaded = $state(false)
+  // Accounts list — passed to FolderPickerDialog for its account dropdown.
+  // Loaded lazily when the context menu opens.
+  let accounts = $state<account.Account[]>([])
+  let accountsLoaded = $state(false)
+  let accountsLoading = $state(false)
 
   // Permanent delete confirmation
   let showDeleteConfirm = $state(false)
@@ -88,43 +89,29 @@
   const isSpamFolder = $derived(folderType === 'spam')
   const isSingleMessage = $derived(messageIds.length === 1)
 
-  // Load folders when context menu opens
-  async function loadFolders() {
-    if (foldersLoaded || foldersLoading) return
+  // Load accounts when context menu opens (used by FolderPickerDialog's dropdown)
+  async function loadAccounts() {
+    if (accountsLoaded || accountsLoading) return
 
-    foldersLoading = true
+    accountsLoading = true
     try {
-      const result = await GetFolders(accountId)
-      folders = result || []
-      foldersLoaded = true
+      const result = await GetAccounts()
+      accounts = result || []
+      accountsLoaded = true
     } catch (err) {
-      console.error('Failed to load folders:', err)
+      console.error('Failed to load accounts:', err)
     } finally {
-      foldersLoading = false
+      accountsLoading = false
     }
   }
 
   // Handle menu open
   function handleOpenChange(open: boolean) {
     if (open) {
-      loadFolders()
+      loadAccounts()
     }
     onOpenChange?.(open)
   }
-
-  // Get folders excluding current folder (for move/copy)
-  const availableFolders = $derived(
-    folders.filter((f) => f.id !== currentFolderId)
-  )
-
-  // Group folders: special folders first, then custom folders
-  const specialFolderTypes = ['inbox', 'sent', 'drafts', 'archive', 'trash', 'spam', 'all']
-  const specialFolders = $derived(
-    availableFolders.filter((f) => specialFolderTypes.includes(f.type))
-  )
-  const customFolders = $derived(
-    availableFolders.filter((f) => !specialFolderTypes.includes(f.type))
-  )
 
   // Undo handler
   async function handleUndo() {
@@ -260,7 +247,7 @@
     showFolderPicker = true
   }
 
-  function handleFolderSelected(folderId: string, folderName: string) {
+  function handleFolderSelected(folderId: string, folderName: string, _destAccountId: string) {
     showFolderPicker = false
     switch (folderPickerMode) {
       case 'move':
@@ -383,8 +370,8 @@
 <FolderPickerDialog
   bind:open={showFolderPicker}
   title={$_(folderPickerMode === 'move' ? 'contextMenu.moveTo' : 'contextMenu.copyTo')}
-  {foldersLoading}
-  {specialFolders}
-  {customFolders}
+  initialAccountId={accountId}
+  {accounts}
+  excludeFolderId={currentFolderId}
   onSelect={handleFolderSelected}
 />

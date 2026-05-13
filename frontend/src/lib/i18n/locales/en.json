@@ -280,7 +280,8 @@
     "markAllAsRead": "Mark All as Read",
     "markAllAsUnread": "Mark All as Unread",
     "noFoldersAvailable": "No folders available",
-    "searchFolders": "Search folders..."
+    "searchFolders": "Search folders...",
+    "account": "Account"
   },
   "toast": {
     "archived": "Archived",
@@ -945,9 +946,7 @@
     "emptyTrash": "Empty Trash?",
     "emptyTrashDescription": "This will permanently delete all messages in the Trash folder. This action cannot be undone.",
     "confirmDeletePermanently": "Delete Permanently",
-    "confirmEmptyTrash": "Empty Trash",
-    "crossAccountMoveTitle": "Cross-account move not supported",
-    "crossAccountMoveDescription": "Moving messages between accounts is not yet supported. This feature is planned for a future release."
+    "confirmEmptyTrash": "Empty Trash"
   },
   "date": {
     "justNow": "just now",

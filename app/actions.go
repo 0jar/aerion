@@ -342,6 +342,24 @@ func (a *App) MoveToFolder(messageIDs []string, destFolderID string) error {
 		return fmt.Errorf("destination folder not found: %s", destFolderID)
 	}
 
+	// Cross-account move: APPEND raw bytes to destination first, then route source
+	// cleanup through the existing Trash() pipeline (which handles local DB, IMAP
+	// COPY+EXPUNGE within source, folder counts, events, undo, Gmail labels).
+	// Strict ordering: APPEND completes synchronously before Trash runs — if
+	// APPEND fails, source stays untouched.
+	if messages[0].AccountID != destFolder.AccountID {
+		if err := a.copyMessagesAcrossAccounts(messages, destFolder); err != nil {
+			return fmt.Errorf("cross-account move: append failed: %w", err)
+		}
+		_, trashErr := a.Trash(messageIDs)
+		// Sync destination so appended messages get correct UIDs locally.
+		go func() {
+			defer recoverPanic("app.actions", "cross-account move dest sync")
+			_ = a.SyncFolder(destFolder.AccountID, destFolder.ID)
+		}()
+		return trashErr
+	}
+
 	// Group by source folder
 	byFolder := make(map[string][]*message.Message)
 	for _, m := range messages {
@@ -610,6 +628,28 @@ func (a *App) CopyToFolder(messageIDs []string, destFolderID string) error {
 		return fmt.Errorf("destination folder not found: %s", destFolderID)
 	}
 
+	// Cross-account copy: APPEND raw bytes to destination. Fire-and-forget to
+	// match intra-account CopyToFolder's existing async behavior.
+	if messages[0].AccountID != destFolder.AccountID {
+		go func() {
+			defer recoverPanic("app.actions", "cross-account copy")
+			if err := a.copyMessagesAcrossAccounts(messages, destFolder); err != nil {
+				log.Error().Err(err).
+					Str("sourceAccountID", messages[0].AccountID).
+					Str("destAccountID", destFolder.AccountID).
+					Str("destFolderID", destFolder.ID).
+					Msg("Cross-account copy failed")
+				return
+			}
+			_ = a.SyncFolder(destFolder.AccountID, destFolder.ID)
+			wailsRuntime.EventsEmit(a.ctx, "messages:copied", map[string]interface{}{
+				"messageIds":   messageIDs,
+				"destFolderId": destFolder.ID,
+			})
+		}()
+		return nil
+	}
+
 	// Group by source folder
 	byFolder := make(map[string][]*message.Message)
 	for _, m := range messages {
@@ -677,6 +717,67 @@ func (a *App) copyMessagesToIMAP(messages []*message.Message, sourceFolderID str
 			return fmt.Errorf("failed to copy messages: %w", err)
 		}
 
+		return nil
+	})
+}
+
+// flagsForAppend maps a local message's flag fields to the IMAP flag slice
+// used by AppendMessage on cross-account copy/move.
+func flagsForAppend(m *message.Message) []goImap.Flag {
+	flags := []goImap.Flag{}
+	if m.IsRead {
+		flags = append(flags, goImap.FlagSeen)
+	}
+	if m.IsStarred {
+		flags = append(flags, goImap.FlagFlagged)
+	}
+	if m.IsAnswered {
+		flags = append(flags, goImap.FlagAnswered)
+	}
+	if m.IsDraft {
+		flags = append(flags, goImap.FlagDraft)
+	}
+	return flags
+}
+
+// copyMessagesAcrossAccounts fetches each message's raw RFC822 bytes from the
+// source account's IMAP and APPENDs them to the destination account's IMAP.
+// Used by the cross-account branches of MoveToFolder and CopyToFolder.
+//
+// Synchronous: returns when every APPEND has succeeded. Caller is expected to
+// short-circuit on error so the source side is never touched after a partial
+// success/failure.
+func (a *App) copyMessagesAcrossAccounts(messages []*message.Message, destFolder *folder.Folder) error {
+	log := logging.WithComponent("app.copyMessagesAcrossAccounts")
+
+	if len(messages) == 0 {
+		return nil
+	}
+
+	log.Info().
+		Str("sourceAccountID", messages[0].AccountID).
+		Str("destAccountID", destFolder.AccountID).
+		Str("destFolder", destFolder.Path).
+		Int("count", len(messages)).
+		Msg("Starting cross-account append")
+
+	return a.withIMAPRetry(destFolder.AccountID, func(conn *imap.Client) error {
+		if _, err := conn.SelectMailbox(a.ctx, destFolder.Path); err != nil {
+			return fmt.Errorf("failed to select destination mailbox: %w", err)
+		}
+		for _, m := range messages {
+			raw, err := a.syncEngine.FetchRawMessage(a.ctx, m.AccountID, m.FolderID, m.UID)
+			if err != nil {
+				return fmt.Errorf("failed to fetch raw message from source: %w", err)
+			}
+			if _, err := conn.AppendMessage(destFolder.Path, flagsForAppend(m), m.Date, raw); err != nil {
+				return fmt.Errorf("failed to append to destination: %w", err)
+			}
+		}
+		log.Info().
+			Str("destFolder", destFolder.Path).
+			Int("count", len(messages)).
+			Msg("Cross-account append completed")
 		return nil
 	})
 }

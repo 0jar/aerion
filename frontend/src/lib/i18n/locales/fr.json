@@ -280,7 +280,8 @@
     "markAllAsRead": "Tout marquer comme lu",
     "markAllAsUnread": "Tout marquer comme non lu",
     "noFoldersAvailable": "Aucun dossier disponible",
-    "searchFolders": "Rechercher des dossiers..."
+    "searchFolders": "Rechercher des dossiers...",
+    "account": "Compte"
   },
   "toast": {
     "archived": "Archivé",
@@ -945,9 +946,7 @@
     "emptyTrash": "Vider la corbeille ?",
     "emptyTrashDescription": "Ceci supprimera définitivement tous les messages de la Corbeille. Cette action est irréversible.",
     "confirmDeletePermanently": "Supprimer définitivement",
-    "confirmEmptyTrash": "Vider la corbeille",
-    "crossAccountMoveTitle": "Cross-account move not supported",
-    "crossAccountMoveDescription": "Moving messages between accounts is not yet supported. This feature is planned for a future release."
+    "confirmEmptyTrash": "Vider la corbeille"
   },
   "date": {
     "justNow": "à l'instant",

@@ -279,7 +279,8 @@
     "markAllAsRead": "全部标记为已读",
     "markAllAsUnread": "全部标记为未读",
     "noFoldersAvailable": "没有可用的文件夹",
-    "searchFolders": "搜索文件夹..."
+    "searchFolders": "搜索文件夹...",
+    "account": "账号"
   },
   "toast": {
     "archived": "已归档",
@@ -940,9 +941,7 @@
     "emptyTrash": "清空回收站？",
     "emptyTrashDescription": "这将永久删除回收站中的所有邮件。此操作无法撤销。",
     "confirmDeletePermanently": "永久删除",
-    "confirmEmptyTrash": "清空回收站",
-    "crossAccountMoveTitle": "Cross-account move not supported",
-    "crossAccountMoveDescription": "Moving messages between accounts is not yet supported. This feature is planned for a future release."
+    "confirmEmptyTrash": "清空回收站"
   },
   "date": {
     "justNow": "刚才",

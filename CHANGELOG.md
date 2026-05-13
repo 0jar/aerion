@@ -5,6 +5,8 @@
 ---
 
 - Added Czech translation
+- Added drag-and-drop to move messages to another folder
+- Added cross account copy/move mail - [#108](https://github.com/hkdb/aerion/issues/108)
 - Added composer del/backspace guard to prevent accidental message delete
 - Fixed detached composer system theme detection - [#153](https://github.com/hkdb/aerion/issues/153)
 - Fixed launch flow - [#154](https://github.com/hkdb/aerion/issues/154)

@@ -280,7 +280,8 @@
     "markAllAsRead": "Označit vše jako přečtené",
     "markAllAsUnread": "Označit vše jako nepřečtené",
     "noFoldersAvailable": "Žádné dostupné složky",
-    "searchFolders": "Hledat složky..."
+    "searchFolders": "Hledat složky...",
+    "account": "Účet"
   },
   "toast": {
     "archived": "Archivováno",
@@ -945,9 +946,7 @@
     "emptyTrash": "Vyprázdnit koš?",
     "emptyTrashDescription": "Tímto trvale smažete všechny zprávy v koši. Tuto akci nelze vrátit zpět.",
     "confirmDeletePermanently": "Trvale smazat",
-    "confirmEmptyTrash": "Vyprázdnit koš",
-    "crossAccountMoveTitle": "Cross-account move not supported",
-    "crossAccountMoveDescription": "Moving messages between accounts is not yet supported. This feature is planned for a future release."
+    "confirmEmptyTrash": "Vyprázdnit koš"
   },
   "date": {
     "justNow": "právě teď",

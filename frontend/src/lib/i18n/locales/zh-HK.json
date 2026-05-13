@@ -279,7 +279,8 @@
     "markAllAsRead": "全部標記為已讀",
     "markAllAsUnread": "全部標記為未讀",
     "noFoldersAvailable": "沒有可用的資料夾",
-    "searchFolders": "搜尋資料夾..."
+    "searchFolders": "搜尋資料夾...",
+    "account": "帳戶"
   },
   "toast": {
     "archived": "已封存",
@@ -940,9 +941,7 @@
     "emptyTrash": "清空垃圾桶？",
     "emptyTrashDescription": "這將永久刪除垃圾桶中的所有郵件。此操作無法復原。",
     "confirmDeletePermanently": "永久刪除",
-    "confirmEmptyTrash": "清空垃圾桶",
-    "crossAccountMoveTitle": "Cross-account move not supported",
-    "crossAccountMoveDescription": "Moving messages between accounts is not yet supported. This feature is planned for a future release."
+    "confirmEmptyTrash": "清空垃圾桶"
   },
   "date": {
     "justNow": "剛才",

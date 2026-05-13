@@ -175,6 +175,8 @@
       <description>
         <ul>
           <li>Added Czech translation</li>
+          <li>Added drag-and-drop to move messages to another folder</li>
+          <li>Added cross account copy/move mail - #108</li>
           <li>Added composer del/backspace guard to prevent accidental message delete</li>
           <li>Fixed detached composer system theme detection - #153</li>
           <li>Fixed launch flow - #154</li>

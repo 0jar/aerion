@@ -7,7 +7,6 @@
   import FolderContextMenu from './FolderContextMenu.svelte'
   import Self from './FolderTreeItem.svelte'
   import { toasts } from '$lib/stores/toast'
-  import { InfoDialog } from '$lib/components/ui/confirm-dialog'
   import { _ } from '$lib/i18n'
 
   interface Props {
@@ -61,7 +60,6 @@
 
   // Drag-and-drop state for receiving message drops on this folder
   let isDragOver = $state(false)
-  let showCrossAccountDialog = $state(false)
 
   function hasMessagesPayload(e: DragEvent): boolean {
     return !!e.dataTransfer?.types.includes('application/x-aerion-messages')
@@ -96,12 +94,6 @@
       return
     }
     if (!payload.messageIds || payload.messageIds.length === 0) return
-
-    // Cross-account guard — feature deferred. Acknowledge with an info dialog.
-    if (payload.sourceAccountId !== accountId) {
-      showCrossAccountDialog = true
-      return
-    }
 
     // Same-folder drop: no-op
     if (tree.folder.id === selectedFolderId && selectionSource === 'account') {
@@ -196,10 +188,3 @@
     </div>
   {/if}
 {/if}
-
-<InfoDialog
-  bind:open={showCrossAccountDialog}
-  variant="info"
-  title={$_('dialog.crossAccountMoveTitle')}
-  description={$_('dialog.crossAccountMoveDescription')}
-/>

@@ -1,26 +1,29 @@
 <script lang="ts">
   import Icon from '@iconify/svelte'
   import * as Dialog from '$lib/components/ui/dialog'
+  import * as Select from '$lib/components/ui/select'
   import { Button } from '$lib/components/ui/button'
   // @ts-ignore - wailsjs path
-  import { folder } from '../../../../wailsjs/go/models'
+  import { folder, account } from '../../../../wailsjs/go/models'
+  // @ts-ignore - wailsjs path
+  import { GetFolders } from '../../../../wailsjs/go/app/App'
   import { _ } from '$lib/i18n'
 
   interface Props {
     open: boolean
     title: string
-    foldersLoading: boolean
-    specialFolders: folder.Folder[]
-    customFolders: folder.Folder[]
-    onSelect: (folderId: string, folderName: string) => void
+    initialAccountId: string
+    accounts: account.Account[]
+    excludeFolderId?: string
+    onSelect: (folderId: string, folderName: string, accountId: string) => void
   }
 
   let {
     open = $bindable(false),
     title,
-    foldersLoading,
-    specialFolders,
-    customFolders,
+    initialAccountId,
+    accounts,
+    excludeFolderId = '',
     onSelect,
   }: Props = $props()
 
@@ -29,6 +32,54 @@
   let listEl: HTMLDivElement | undefined = $state()
   let searchQuery = $state('')
   let searchInput: HTMLInputElement | null = $state(null)
+
+  // Account state — dropdown selection drives folder loading. Initialized on
+  // dialog open (rather than at $state declaration) so prop changes between
+  // opens are picked up.
+  let selectedAccountId = $state('')
+  let folders = $state<folder.Folder[]>([])
+  let foldersLoading = $state(false)
+  // Tracks the load that produced the current folders so out-of-order responses don't overwrite a newer load
+  let loadVersion = 0
+
+  // Reset selected account when the dialog (re)opens for a new context
+  $effect(() => {
+    if (open) selectedAccountId = initialAccountId
+  })
+
+  // Load folders whenever the selected account changes
+  $effect(() => {
+    const accountId = selectedAccountId
+    if (!accountId) return
+    const myVersion = ++loadVersion
+    foldersLoading = true
+    GetFolders(accountId)
+      .then((result: folder.Folder[]) => {
+        if (myVersion !== loadVersion) return
+        folders = result || []
+      })
+      .catch((err: unknown) => {
+        if (myVersion !== loadVersion) return
+        console.error('Failed to load folders:', err)
+        folders = []
+      })
+      .finally(() => {
+        if (myVersion !== loadVersion) return
+        foldersLoading = false
+      })
+  })
+
+  // Special vs custom split (same logic MessageContextMenu used to apply)
+  const specialFolderTypes = ['inbox', 'sent', 'drafts', 'archive', 'trash', 'spam', 'all']
+  const availableFolders = $derived(
+    folders.filter((f) => {
+      // Only exclude the source folder when the dropdown is on the source account
+      if (selectedAccountId === initialAccountId && f.id === excludeFolderId) return false
+      return true
+    })
+  )
+  const specialFolders = $derived(availableFolders.filter((f) => specialFolderTypes.includes(f.type)))
+  const customFolders = $derived(availableFolders.filter((f) => !specialFolderTypes.includes(f.type)))
 
   // Combine and sort all folders by path for hierarchy display
   const allFolders = $derived(
@@ -86,10 +137,10 @@
     return () => clearTimeout(timer)
   })
 
-  // Reset focus when search changes
+  // Reset focus when search changes or folders change (e.g., account switch)
   $effect(() => {
-    // Track searchQuery to re-run
     void searchQuery
+    void allFolders
     const folders = displayFolders()
     focusedIndex = folders.length > 0 ? 0 : -1
   })
@@ -138,7 +189,7 @@
         e.stopPropagation()
         if (focusedIndex >= 0 && focusedIndex < folders.length) {
           const f = folders[focusedIndex]
-          onSelect(f.id, f.name)
+          onSelect(f.id, f.name, selectedAccountId)
         }
         break
     }
@@ -164,6 +215,26 @@
       />
     </div>
 
+    <!-- Account dropdown — switching reloads the folder list -->
+    {#if accounts.length > 1}
+      {@const selectedAccount = accounts.find(a => a.id === selectedAccountId)}
+      <Select.Root
+        value={selectedAccountId}
+        onValueChange={(v) => { if (v) selectedAccountId = v }}
+      >
+        <Select.Trigger>
+          <Select.Value placeholder={$_('contextMenu.account')}>
+            {selectedAccount?.name ?? ''}
+          </Select.Value>
+        </Select.Trigger>
+        <Select.Content>
+          {#each accounts as acc (acc.id)}
+            <Select.Item value={acc.id} label={acc.name} />
+          {/each}
+        </Select.Content>
+      </Select.Root>
+    {/if}
+
     <div
       class="border border-border rounded-md max-h-64 overflow-y-auto"
       bind:this={listEl}
@@ -187,7 +258,7 @@
             aria-selected={i === focusedIndex}
             class="w-full flex items-center gap-2 py-2 pr-3 text-left text-sm hover:bg-muted/50 transition-colors {i === focusedIndex ? 'bg-muted/50' : ''}"
             style="padding-left: {12 + depth * 16}px"
-            onclick={() => onSelect(f.id, f.name)}
+            onclick={() => onSelect(f.id, f.name, selectedAccountId)}
           >
             <Icon icon={getFolderIcon(f.type)} class="h-4 w-4 shrink-0" />
             {#if isSearching}
