@@ -39,10 +39,18 @@ func (a *App) initBackgroundSync(ctx context.Context) {
 				"folderId":  folderID,
 				"error":     err.Error(),
 			})
-		} else {
-			wailsRuntime.EventsEmit(a.ctx, "folder:synced", map[string]interface{}{
-				"accountId": accountID,
-				"folderId":  folderID,
+			return
+		}
+		wailsRuntime.EventsEmit(a.ctx, "folder:synced", map[string]interface{}{
+			"accountId": accountID,
+			"folderId":  folderID,
+		})
+		// Mirror the unread count to the sidebar so badges refresh after a
+		// scheduled sync (the manual SyncFolder path emits this at
+		// app/sync.go:110; the scheduler path was missing it).
+		if folderObj, ferr := a.folderStore.Get(folderID); ferr == nil && folderObj != nil {
+			wailsRuntime.EventsEmit(a.ctx, "folders:countsChanged", map[string]int{
+				folderID: folderObj.UnreadCount,
 			})
 		}
 	})

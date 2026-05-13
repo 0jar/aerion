@@ -183,6 +183,7 @@
           <li>Fixed detached composer system theme detection - #153</li>
           <li>Fixed launch flow - #154</li>
           <li>Fixed dark theme rendering - #155</li>
+          <li>Added unread count update after background sync to ensure accuracy</li>
         </ul>
       </description>
     </release>

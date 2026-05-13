@@ -13,6 +13,7 @@
 - Fixed detached composer system theme detection - [#153](https://github.com/hkdb/aerion/issues/153)
 - Fixed launch flow - [#154](https://github.com/hkdb/aerion/issues/154)
 - Fixed dark theme rendering - [#155](https://github.com/hkdb/aerion/issues/155)
+- Added unread count update after background sync to ensure accuracy
 
 
 **v0.2.2 - 05-09-2026**
