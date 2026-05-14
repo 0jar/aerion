@@ -171,6 +171,13 @@
   </provides>
 
   <releases>
+    <release version="0.2.4" date="2026-05-19">
+      <description>
+        <ul>
+          <li></li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.3" date="2026-05-14">
       <description>
         <ul>
