@@ -176,6 +176,7 @@
         <ul>
           <li>Improved oAuth browser open - #120</li>
           <li>Added copy link for oAuth - #120</li>
+          <li>Use desktop portal for email links first and fallback to xdg-open if it fails</li>
         </ul>
       </description>
     </release>
