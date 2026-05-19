@@ -7,6 +7,7 @@
 - Improved oAuth browser open - [#120](https://github.com/hkdb/aerion/issues/120)
 - Added copy link for oAuth - [#120](https://github.com/hkdb/aerion/issues/120)
 - Use desktop portal for email links first and fallback to xdg-open if it fails
+- Added -version flag - [#167](https://github.com/hkdb/aerion/issues/167)
 
 
 **v0.2.3 - 05-14-2026**
