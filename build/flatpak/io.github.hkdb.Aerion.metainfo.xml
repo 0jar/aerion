@@ -180,6 +180,7 @@
           <li>Use desktop portal for email links first and fallback to xdg-open if it fails</li>
           <li>Added -version flag - #167</li>
           <li>Added setup exe and default app registration for Windows - #149</li>
+          <li>Fixed dark to light core theme switch bug - #187</li>
         </ul>
       </description>
     </release>
