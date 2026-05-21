@@ -505,8 +505,6 @@ Special thanks to translation contributors for making Aerion more accessible:
   </tr>
 </table>
 
-*Last Updated: 2026-05-20
-
 
 ### 📑 Terms of Use & Privacy Policy
 ---
