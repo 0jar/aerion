@@ -454,26 +454,45 @@ Special thanks to translation contributors for making Aerion more accessible:
 
 <table>
   <tr>
-    <td align="center">
+    <td align="center" valign="top" width="160">
       <a href="https://github.com/lorduskordus">
         <img src="https://github.com/lorduskordus.png" width="80"><br>
         <sub><b>lorduskordus</b></sub>
       </a><br>
-      <sub>Čeština (cs)</sub>
+      <sub>Čeština (cs)</sub><br>
+      <sub>&nbsp;</sub>
     </td>
-    <td align="center">
+    <td align="center" valign="top" width="160">
+      <a href="https://github.com/Gerti1972">
+        <img src="https://github.com/Gerti1972.png" width="80"><br>
+        <sub><b>Gerti1972</b></sub>
+      </a><br>
+      <sub>Deutsch (de)</sub><br>
+      <sub>&nbsp;</sub>
+    </td>
+    <td align="center" valign="top" width="160">
+      <a href="https://github.com/dev-inside">
+        <img src="https://github.com/dev-inside.png" width="80"><br>
+        <sub><b>dev-inside</b></sub>
+      </a><br>
+      <sub>Deutsch (de)</sub><br>
+      <small><em>reviewer</em></small>
+    </td>
+    <td align="center" valign="top" width="160">
       <a href="https://github.com/freemans32">
         <img src="https://github.com/freemans32.png" width="80"><br>
         <sub><b>freemans32</b></sub>
       </a><br>
-      <sub>Français (fr)</sub>
+      <sub>Français (fr)</sub><br>
+      <sub>&nbsp;</sub>
     </td>
-    <td align="center">
+    <td align="center" valign="top" width="160">
       <a href="https://github.com/dexblasnoot">
         <img src="https://github.com/dexblasnoot.png" width="80"><br>
         <sub><b>dexblasnoot</b></sub>
       </a><br>
-      <sub>Norsk Bokmål (nb)</sub>
+      <sub>Norsk Bokmål (nb)</sub><br>
+      <sub>&nbsp;</sub>
     </td>
   </tr>
 </table>

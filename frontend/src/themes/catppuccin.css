@@ -46,6 +46,7 @@
   /* Catppuccin Frappé — Lightest of the dark flavors. */
   [data-theme="catppuccin-frappe"] {
     color-scheme: dark;
+    --dark-mail-bg-l: 8;                 /* override: lower than chrome L to minimize hue-rotate brown artifact */
     --background: 229 19% 23%;           /* base #303446 */
     --foreground: 227 70% 87%;           /* text #C6D0F5 */
     --card: 229 19% 23%;                 /* base */
@@ -86,6 +87,7 @@
   /* Catppuccin Macchiato — Mid-dark flavor between Frappé and Mocha. */
   [data-theme="catppuccin-macchiato"] {
     color-scheme: dark;
+    --dark-mail-bg-l: 8;                 /* override: lower than chrome L to minimize hue-rotate brown artifact */
     --background: 232 23% 18%;           /* base #24273A */
     --foreground: 227 68% 88%;           /* text #CAD3F5 */
     --card: 232 23% 18%;                 /* base */
@@ -126,6 +128,7 @@
   /* Catppuccin Mocha — Light pastels on dark base; dark initials. */
   [data-theme="catppuccin-mocha"] {
     color-scheme: dark;
+    --dark-mail-bg-l: 8;                 /* override: lower than chrome L to minimize hue-rotate brown artifact */
     --background: 240 21% 15%;           /* base #1E1E2E */
     --foreground: 226 64% 88%;           /* text #CDD6F4 */
     --card: 240 21% 15%;                 /* base */

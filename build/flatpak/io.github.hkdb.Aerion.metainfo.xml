@@ -215,7 +215,8 @@
     <release version="0.2.5" date="2026-05-26">
       <description>
         <ul>
-          <li></li>
+          <li>Added German translation - PR #194</li>
+          <li>Dark content auto bg color and override - #195</li>
         </ul>
       </description>
     </release>

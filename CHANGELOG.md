@@ -4,7 +4,8 @@
 **v0.2.5 - 05-26-2026**
 ---
 
-
+- Added German translation - PR [#194](https://github.com/hkdb/aerion/pull/194)
+- Dark content auto bg color and override - [#195](https://github.com/hkdb/aerion/issues/195)
 
 
 **v0.2.4 - 05-20-2026**
