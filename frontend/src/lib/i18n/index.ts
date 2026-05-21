@@ -3,6 +3,7 @@ import { register, init, waitLocale, locale, _ } from 'svelte-i18n'
 // Register locale files with lazy loading
 register('en', () => import('./locales/en.json'))
 register('cs', () => import('./locales/cs.json'))
+register('de', () => import('./locales/de.json'))
 register('fr', () => import('./locales/fr.json'))
 register('nb', () => import('./locales/nb.json'))
 register('zh-CN', () => import('./locales/zh-CN.json'))
@@ -13,6 +14,7 @@ register('zh-TW', () => import('./locales/zh-TW.json'))
 export const supportedLocales = [
   { code: 'en', name: 'English' },
   { code: 'cs', name: 'Čeština' },
+  { code: 'de', name: 'Deutsch' },
   { code: 'fr', name: 'Français' },
   { code: 'nb', name: 'Norsk Bokmål' },
   { code: 'zh-CN', name: '简体中文 (中国)' },
