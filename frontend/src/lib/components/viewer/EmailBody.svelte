@@ -139,6 +139,34 @@
     return bg ? `hsl(${bg})` : '#000'
   }
 
+  // Per-theme dark-mail saturation override. <1 desaturates the inverted
+  // email surface to cancel out the warm/red chromatic shift that partial
+  // invert + hue-rotate(180deg) leaves on the residual chromaticity of
+  // most input content. Default 1 (no change).
+  function getChromeBgSaturate(): number {
+    const override = getComputedStyle(document.documentElement)
+      .getPropertyValue('--dark-mail-saturate').trim()
+    if (override) {
+      const n = parseFloat(override)
+      if (!Number.isNaN(n) && n > 0) return n
+    }
+    return 1
+  }
+
+  // Per-theme dark-mail hue rotation override (degrees, signed). Shifts the
+  // residual chromaticity of the inverted email surface toward a specific
+  // hue family — e.g., -20 to cool down a cool-toned theme's surface that
+  // would otherwise read as warm gray. Default 0 (no shift, GPU-skipped).
+  function getChromeBgHueRotate(): number {
+    const override = getComputedStyle(document.documentElement)
+      .getPropertyValue('--dark-mail-hue').trim()
+    if (override) {
+      const n = parseFloat(override)
+      if (!Number.isNaN(n)) return n
+    }
+    return 0
+  }
+
   function buildIframeContent(html: string, applyDarken: boolean): string {
     const processedHtml = processHtml(html, imagesBlocked)
     const imgSrc = imagesBlocked ? "'self' data:" : '* data:'
@@ -152,9 +180,15 @@
     // Invert amount derived from theme's chrome lightness — pure invert(1)
     // produces stark black against themes whose chrome isn't pure black.
     const invertAmount = applyDarken ? 1 - getChromeBgLightness() : 1
+    const saturate = applyDarken ? getChromeBgSaturate() : 1
+    const hueRotate = applyDarken ? getChromeBgHueRotate() : 0
+    // Image filter compensates so photos see net saturate(1) + hue-rotate(0) —
+    // html's saturate(S) hue-rotate(H) composed with image's saturate(1/S)
+    // hue-rotate(-H) approximately cancels for non-grayscale image content.
+    const imageSaturate = 1 / saturate
     const darkenStyles = applyDarken ? `
-    html { filter: invert(${invertAmount}) hue-rotate(180deg); background: #fff; color-scheme: dark; }
-    img:not([data-blocked-src]), video, iframe, [data-no-invert] { filter: invert(${invertAmount}) hue-rotate(180deg); }
+    html { filter: invert(${invertAmount}) hue-rotate(180deg) saturate(${saturate}) hue-rotate(${hueRotate}deg); background: #fff; color-scheme: dark; }
+    img:not([data-blocked-src]), video, iframe, [data-no-invert] { filter: invert(${invertAmount}) hue-rotate(180deg) saturate(${imageSaturate}) hue-rotate(${-hueRotate}deg); }
 ` : `
     html { color-scheme: light; }
 `

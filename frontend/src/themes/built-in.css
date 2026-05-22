@@ -153,6 +153,7 @@
   /* Dark Balanced Theme – mid-dark background with gray accents */
   [data-theme="dark-balanced"] {
     color-scheme: dark;
+    --dark-mail-bg-l: 12;
     --background: 210 11% 14%;
     --foreground: 210 20% 98%;
     --card: 210 11% 14%;
