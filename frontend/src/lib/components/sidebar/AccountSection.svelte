@@ -2,7 +2,6 @@
   import Icon from '@iconify/svelte'
   // @ts-ignore - wailsjs path
   import { account, folder } from '../../../../wailsjs/go/models'
-  import type { SyncProgress } from '$lib/stores/accounts.svelte'
   import FolderTreeItem from './FolderTreeItem.svelte'
   import { _ } from '$lib/i18n'
 
@@ -16,7 +15,6 @@
     selectionSource: 'unified' | 'account' | null
     isHeaderFocused?: boolean
     isExpanded?: boolean
-    syncProgress?: SyncProgress | null
     syncError?: { folderId: string; error: string } | null
     onFolderSelect?: (accountId: string, folderId: string, folderPath: string, folderName: string, folderType: string) => void
     onToggleExpanded?: () => void
@@ -38,7 +36,6 @@
     selectionSource,
     isHeaderFocused = false,
     isExpanded = true,
-    syncProgress = null,
     syncError = null,
     onFolderSelect,
     onToggleExpanded,
@@ -157,33 +154,13 @@
     {/if}
   </div>
 
-  <!-- Sync Progress Bar / Error -->
+  <!-- Sync Error — bar removed; spinner in header + phase label in bottom status convey sync state. -->
   {#if syncError}
     <div class="px-3 py-1.5">
       <div class="flex items-center gap-2 text-destructive">
         <Icon icon="mdi:alert-circle" class="w-4 h-4 flex-shrink-0" />
         <p class="text-xs">{$_('sidebar.syncError')}</p>
       </div>
-    </div>
-  {:else if syncing && syncProgress}
-    <div class="px-3 py-1.5">
-      <div class="h-1 bg-muted rounded-full overflow-hidden">
-        <div
-          class="h-full bg-primary transition-all duration-300 ease-out"
-          style="width: {syncProgress.percentage}%"
-        ></div>
-      </div>
-      <p class="text-xs text-muted-foreground mt-1">
-        {#if syncProgress.phase === 'folders'}
-          {$_('sidebar.syncingFolders')}
-        {:else if syncProgress.phase === 'messages'}
-          {$_('sidebar.fetchingMessageList')}
-        {:else if syncProgress.phase === 'headers'}
-          {$_('sidebar.fetchingHeaders', { values: { percentage: syncProgress.percentage } })}
-        {:else}
-          {$_('sidebar.syncingContent', { values: { percentage: syncProgress.percentage } })}
-        {/if}
-      </p>
     </div>
   {/if}
 

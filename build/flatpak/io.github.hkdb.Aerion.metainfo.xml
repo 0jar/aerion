@@ -215,6 +215,7 @@
     <release version="0.2.5" date="2026-05-26">
       <description>
         <ul>
+          <li>Sync progress indication redesign and shifting folder tree fix - #204</li>
           <li>Added German translation - PR #194</li>
           <li>Dark content auto bg color and overrides - #195</li>
           <li>Added guard rails to prevent accidental close of dialogs - #201 - #198</li>
