@@ -29,12 +29,6 @@ const (
 	// TypeThemeChanged indicates the system theme changed
 	TypeThemeChanged = "theme_changed"
 
-	// TypeAccountUpdated indicates account settings were modified
-	TypeAccountUpdated = "account_updated"
-
-	// TypeContactsUpdated indicates the contact list changed
-	TypeContactsUpdated = "contacts_updated"
-
 	// TypeShutdown indicates the main app is closing
 	TypeShutdown = "shutdown"
 )
@@ -82,16 +76,6 @@ type ComposerClosedPayload struct {
 // ThemeChangedPayload is the payload for TypeThemeChanged messages.
 type ThemeChangedPayload struct {
 	Theme string `json:"theme"` // "light", "dark", or "system"
-}
-
-// AccountUpdatedPayload is the payload for TypeAccountUpdated messages.
-type AccountUpdatedPayload struct {
-	AccountID string `json:"account_id"`
-}
-
-// ContactsUpdatedPayload is the payload for TypeContactsUpdated messages.
-type ContactsUpdatedPayload struct {
-	AccountID string `json:"account_id,omitempty"` // Optional: if empty, all contacts updated
 }
 
 // ShutdownPayload is the payload for TypeShutdown messages.

@@ -342,17 +342,6 @@ func (c *ComposerApp) handleIPCMessage(msg ipc.Message) {
 			wailsRuntime.EventsEmit(c.ctx, "theme:changed", payload.Theme)
 		}
 
-	case ipc.TypeAccountUpdated:
-		var payload ipc.AccountUpdatedPayload
-		if err := msg.ParsePayload(&payload); err == nil {
-			// Forward account updates for any account (composer supports cross-account)
-			wailsRuntime.EventsEmit(c.ctx, "account:updated", payload.AccountID)
-		}
-
-	case ipc.TypeContactsUpdated:
-		// Emit event to frontend to refresh autocomplete
-		wailsRuntime.EventsEmit(c.ctx, "contacts:updated", nil)
-
 	case ipc.TypeShutdown:
 		var payload ipc.ShutdownPayload
 		_ = msg.ParsePayload(&payload)

@@ -119,21 +119,12 @@ func (a *App) processIdleEvents(ctx context.Context) {
 				go a.handleIdleNewMail(event)
 
 			case imap.EventExpunge:
-				// Message deleted - could refresh the folder view
-				// For now, just emit an event to the frontend
-				wailsRuntime.EventsEmit(a.ctx, "mail:expunge", map[string]interface{}{
-					"accountId": event.AccountID,
-					"folder":    event.Folder,
-					"seqNum":    event.SeqNum,
-				})
+				// TODO: deliberately not wired — triggering a folder sync on every IDLE expunge
+				// would make IDLE too chatty for a lightweight client. Reconsider for v0.3.0+.
+				// Stale state until next scheduled sync is an accepted tradeoff.
 
 			case imap.EventFlagsChanged:
-				// Flags changed - could refresh the message
-				wailsRuntime.EventsEmit(a.ctx, "mail:flagsChanged", map[string]interface{}{
-					"accountId": event.AccountID,
-					"folder":    event.Folder,
-					"seqNum":    event.SeqNum,
-				})
+				// TODO: same tradeoff as EventExpunge above — deliberately not wired.
 			}
 		}
 	}

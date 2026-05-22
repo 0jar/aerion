@@ -274,7 +274,7 @@
     try {
       await CopyToFolder(messageIds, destFolderId)
       toasts.success($_('toast.copyingTo', { values: { folder: folderName } }))
-      // Note: CopyToFolder syncs in background and emits messages:copied event
+      // CopyToFolder syncs in background; sidebar count + dest folder list refresh ride on folder:synced.
     } catch (err) {
       console.error('Copy failed:', err)
       toasts.error($_('toast.failedToCopy'))

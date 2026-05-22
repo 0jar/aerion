@@ -717,11 +717,6 @@ func (a *App) DeleteDraft(draftID string) error {
 		})
 	}
 
-	// Emit event
-	wailsRuntime.EventsEmit(a.ctx, "draft:deleted", map[string]interface{}{
-		"draftId": draftID,
-	})
-
 	// Sync the Drafts folder so the message list and sidebar counts update
 	if draftsFolder != nil {
 		accountID := d.AccountID

@@ -286,6 +286,14 @@
       handleMailtoData(data)
     })
 
+    // Toast confirmation when a detached composer sends a message
+    EventsOn('composer:messageSent', () => {
+      addToast({
+        type: 'success',
+        message: $_('composer.messageSent'),
+      })
+    })
+
     // Listen for escape-iframe-focus event (from EmailBody when navigating away from iframe)
     const handleEscapeIframeFocus = () => {
       // Focus the message list container to take keyboard focus away from iframe

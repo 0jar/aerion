@@ -10,7 +10,6 @@ import (
 	"github.com/hkdb/aerion/internal/message"
 	"github.com/hkdb/aerion/internal/pgp"
 	"github.com/hkdb/aerion/internal/smime"
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // ============================================================================
@@ -81,11 +80,6 @@ func (a *App) FetchMessageBody(messageID string) (*message.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch message body: %w", err)
 	}
-
-	// Emit event so frontend knows the body is ready
-	wailsRuntime.EventsEmit(a.ctx, "message:bodyFetched", map[string]interface{}{
-		"messageId": messageID,
-	})
 
 	return updatedMsg, nil
 }

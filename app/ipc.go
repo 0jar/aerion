@@ -134,13 +134,9 @@ func (a *App) handleComposerDraftSaved(payload ipc.DraftSavedPayload) {
 		Str("draftID", payload.DraftID).
 		Msg("Composer saved draft notification")
 
-	// Emit event to frontend
-	wailsRuntime.EventsEmit(a.ctx, "composer:draftSaved", map[string]interface{}{
-		"accountId": payload.AccountID,
-		"draftId":   payload.DraftID,
-	})
-
-	// Sync the Drafts folder to pick up the newly uploaded draft
+	// Sync the Drafts folder to pick up the newly uploaded draft.
+	// Refresh signal to the main window's MessageList rides on the folder:synced
+	// event emitted by SyncFolder — same path as the in-window save case.
 	// The notification is sent after the composer's IMAP upload completes,
 	// so we can sync immediately
 	go func() {
@@ -269,38 +265,6 @@ func (a *App) BroadcastThemeChange(theme string) {
 
 	msg, err := ipc.NewMessage(ipc.TypeThemeChanged, ipc.ThemeChangedPayload{
 		Theme: theme,
-	})
-	if err != nil {
-		return
-	}
-
-	_ = a.ipcServer.Broadcast(msg)
-}
-
-// BroadcastAccountUpdated notifies all composer windows that an account was updated.
-func (a *App) BroadcastAccountUpdated(accountID string) {
-	if a.ipcServer == nil {
-		return
-	}
-
-	msg, err := ipc.NewMessage(ipc.TypeAccountUpdated, ipc.AccountUpdatedPayload{
-		AccountID: accountID,
-	})
-	if err != nil {
-		return
-	}
-
-	_ = a.ipcServer.Broadcast(msg)
-}
-
-// BroadcastContactsUpdated notifies all composer windows that contacts were updated.
-func (a *App) BroadcastContactsUpdated(accountID string) {
-	if a.ipcServer == nil {
-		return
-	}
-
-	msg, err := ipc.NewMessage(ipc.TypeContactsUpdated, ipc.ContactsUpdatedPayload{
-		AccountID: accountID,
 	})
 	if err != nil {
 		return

@@ -557,12 +557,7 @@ func (a *App) syncSentFolder(accountID string) error {
 		syncPeriodDays = acc.SyncPeriodDays
 	}
 
-	// Emit syncing event
-	wailsRuntime.EventsEmit(a.ctx, "folder:syncing", map[string]interface{}{
-		"accountId": accountID,
-		"folderId":  sentFolder.ID,
-	})
-
+	// Sync progress feedback rides on the syncEngine's sync:progress callback (see app.go:438)
 	if err := a.syncEngine.SyncMessages(a.ctx, accountID, sentFolder.ID, syncPeriodDays); err != nil {
 		log.Warn().Err(err).Str("folderID", sentFolder.ID).Msg("Failed to sync Sent folder")
 	}
