@@ -50,7 +50,7 @@ Although Linux is a first-class citizen here, it also works on:
     - Generic IMAP/SMTP
     - GMail
     - Microsoft 365 / Outlook
-    - Yahoo 🧪
+    - Yahoo 
     - Proton Mail (via Proton Bridge)
     - iCloud Mail 
     - Fastmail 🧪
