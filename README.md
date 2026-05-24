@@ -454,7 +454,7 @@ Special thanks to translation contributors for making Aerion more accessible:
 
 <table align="left">
   <tr>
-    <td align="center" width="100">
+    <td align="center" width="180">
       <a href="https://github.com/lorduskordus">
         <img src="https://github.com/lorduskordus.png" width="80"><br>
         <sub><b>lorduskordus</b></sub>
@@ -467,7 +467,7 @@ Special thanks to translation contributors for making Aerion more accessible:
 
 <table align="left">
   <tr>
-    <td align="center" width="100">
+    <td align="center" width="180">
       <a href="https://github.com/Gerti1972">
         <img src="https://github.com/Gerti1972.png" width="80"><br>
         <sub><b>Gerti1972</b></sub>
@@ -480,7 +480,7 @@ Special thanks to translation contributors for making Aerion more accessible:
 
 <table align="left">
   <tr>
-    <td align="center" width="100">
+    <td align="center" width="180">
       <a href="https://github.com/dev-inside">
         <img src="https://github.com/dev-inside.png" width="80"><br>
         <sub><b>dev-inside</b></sub>
@@ -493,7 +493,7 @@ Special thanks to translation contributors for making Aerion more accessible:
 
 <table align="left">
   <tr>
-    <td align="center" width="100">
+    <td align="center" width="180">
       <a href="https://github.com/StefanSchroeder">
         <img src="https://github.com/StefanSchroeder.png" width="80"><br>
         <sub><b>StefanSchroeder</b></sub>
@@ -506,7 +506,7 @@ Special thanks to translation contributors for making Aerion more accessible:
 
 <table align="left">
   <tr>
-    <td align="center" width="100">
+    <td align="center" width="180">
       <a href="https://github.com/freemans32">
         <img src="https://github.com/freemans32.png" width="80"><br>
         <sub><b>freemans32</b></sub>
@@ -519,7 +519,7 @@ Special thanks to translation contributors for making Aerion more accessible:
 
 <table align="left">
   <tr>
-    <td align="center" width="100">
+    <td align="center" width="180">
       <a href="https://github.com/YacineBoussoufa">
         <img src="https://github.com/YacineBoussoufa.png" width="80"><br>
         <sub><b>YacineBoussoufa</b></sub>
@@ -532,7 +532,7 @@ Special thanks to translation contributors for making Aerion more accessible:
 
 <table align="left">
   <tr>
-    <td align="center" width="100">
+    <td align="center" width="180">
       <a href="https://github.com/dexblasnoot">
         <img src="https://github.com/dexblasnoot.png" width="80"><br>
         <sub><b>dexblasnoot</b></sub>
