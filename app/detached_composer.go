@@ -486,11 +486,6 @@ func (c *ComposerApp) getIMAPCredentials(accountID string) (*imap.ClientConfig, 
 	return c.composeOps.getIMAPCredentials(c.ctx, accountID)
 }
 
-// getValidOAuthToken returns a valid OAuth token, refreshing if needed.
-func (c *ComposerApp) getValidOAuthToken(accountID string) (*credentials.OAuthTokens, error) {
-	return c.composeOps.getValidOAuthToken(c.ctx, accountID)
-}
-
 // ============================================================================
 // Wails-bound methods (exposed to frontend)
 // ============================================================================
@@ -691,11 +686,6 @@ func (c *ComposerApp) SendMessage(accountID string, msg smtp.ComposeMessage) err
 	c.notifyMessageSent(accountID, sentFolderID)
 
 	return nil
-}
-
-// saveToSentFolder appends the sent message to the Sent folder via IMAP.
-func (c *ComposerApp) saveToSentFolder(accountID string, acc *account.Account, rawMsg []byte) error {
-	return c.composeOps.saveToSentFolder(c.ctx, accountID, acc, rawMsg)
 }
 
 // cancelDraftSync signals any in-flight syncDraftToIMAP goroutine to abort and
@@ -1200,32 +1190,6 @@ func (c *ComposerApp) getHKPServers() []string {
 		urls[i] = s.URL
 	}
 	return urls
-}
-
-// shouldPGPSignMessage determines whether a message should be PGP signed.
-func (c *ComposerApp) shouldPGPSignMessage(perMessageOverride bool) bool {
-	return c.composeOps.shouldPGPSignMessage(c.config.AccountID, perMessageOverride)
-}
-
-// shouldPGPEncryptMessage determines whether a message should be PGP encrypted.
-func (c *ComposerApp) shouldPGPEncryptMessage(perMessageOverride bool) bool {
-	return c.composeOps.shouldPGPEncryptMessage(c.config.AccountID, perMessageOverride)
-}
-
-// shouldSignMessage determines whether a message should be S/MIME signed.
-func (c *ComposerApp) shouldSignMessage(perMessageOverride bool) bool {
-	return c.composeOps.shouldSignMessage(c.config.AccountID, perMessageOverride)
-}
-
-// shouldEncryptMessage determines whether a message should be S/MIME encrypted.
-func (c *ComposerApp) shouldEncryptMessage(perMessageOverride bool) bool {
-	return c.composeOps.shouldEncryptMessage(c.config.AccountID, perMessageOverride)
-}
-
-// getDraftIdentityEmail returns the email address for the draft's identity.
-// Falls back to the account email if the identity cannot be resolved.
-func (c *ComposerApp) getDraftIdentityEmail(d *draft.Draft) string {
-	return c.draftOps.getIdentityEmail(d)
 }
 
 // parseIntID parses a string ID to int64.

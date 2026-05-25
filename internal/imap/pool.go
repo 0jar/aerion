@@ -94,13 +94,6 @@ func (pc *PooledConnection) isHealthyLocked() bool {
 	return true
 }
 
-// markUsed updates the last used timestamp
-func (pc *PooledConnection) markUsed() {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	pc.lastUsed = time.Now()
-}
-
 // Pool manages IMAP connections for multiple accounts
 type Pool struct {
 	config      PoolConfig

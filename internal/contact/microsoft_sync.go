@@ -173,11 +173,6 @@ func (s *MicrosoftContactsSyncer) SyncContactsDelta(accessToken, deltaLink strin
 
 // Microsoft Graph API contacts response structures
 
-type msGraphContactsResponse struct {
-	Value    []msGraphContact `json:"value"`
-	NextLink string           `json:"@odata.nextLink"`
-}
-
 // msGraphDeltaResponse is used for delta sync responses
 type msGraphDeltaResponse struct {
 	Value     []msGraphDeltaContact `json:"value"`
@@ -185,13 +180,7 @@ type msGraphDeltaResponse struct {
 	DeltaLink string                `json:"@odata.deltaLink"` // Final link for next incremental sync
 }
 
-type msGraphContact struct {
-	ID             string         `json:"id"`
-	DisplayName    string         `json:"displayName"`
-	EmailAddresses []msGraphEmail `json:"emailAddresses"`
-}
-
-// msGraphDeltaContact extends msGraphContact with removal info
+// msGraphDeltaContact represents a contact from a delta sync, with optional removal info.
 type msGraphDeltaContact struct {
 	ID             string               `json:"id"`
 	DisplayName    string               `json:"displayName"`

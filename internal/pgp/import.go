@@ -2,8 +2,6 @@ package pgp
 
 import (
 	"fmt"
-
-	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 // ImportKey imports a PGP key from raw data (armored or binary).
@@ -83,7 +81,3 @@ func ImportPublicKey(data []byte) (armoredPublicKey string, key *Key, err error)
 	return armoredPublicKey, key, nil
 }
 
-// entityListFromArmored creates an EntityList from armored public key text
-func entityListFromArmored(armored string) (openpgp.EntityList, error) {
-	return ParseArmoredKey(armored)
-}

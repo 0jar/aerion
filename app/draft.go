@@ -702,12 +702,6 @@ func (a *App) draftToComposeMessage(d *draft.Draft) *smtp.ComposeMessage {
 	return a.draftOps.toComposeMessage(d)
 }
 
-// getDraftIdentityEmail returns the email address for the draft's identity.
-// Falls back to the account email if the identity cannot be resolved.
-func (a *App) getDraftIdentityEmail(d *draft.Draft) string {
-	return a.draftOps.getIdentityEmail(d)
-}
-
 // DeleteDraft deletes a draft from local DB and IMAP
 func (a *App) DeleteDraft(draftID string) error {
 	log := logging.WithComponent("app")

@@ -581,11 +581,6 @@ func (a *App) syncSentFolder(accountID string) error {
 	return nil
 }
 
-// saveToSentFolder appends the sent message to the Sent folder via IMAP
-func (a *App) saveToSentFolder(accountID string, acc *account.Account, rawMsg []byte) error {
-	return a.composeOps.saveToSentFolder(a.ctx, accountID, acc, rawMsg)
-}
-
 // PrepareReply prepares a reply message structure from an existing message.
 // mode can be "reply", "reply-all", or "forward"
 func (a *App) PrepareReply(messageID, mode string) (*smtp.ComposeMessage, error) {

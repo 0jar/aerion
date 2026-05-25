@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/hkdb/aerion/internal/database"
@@ -2419,7 +2418,3 @@ func highlightMatches(text, query string) string {
 	return highlighted
 }
 
-// isWordChar returns true if the rune is a word character
-func isWordChar(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
-}
