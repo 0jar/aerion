@@ -562,6 +562,10 @@ export function ListSenderCerts() {
   return window['go']['app']['App']['ListSenderCerts']();
 }
 
+export function LogFrontend(arg1, arg2) {
+  return window['go']['app']['App']['LogFrontend'](arg1, arg2);
+}
+
 export function LookupHKP(arg1) {
   return window['go']['app']['App']['LookupHKP'](arg1);
 }
