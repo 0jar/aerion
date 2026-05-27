@@ -342,17 +342,6 @@ func (c *ComposerApp) handleIPCMessage(msg ipc.Message) {
 			wailsRuntime.EventsEmit(c.ctx, "theme:changed", payload.Theme)
 		}
 
-	case ipc.TypeAccountUpdated:
-		var payload ipc.AccountUpdatedPayload
-		if err := msg.ParsePayload(&payload); err == nil {
-			// Forward account updates for any account (composer supports cross-account)
-			wailsRuntime.EventsEmit(c.ctx, "account:updated", payload.AccountID)
-		}
-
-	case ipc.TypeContactsUpdated:
-		// Emit event to frontend to refresh autocomplete
-		wailsRuntime.EventsEmit(c.ctx, "contacts:updated", nil)
-
 	case ipc.TypeShutdown:
 		var payload ipc.ShutdownPayload
 		_ = msg.ParsePayload(&payload)
@@ -495,11 +484,6 @@ func (c *ComposerApp) notifyDraftDeleted(accountID string) {
 // Handles both password and OAuth2 authentication.
 func (c *ComposerApp) getIMAPCredentials(accountID string) (*imap.ClientConfig, error) {
 	return c.composeOps.getIMAPCredentials(c.ctx, accountID)
-}
-
-// getValidOAuthToken returns a valid OAuth token, refreshing if needed.
-func (c *ComposerApp) getValidOAuthToken(accountID string) (*credentials.OAuthTokens, error) {
-	return c.composeOps.getValidOAuthToken(c.ctx, accountID)
 }
 
 // ============================================================================
@@ -704,28 +688,19 @@ func (c *ComposerApp) SendMessage(accountID string, msg smtp.ComposeMessage) err
 	return nil
 }
 
-// saveToSentFolder appends the sent message to the Sent folder via IMAP.
-func (c *ComposerApp) saveToSentFolder(accountID string, acc *account.Account, rawMsg []byte) error {
-	return c.composeOps.saveToSentFolder(c.ctx, accountID, acc, rawMsg)
-}
-
-// cancelDraftSync cancels any in-flight syncDraftToIMAP goroutine and waits for
-// it to finish. This prevents the race where DeleteDraft runs while a background
-// goroutine is still uploading the draft to IMAP.
+// cancelDraftSync signals any in-flight syncDraftToIMAP goroutine to abort and
+// returns immediately. The goroutine self-cleans via the post-APPEND guard in
+// syncToIMAP if it had already committed an APPEND to the server, so the caller
+// (DeleteDraft / next SaveDraft) doesn't need to block on the goroutine exiting.
 func (c *ComposerApp) cancelDraftSync() {
 	c.draftSyncMu.Lock()
 	cancel := c.draftSyncCancel
-	done := c.draftSyncDone
 	c.draftSyncMu.Unlock()
 
 	if cancel == nil {
 		return
 	}
 	cancel()
-	if done == nil {
-		return
-	}
-	<-done
 }
 
 // SaveDraft saves the current compose state as a draft.
@@ -1215,32 +1190,6 @@ func (c *ComposerApp) getHKPServers() []string {
 		urls[i] = s.URL
 	}
 	return urls
-}
-
-// shouldPGPSignMessage determines whether a message should be PGP signed.
-func (c *ComposerApp) shouldPGPSignMessage(perMessageOverride bool) bool {
-	return c.composeOps.shouldPGPSignMessage(c.config.AccountID, perMessageOverride)
-}
-
-// shouldPGPEncryptMessage determines whether a message should be PGP encrypted.
-func (c *ComposerApp) shouldPGPEncryptMessage(perMessageOverride bool) bool {
-	return c.composeOps.shouldPGPEncryptMessage(c.config.AccountID, perMessageOverride)
-}
-
-// shouldSignMessage determines whether a message should be S/MIME signed.
-func (c *ComposerApp) shouldSignMessage(perMessageOverride bool) bool {
-	return c.composeOps.shouldSignMessage(c.config.AccountID, perMessageOverride)
-}
-
-// shouldEncryptMessage determines whether a message should be S/MIME encrypted.
-func (c *ComposerApp) shouldEncryptMessage(perMessageOverride bool) bool {
-	return c.composeOps.shouldEncryptMessage(c.config.AccountID, perMessageOverride)
-}
-
-// getDraftIdentityEmail returns the email address for the draft's identity.
-// Falls back to the account email if the identity cannot be resolved.
-func (c *ComposerApp) getDraftIdentityEmail(d *draft.Draft) string {
-	return c.draftOps.getIdentityEmail(d)
 }
 
 // parseIntID parses a string ID to int64.

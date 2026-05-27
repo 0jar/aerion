@@ -34,14 +34,6 @@ export function Archive(arg1) {
   return window['go']['app']['App']['Archive'](arg1);
 }
 
-export function BroadcastAccountUpdated(arg1) {
-  return window['go']['app']['App']['BroadcastAccountUpdated'](arg1);
-}
-
-export function BroadcastContactsUpdated(arg1) {
-  return window['go']['app']['App']['BroadcastContactsUpdated'](arg1);
-}
-
 export function BroadcastThemeChange(arg1) {
   return window['go']['app']['App']['BroadcastThemeChange'](arg1);
 }
@@ -568,6 +560,10 @@ export function ListSMIMECertificates(arg1) {
 
 export function ListSenderCerts() {
   return window['go']['app']['App']['ListSenderCerts']();
+}
+
+export function LogFrontend(arg1, arg2) {
+  return window['go']['app']['App']['LogFrontend'](arg1, arg2);
 }
 
 export function LookupHKP(arg1) {

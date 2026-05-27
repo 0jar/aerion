@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
-	"mime"
 	"strings"
 
 	"github.com/hkdb/aerion/internal/credentials"
@@ -282,11 +281,3 @@ func writeFilteredHeaders(buf *bytes.Buffer, headers []byte) {
 	buf.WriteString("MIME-Version: 1.0\r\n")
 }
 
-// parseMicalg extracts the micalg parameter from a Content-Type header
-func parseMicalg(contentType string) string {
-	_, params, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return ""
-	}
-	return params["micalg"]
-}

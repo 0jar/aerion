@@ -641,11 +641,8 @@ func (a *App) CopyToFolder(messageIDs []string, destFolderID string) error {
 					Msg("Cross-account copy failed")
 				return
 			}
+			// Dest folder refresh + sidebar count bump ride on folder:synced from SyncFolder.
 			_ = a.SyncFolder(destFolder.AccountID, destFolder.ID)
-			wailsRuntime.EventsEmit(a.ctx, "messages:copied", map[string]interface{}{
-				"messageIds":   messageIDs,
-				"destFolderId": destFolder.ID,
-			})
 		}()
 		return nil
 	}
@@ -681,12 +678,7 @@ func (a *App) CopyToFolder(messageIDs []string, destFolderID string) error {
 				log.Warn().Err(err).Str("destFolderID", destFolderID).Msg("Failed to sync destination folder after copy")
 			}
 		}
-
-		// Emit event after sync completes
-		wailsRuntime.EventsEmit(a.ctx, "messages:copied", map[string]interface{}{
-			"messageIds":   messageIDs,
-			"destFolderId": destFolderID,
-		})
+		// Dest folder refresh + sidebar count bump ride on folder:synced from SyncFolder above.
 	}()
 
 	return nil

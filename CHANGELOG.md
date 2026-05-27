@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+**v0.2.5 - 05-27-2026**
+---
+
+- Sync progress indication redesign and shifting folder tree fix - [#204](https://github.com/hkdb/aerion/issues/204)
+- Added German translation - PR [#194](https://github.com/hkdb/aerion/pull/194)
+- Added Italian translation - PR [#208](https://github.com/hkdb/aerion/pull/208)
+- Dark content auto bg color and overrides - [#195](https://github.com/hkdb/aerion/issues/195)
+- Added guard rails to prevent accidental close of dialogs - [#201](https://github.com/hkdb/aerion/issues/201) - [#198](https://github.com/hkdb/aerion/issues/198)
+- Fixed message list on folder switch bug - [#200](https://github.com/hkdb/aerion/issues/200)
+- Fixed detached composer draft ops - [#213](https://github.com/hkdb/aerion/issues/213) - [#214](https://github.com/hkdb/aerion/issues/214)
+- Fixed send receipt feature
+- Fixed dark themes composer lists - [#215](https://github.com/hkdb/aerion/issues/215)
+- Fixed setting dialog layout - [#203](https://github.com/hkdb/aerion/issues/203)
+- Fixed (workaround) folder subscription for non-compliant providers (Microsoft 365, etc) - [#218](https://github.com/hkdb/aerion/issues/218)
+- Code cleanup prior to diving into v0.3.0
+
+
 **v0.2.4 - 05-20-2026**
 ---
 

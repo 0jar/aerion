@@ -49,6 +49,7 @@
      harsh than Dark default. Primary green is Primer's dimmed variant. */
   [data-theme="github-soft-dark"] {
     color-scheme: dark;
+    --dark-mail-bg-l: 8;                   /* override: lower than chrome L to minimize hue-rotate brown artifact */
     --background: 213 17% 17%;             /* bgColor.default #212830 */
     --foreground: 214 18% 85%;             /* fgColor.default #D1D7E0 */
     --card: 213 17% 17%;                   /* bgColor.default — flat, Aerion convention */

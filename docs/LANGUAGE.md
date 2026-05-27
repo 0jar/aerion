@@ -1,6 +1,8 @@
 # Contributing Translations
 
-If you'd like to submit a translation PR:
+If your language already exists in the code base and you are looking to improve the existing translation, comment in the existing contribution issue of your language to propose the change. With verification of at least one participant in the issue, submit a PR. If you are unfamiliar or uncomfortable with git ops, suggestions to see if someone will pick it up are also welcomed.
+
+If your language translation does not currently exist and you'd like to submit a translation PR:
 
 ## Checklist
 
@@ -19,9 +21,9 @@ Use this checklist to ensure your submission is complete:
 
 ## Claim Your Language
 
-Before starting any translation work, **file a [Translation issue](https://github.com/hkdb/aerion/issues/new?template=translation.yml)** to declare your intent. This prevents duplicate efforts and lets maintainers coordinate contributors.
-
 Check [existing translation issues](https://github.com/hkdb/aerion/issues?q=label%3Atranslate) first — if someone is already working on your language, consider collaborating with them instead.
+
+Before starting any translation work, **file a [Translation issue](https://github.com/hkdb/aerion/issues/new?template=translation.yml)** to declare your intent. This prevents duplicate efforts and lets maintainers coordinate with contributors.
 
 ## Branch Target
 
@@ -55,7 +57,7 @@ Thoroughly review and verify your work:
 
 Include in your PR:
 - The language being added (name + locale code)
-- Confirmation that you ran the checks and tested the app
+- Copy and paste the checklist to the description and check off all the tasks you have completed
 - Any translation decisions worth noting (e.g., terminology choices for technical terms)
 
 ---
@@ -246,17 +248,6 @@ Then run the app, open Settings > General, and select the new language from the 
 
 No backend changes are needed. The language setting is stored via the existing `GetLanguage`/`SetLanguage` Wails bindings in `app/settings.go`.
 
-## Existing Locales
-
-| Code | Language | File |
-|------|----------|------|
-| `en` | English | `locales/en.json` (source of truth) |
-| `cs` | Czech | `locales/cs.json` |
-| `fr` | French | `locales/fr.json` |
-| `zh-CN` | Simplified Chinese (China) | `locales/zh-CN.json` |
-| `zh-HK` | Traditional Chinese (Hong Kong) | `locales/zh-HK.json` |
-| `zh-TW` | Traditional Chinese (Taiwan) | `locales/zh-TW.json` |
-
 ## Translation Key Namespaces
 
 | Namespace | Description |
@@ -307,3 +298,7 @@ No backend changes are needed. The language setting is stored via the existing `
   - `{description}` — undo action description
   - `{filename}` — attachment filename
 - **Token positioning**: Reposition tokens to match your language's grammar — don't assume English word order is correct for your language.
+
+## Translation Issue
+
+After a PR is merged, the translation issue will remain open permanently. This is where users can go to to provide feedback on any translation or propose their additional contributions.

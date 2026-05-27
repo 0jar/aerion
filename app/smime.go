@@ -203,16 +203,6 @@ func (a *App) GetSMIMECertificateForEmail(accountID, email string) (*smime.Certi
 	return cert, nil
 }
 
-// shouldSignMessage determines whether a message should be S/MIME signed
-func (a *App) shouldSignMessage(accountID string, perMessageOverride bool) bool {
-	return a.composeOps.shouldSignMessage(accountID, perMessageOverride)
-}
-
-// shouldEncryptMessage determines whether a message should be S/MIME encrypted
-func (a *App) shouldEncryptMessage(accountID string, perMessageOverride bool) bool {
-	return a.composeOps.shouldEncryptMessage(accountID, perMessageOverride)
-}
-
 // GetSMIMEEncryptPolicy returns the encryption policy for an account
 func (a *App) GetSMIMEEncryptPolicy(accountID string) (string, error) {
 	return a.smimeStore.GetEncryptPolicy(accountID)

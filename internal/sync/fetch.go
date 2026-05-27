@@ -99,56 +99,6 @@ func (e *Engine) FetchMessageBody(ctx context.Context, accountID, messageID stri
 	return e.messageStore.Get(messageID)
 }
 
-// fetchMessageBodyWithConn fetches body using provided connection (no new connection).
-// The mailbox must already be selected by the caller.
-// This is an internal method used by FetchBodiesInBackground for efficiency.
-// Uses fetchMessageBodiesBatch() internally to avoid blocking on .Collect().
-func (e *Engine) fetchMessageBodyWithConn(ctx context.Context, client *imapclient.Client, messageID string) error {
-	// Check context
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	// Get message UID from store
-	uid, _, err := e.messageStore.GetMessageUIDAndFolder(messageID)
-	if err != nil {
-		return fmt.Errorf("failed to get message info: %w", err)
-	}
-
-	e.log.Debug().
-		Str("messageID", messageID).
-		Uint32("uid", uid).
-		Msg("Fetching message body with existing connection")
-
-	// Use fetchMessageBodiesBatch for streaming fetch (avoids .Collect() blocking)
-	uidToMessageID := map[uint32]string{uid: messageID}
-	results, err := e.fetchMessageBodiesBatch(ctx, client, uidToMessageID)
-	if err != nil {
-		return fmt.Errorf("fetch failed: %w", err)
-	}
-
-	result, ok := results[uid]
-	if !ok || result == nil {
-		return fmt.Errorf("message not found on server")
-	}
-
-	// Update message in store
-	if err := e.messageStore.UpdateBody(messageID, result.BodyHTML, result.BodyText, result.Snippet, result.HasAttachments); err != nil {
-		return fmt.Errorf("failed to update message body: %w", err)
-	}
-
-	// Store attachments if present
-	if result.HasAttachments && e.attachmentStore != nil {
-		for _, att := range result.Attachments {
-			if err := e.attachmentStore.Create(att); err != nil {
-				e.log.Debug().Err(err).Str("filename", att.Filename).Msg("Failed to save attachment metadata")
-			}
-		}
-	}
-
-	return nil
-}
-
 // fetchMessageBodiesBatch fetches bodies for multiple messages in a single IMAP command
 // The mailbox must already be selected by the caller.
 // Returns a map of UID -> ProcessedBody for successfully fetched messages.

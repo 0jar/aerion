@@ -856,13 +856,10 @@ func (a *App) getValidContactSourceOAuthToken(sourceID string) (string, error) {
 				Str("source_id", sourceID).
 				Msg("Contact source OAuth token refresh failed")
 
-			// Emit event for frontend to prompt re-authorization
-			wailsRuntime.EventsEmit(a.ctx, "contact-source:reauth-required", map[string]interface{}{
-				"sourceId": sourceID,
-				"provider": tokens.Provider,
-				"error":    err.Error(),
-			})
-
+			// Error is persisted to the contact_sources table by the sync caller;
+			// sidebar red dot picks it up on next contactSourcesStore.load() (app start
+			// or Contacts settings open). Real-time notification deferred — not worth
+			// the listener wiring for a non-time-sensitive failure mode.
 			return "", fmt.Errorf("contact source OAuth token refresh failed: %w", err)
 		}
 

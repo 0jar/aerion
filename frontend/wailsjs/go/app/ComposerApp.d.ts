@@ -60,6 +60,8 @@ export function ImportRecipientPGPKey(arg1:string,arg2:string):Promise<void>;
 
 export function IsFlatpak():Promise<boolean>;
 
+export function LogFrontend(arg1:string,arg2:string):Promise<void>;
+
 export function LookupHKP(arg1:string):Promise<string>;
 
 export function LookupPGPKey(arg1:string):Promise<string>;

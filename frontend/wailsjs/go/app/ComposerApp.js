@@ -102,6 +102,10 @@ export function IsFlatpak() {
   return window['go']['app']['ComposerApp']['IsFlatpak']();
 }
 
+export function LogFrontend(arg1, arg2) {
+  return window['go']['app']['ComposerApp']['LogFrontend'](arg1, arg2);
+}
+
 export function LookupHKP(arg1) {
   return window['go']['app']['ComposerApp']['LookupHKP'](arg1);
 }

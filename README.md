@@ -50,7 +50,7 @@ Although Linux is a first-class citizen here, it also works on:
     - Generic IMAP/SMTP
     - GMail
     - Microsoft 365 / Outlook
-    - Yahoo 🧪
+    - Yahoo 
     - Proton Mail (via Proton Bridge)
     - iCloud Mail 
     - Fastmail 🧪
@@ -452,33 +452,98 @@ Aerion is largely driven by community feedback. Big thanks to the following non-
 Special thanks to translation contributors for making Aerion more accessible:
 
 
-<table>
+<table align="left">
   <tr>
-    <td align="center">
+    <td align="center" width="180">
       <a href="https://github.com/lorduskordus">
         <img src="https://github.com/lorduskordus.png" width="80"><br>
         <sub><b>lorduskordus</b></sub>
       </a><br>
-      <sub>Čeština (cs)</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/freemans32">
-        <img src="https://github.com/freemans32.png" width="80"><br>
-        <sub><b>freemans32</b></sub>
-      </a><br>
-      <sub>Français (fr)</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/dexblasnoot">
-        <img src="https://github.com/dexblasnoot.png" width="80"><br>
-        <sub><b>dexblasnoot</b></sub>
-      </a><br>
-      <sub>Norsk Bokmål (nb)</sub>
+      <sub>Čeština (cs)</sub><br>
+      <sub>&nbsp;</sub>
     </td>
   </tr>
 </table>
 
-*Last Updated: 2026-05-20
+<table align="left">
+  <tr>
+    <td align="center" width="180">
+      <a href="https://github.com/Gerti1972">
+        <img src="https://github.com/Gerti1972.png" width="80"><br>
+        <sub><b>Gerti1972</b></sub>
+      </a><br>
+      <sub>Deutsch (de)</sub><br>
+      <sub>&nbsp;</sub>
+    </td>
+  </tr>
+</table>
+
+<table align="left">
+  <tr>
+    <td align="center" width="180">
+      <a href="https://github.com/dev-inside">
+        <img src="https://github.com/dev-inside.png" width="80"><br>
+        <sub><b>dev-inside</b></sub>
+      </a><br>
+      <sub>Deutsch (de)</sub><br>
+      <sup><small><em>reviewer</em></small></sup>
+    </td>
+  </tr>
+</table>
+
+<table align="left">
+  <tr>
+    <td align="center" width="180">
+      <a href="https://github.com/StefanSchroeder">
+        <img src="https://github.com/StefanSchroeder.png" width="80"><br>
+        <sub><b>StefanSchroeder</b></sub>
+      </a><br>
+      <sub>Deutsch (de)</sub><br>
+      <sup><small><em>reviewer</em></small></sup>
+    </td>
+  </tr>
+</table>
+
+<table align="left">
+  <tr>
+    <td align="center" width="180">
+      <a href="https://github.com/freemans32">
+        <img src="https://github.com/freemans32.png" width="80"><br>
+        <sub><b>freemans32</b></sub>
+      </a><br>
+      <sub>Français (fr)</sub><br>
+      <sub>&nbsp;</sub>
+    </td>
+  </tr>
+</table>
+
+<table align="left">
+  <tr>
+    <td align="center" width="180">
+      <a href="https://github.com/YacineBoussoufa">
+        <img src="https://github.com/YacineBoussoufa.png" width="80"><br>
+        <sub><b>YacineBoussoufa</b></sub>
+      </a><br>
+      <sub>Italiano (it)</sub><br>
+      <sub>&nbsp;</sub>
+    </td>
+  </tr>
+</table>
+
+<table align="left">
+  <tr>
+    <td align="center" width="180">
+      <a href="https://github.com/dexblasnoot">
+        <img src="https://github.com/dexblasnoot.png" width="80"><br>
+        <sub><b>dexblasnoot</b></sub>
+      </a><br>
+      <sub>Norsk Bokmål (nb)</sub><br>
+      <sub>&nbsp;</sub>
+    </td>
+  </tr>
+</table>
+
+<br clear="left">
 
 
 ### 📑 Terms of Use & Privacy Policy

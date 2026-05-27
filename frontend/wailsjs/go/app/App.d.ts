@@ -33,10 +33,6 @@ export function AddPGPKeyServer(arg1:string):Promise<void>;
 
 export function Archive(arg1:Array<string>):Promise<void>;
 
-export function BroadcastAccountUpdated(arg1:string):Promise<void>;
-
-export function BroadcastContactsUpdated(arg1:string):Promise<void>;
-
 export function BroadcastThemeChange(arg1:string):Promise<void>;
 
 export function CanUndo():Promise<boolean>;
@@ -300,6 +296,8 @@ export function ListPGPSenderKeys():Promise<Array<pgp.SenderKey>>;
 export function ListSMIMECertificates(arg1:string):Promise<Array<smime.Certificate>>;
 
 export function ListSenderCerts():Promise<Array<smime.SenderCert>>;
+
+export function LogFrontend(arg1:string,arg2:string):Promise<void>;
 
 export function LookupHKP(arg1:string):Promise<string>;
 

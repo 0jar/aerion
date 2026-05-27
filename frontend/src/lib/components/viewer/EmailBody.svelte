@@ -8,7 +8,7 @@
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import { _ } from '$lib/i18n'
   import { toasts } from '$lib/stores/toast'
-  import { getAlwaysLoadImages } from '$lib/stores/settings.svelte'
+  import { getAlwaysLoadImages, getThemeMode } from '$lib/stores/settings.svelte'
 
   interface Props {
     messageId: string
@@ -48,6 +48,14 @@
 
   // Derived state
   let hasRemoteImages = $derived(checkForRemoteImages(bodyHtml))
+
+  // Outer iframe element bg: matches the dark-mail surface color (derived from
+  // active theme) when darken=true, otherwise white. Reactive to theme changes
+  // via getThemeMode() so the iframe outer color updates when user switches.
+  let iframeOuterBg = $derived.by(() => {
+    void getThemeMode()
+    return darken ? getChromeBgHsl() : 'white'
+  })
 
   // Loading placeholder SVG
   const loadingPlaceholder = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='80' viewBox='0 0 120 80'%3E%3Crect fill='%23f3f4f6' width='120' height='80' rx='4'/%3E%3Cg transform='translate(60,40)'%3E%3Ccircle cx='0' cy='0' r='12' fill='none' stroke='%239ca3af' stroke-width='2' stroke-dasharray='20 10'%3E%3CanimateTransform attributeName='transform' type='rotate' from='0' to='360' dur='1s' repeatCount='indefinite'/%3E%3C/circle%3E%3C/g%3E%3Ctext x='60' y='65' text-anchor='middle' fill='%239ca3af' font-size='9' font-family='sans-serif'%3ELoading...%3C/text%3E%3C/svg%3E`
@@ -101,6 +109,64 @@
     return processed
   }
 
+  // Reads the active theme's chrome lightness so the dark-mail filter can tune
+  // its invert amount — pure black is too dark against most themes' chrome.
+  // For themes whose --background hue carries enough chromaticity that the
+  // partial-invert + hue-rotate composes into visible color shifts, declare
+  // --dark-mail-bg-l (number 0-100) to override with an explicit value.
+  function getChromeBgLightness(): number {
+    const styles = getComputedStyle(document.documentElement)
+    const override = styles.getPropertyValue('--dark-mail-bg-l').trim()
+    if (override) {
+      const n = parseFloat(override)
+      if (!Number.isNaN(n)) return Math.max(0, Math.min(1, n / 100))
+    }
+    const bg = styles.getPropertyValue('--background').trim()
+    const lMatch = bg.match(/(\d+(?:\.\d+)?)%\s*$/)
+    if (lMatch) {
+      const l = parseFloat(lMatch[1])
+      if (!Number.isNaN(l)) return Math.max(0, Math.min(1, l / 100))
+    }
+    return 0
+  }
+
+  // Returns the chrome bg as `hsl(...)` for the iframe element's outer
+  // background, matching the rendered dark-mail surface so the rounded
+  // corner clip has no color seam.
+  function getChromeBgHsl(): string {
+    const styles = getComputedStyle(document.documentElement)
+    const bg = styles.getPropertyValue('--background').trim()
+    return bg ? `hsl(${bg})` : '#000'
+  }
+
+  // Per-theme dark-mail saturation override. <1 desaturates the inverted
+  // email surface to cancel out the warm/red chromatic shift that partial
+  // invert + hue-rotate(180deg) leaves on the residual chromaticity of
+  // most input content. Default 1 (no change).
+  function getChromeBgSaturate(): number {
+    const override = getComputedStyle(document.documentElement)
+      .getPropertyValue('--dark-mail-saturate').trim()
+    if (override) {
+      const n = parseFloat(override)
+      if (!Number.isNaN(n) && n > 0) return n
+    }
+    return 1
+  }
+
+  // Per-theme dark-mail hue rotation override (degrees, signed). Shifts the
+  // residual chromaticity of the inverted email surface toward a specific
+  // hue family — e.g., -20 to cool down a cool-toned theme's surface that
+  // would otherwise read as warm gray. Default 0 (no shift, GPU-skipped).
+  function getChromeBgHueRotate(): number {
+    const override = getComputedStyle(document.documentElement)
+      .getPropertyValue('--dark-mail-hue').trim()
+    if (override) {
+      const n = parseFloat(override)
+      if (!Number.isNaN(n)) return n
+    }
+    return 0
+  }
+
   function buildIframeContent(html: string, applyDarken: boolean): string {
     const processedHtml = processHtml(html, imagesBlocked)
     const imgSrc = imagesBlocked ? "'self' data:" : '* data:'
@@ -111,9 +177,18 @@
     // up dark too — they're chrome, not content.
     // color-scheme: dark switches the UA-default iframe viewport bg to dark so
     // the rounded-corner edge has no white sliver bleeding through.
+    // Invert amount derived from theme's chrome lightness — pure invert(1)
+    // produces stark black against themes whose chrome isn't pure black.
+    const invertAmount = applyDarken ? 1 - getChromeBgLightness() : 1
+    const saturate = applyDarken ? getChromeBgSaturate() : 1
+    const hueRotate = applyDarken ? getChromeBgHueRotate() : 0
+    // Image filter compensates so photos see net saturate(1) + hue-rotate(0) —
+    // html's saturate(S) hue-rotate(H) composed with image's saturate(1/S)
+    // hue-rotate(-H) approximately cancels for non-grayscale image content.
+    const imageSaturate = 1 / saturate
     const darkenStyles = applyDarken ? `
-    html { filter: invert(1) hue-rotate(180deg); background: #fff; color-scheme: dark; }
-    img:not([data-blocked-src]), video, iframe, [data-no-invert] { filter: invert(1) hue-rotate(180deg); }
+    html { filter: invert(${invertAmount}) hue-rotate(180deg) saturate(${saturate}) hue-rotate(${hueRotate}deg); background: #fff; color-scheme: dark; }
+    img:not([data-blocked-src]), video, iframe, [data-no-invert] { filter: invert(${invertAmount}) hue-rotate(180deg) saturate(${imageSaturate}) hue-rotate(${-hueRotate}deg); }
 ` : `
     html { color-scheme: light; }
 `
@@ -526,6 +601,7 @@ ${processedHtml}
   $effect(() => {
     const html = bodyHtml
     void imagesBlocked // dependency only
+    void getThemeMode() // rebuild when theme changes so dark-mail invert re-derives
     const applyDarken = darken
 
     if (iframeElement && html) {
@@ -667,8 +743,8 @@ ${processedHtml}
       bind:this={iframeElement}
       title={$_('aria.emailContent')}
       sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-      class="w-full border-0 rounded-md min-h-[100px] {darken ? 'bg-black' : 'bg-white'}"
-      style="height: 200px;"
+      class="w-full border-0 rounded-md min-h-[100px]"
+      style="height: 200px; background-color: {iframeOuterBg};"
     ></iframe>
   {:else if bodyText}
     <!-- svelte-ignore a11y_no_static_element_interactions -->

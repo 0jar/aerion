@@ -185,16 +185,6 @@ func (a *App) GetPGPKeyForEmail(accountID, email string) (*pgp.Key, error) {
 	return key, nil
 }
 
-// shouldPGPSignMessage determines whether a message should be PGP signed
-func (a *App) shouldPGPSignMessage(accountID string, perMessageOverride bool) bool {
-	return a.composeOps.shouldPGPSignMessage(accountID, perMessageOverride)
-}
-
-// shouldPGPEncryptMessage determines whether a message should be PGP encrypted
-func (a *App) shouldPGPEncryptMessage(accountID string, perMessageOverride bool) bool {
-	return a.composeOps.shouldPGPEncryptMessage(accountID, perMessageOverride)
-}
-
 // CheckRecipientPGPKeys checks which recipients have PGP public keys available
 func (a *App) CheckRecipientPGPKeys(emails []string) (map[string]bool, error) {
 	armoredKeys, err := a.pgpStore.GetSenderKeyArmoreds(emails)
