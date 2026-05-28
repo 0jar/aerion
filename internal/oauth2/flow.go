@@ -203,13 +203,22 @@ func (m *Manager) CancelAuthFlow() {
 	m.activeSession = nil
 }
 
-// RefreshToken uses a refresh token to obtain a new access token
+// RefreshToken uses a refresh token to obtain a new access token. Provider is
+// resolved by name (back-compat path used by legacy callers). New code paths
+// that need a specific client_config_id should call RefreshTokenWithProvider
+// with a config obtained via GetProviderForClientConfig.
 func (m *Manager) RefreshToken(providerName, refreshToken string) (*TokenResponse, error) {
 	provider, err := GetProvider(providerName)
 	if err != nil {
 		return nil, err
 	}
+	return m.RefreshTokenWithProvider(provider, refreshToken)
+}
 
+// RefreshTokenWithProvider runs the OAuth2 refresh flow against the given
+// ProviderConfig. Used by the extension Auth Broker to refresh tokens issued
+// under non-mail client configurations (e.g., google-extensions).
+func (m *Manager) RefreshTokenWithProvider(provider ProviderConfig, refreshToken string) (*TokenResponse, error) {
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
@@ -258,7 +267,7 @@ func (m *Manager) RefreshToken(providerName, refreshToken string) (*TokenRespons
 	}
 
 	m.log.Debug().
-		Str("provider", providerName).
+		Str("provider", provider.Name).
 		Int("expires_in", tokens.ExpiresIn).
 		Msg("Token refreshed successfully")
 

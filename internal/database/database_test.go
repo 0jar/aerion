@@ -89,6 +89,56 @@ func TestCheckpoint(t *testing.T) {
 	}
 }
 
+// TestMigrationV29_OAuthCompositeKey verifies the Phase 1 extension-system
+// migration: oauth_tokens now uses composite PK (account_id, client_config_id)
+// so a single account can hold separate token rows for Mail vs extension-
+// scoped OAuth clients.
+func TestMigrationV29_OAuthCompositeKey(t *testing.T) {
+	db := openTestDB(t)
+
+	// Insert a test account row (oauth_tokens.account_id FK to accounts.id).
+	// Schema defaults handle most columns; only NOT NULL non-default fields are explicit.
+	if _, err := db.Exec(`
+		INSERT INTO accounts (id, name, email, imap_host, smtp_host, username)
+		VALUES ('acct-1', 'Test', 'user@example.com', 'imap.example.com', 'smtp.example.com', 'user@example.com')
+	`); err != nil {
+		t.Fatalf("insert account: %v", err)
+	}
+
+	// Insert mail-config token row
+	if _, err := db.Exec(`
+		INSERT INTO oauth_tokens (account_id, client_config_id, provider, expires_at, scopes)
+		VALUES ('acct-1', 'google-mail', 'google', CURRENT_TIMESTAMP, '[]')
+	`); err != nil {
+		t.Fatalf("insert mail token row: %v", err)
+	}
+
+	// Insert extension-config token row for same account — should succeed
+	if _, err := db.Exec(`
+		INSERT INTO oauth_tokens (account_id, client_config_id, provider, expires_at, scopes)
+		VALUES ('acct-1', 'google-extensions', 'google', CURRENT_TIMESTAMP, '[]')
+	`); err != nil {
+		t.Fatalf("insert extension token row failed (composite PK should allow it): %v", err)
+	}
+
+	// Verify both rows exist
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM oauth_tokens WHERE account_id = 'acct-1'`).Scan(&count); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 token rows for account, got %d", count)
+	}
+
+	// Duplicate (account_id, client_config_id) must violate the composite PK
+	if _, err := db.Exec(`
+		INSERT INTO oauth_tokens (account_id, client_config_id, provider, expires_at, scopes)
+		VALUES ('acct-1', 'google-mail', 'google', CURRENT_TIMESTAMP, '[]')
+	`); err == nil {
+		t.Fatal("expected composite PK conflict on duplicate (account_id, client_config_id), got no error")
+	}
+}
+
 func TestPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	db, err := Open(path)

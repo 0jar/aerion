@@ -421,6 +421,32 @@ export namespace app {
 		    return a;
 		}
 	}
+	export class ExtensionInfo {
+	    id: string;
+	    name: string;
+	    version: string;
+	    description: string;
+	    author: string;
+	    minAerionVersion: string;
+	    capabilities: string[];
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExtensionInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.author = source["author"];
+	        this.minAerionVersion = source["minAerionVersion"];
+	        this.capabilities = source["capabilities"];
+	        this.enabled = source["enabled"];
+	    }
+	}
 	export class LinkedAccountInfo {
 	    accountId: string;
 	    email: string;
@@ -610,6 +636,7 @@ export namespace appstate {
 	    expandedAccounts: Record<string, boolean>;
 	    unifiedInboxExpanded: boolean;
 	    collapsedFolders: Record<string, boolean>;
+	    activeExtension?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new UIState(source);
@@ -629,6 +656,7 @@ export namespace appstate {
 	        this.expandedAccounts = source["expandedAccounts"];
 	        this.unifiedInboxExpanded = source["unifiedInboxExpanded"];
 	        this.collapsedFolders = source["collapsedFolders"];
+	        this.activeExtension = source["activeExtension"];
 	    }
 	}
 
@@ -1985,6 +2013,90 @@ export namespace sync {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace v1 {
+	
+	export class AccountSetupHookRequest {
+	    extensionId: string;
+	    providers: string[];
+	    buttonLabel: string;
+	    description?: string;
+	    component: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AccountSetupHookRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.extensionId = source["extensionId"];
+	        this.providers = source["providers"];
+	        this.buttonLabel = source["buttonLabel"];
+	        this.description = source["description"];
+	        this.component = source["component"];
+	    }
+	}
+	export class Contact {
+	    id: string;
+	    name: string;
+	    emails: string[];
+	    sourceId?: string;
+	    // Go type: time
+	    updatedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new Contact(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.emails = source["emails"];
+	        this.sourceId = source["sourceId"];
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RailTabRequest {
+	    extensionId: string;
+	    label: string;
+	    icon: string;
+	    component: string;
+	    order?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RailTabRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.extensionId = source["extensionId"];
+	        this.label = source["label"];
+	        this.icon = source["icon"];
+	        this.component = source["component"];
+	        this.order = source["order"];
+	    }
 	}
 
 }

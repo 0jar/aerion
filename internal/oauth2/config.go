@@ -16,15 +16,29 @@ import (
 // See Makefile for the complete build command.
 // If ldflags are not set, credentials are loaded from the aerion-creds shim binary.
 var (
-	// GoogleClientID is the OAuth2 client ID for Google/Gmail
+	// GoogleClientID is the OAuth2 client ID for Google/Gmail (Mail-scoped project)
 	GoogleClientID string
 
 	// GoogleClientSecret is the OAuth2 client secret for Google/Gmail
 	GoogleClientSecret string
 
-	// MicrosoftClientID is the OAuth2 client ID for Microsoft/Outlook
+	// MicrosoftClientID is the OAuth2 client ID for Microsoft/Outlook (Mail-scoped registration)
 	MicrosoftClientID string
+
+	// GoogleExtClientID is the OAuth2 client ID for first-party extensions
+	// (Calendar/Contacts/etc.) under a separate Google Cloud project. Empty in
+	// Phase 1 until the second project is provisioned; once set via ldflags or
+	// the aerion-creds shim, extensions can request scopes against this client.
+	GoogleExtClientID string
+
+	// GoogleExtClientSecret is the secret paired with GoogleExtClientID.
+	GoogleExtClientSecret string
+
+	// MicrosoftExtClientID is the OAuth2 client ID for first-party extensions
+	// under a separate Azure AD app registration. Empty in Phase 1.
+	MicrosoftExtClientID string
 )
+
 
 func init() {
 	if GoogleClientID != "" {
@@ -59,6 +73,13 @@ func loadFromShim() {
 		GoogleClientID = creds["google_client_id"]
 		GoogleClientSecret = creds["google_client_secret"]
 		MicrosoftClientID = creds["microsoft_client_id"]
+		// Extension-scoped client configs are optional in the shim. When the
+		// second Google Cloud project / Azure AD registration is provisioned,
+		// the shim emits these keys; until then ClientConfigForID returns
+		// (zero, false) for the "*-extensions" ids.
+		GoogleExtClientID = creds["google_ext_client_id"]
+		GoogleExtClientSecret = creds["google_ext_client_secret"]
+		MicrosoftExtClientID = creds["microsoft_ext_client_id"]
 		return
 	}
 }

@@ -15,6 +15,21 @@ import (
 // Settings API - Exposed to frontend via Wails bindings
 // ============================================================================
 
+// IsExtensionEnabled returns whether the named first-party extension is
+// enabled. Unknown extensions return (false, nil). Used by the frontend to
+// gate UI affordances (rail tab, settings tab) without throwing on
+// not-yet-defined extensions.
+func (a *App) IsExtensionEnabled(name string) (bool, error) {
+	return a.settingsStore.IsExtensionEnabled(name)
+}
+
+// SetExtensionEnabled toggles a first-party extension on or off. Phase 1
+// only writes the setting flag; Phase 2 hooks this to start/stop the
+// extension's background services and emit a UI refresh event.
+func (a *App) SetExtensionEnabled(name string, enabled bool) error {
+	return a.settingsStore.SetExtensionEnabled(name, enabled)
+}
+
 // GetReadReceiptResponsePolicy returns the current read receipt response policy
 // Values: "never", "ask", "always"
 func (a *App) GetReadReceiptResponsePolicy() (string, error) {

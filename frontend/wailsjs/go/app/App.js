@@ -230,6 +230,10 @@ export function GetContact(arg1) {
   return window['go']['app']['App']['GetContact'](arg1);
 }
 
+export function GetContactDetail(arg1) {
+  return window['go']['app']['App']['GetContactDetail'](arg1);
+}
+
 export function GetContactSource(arg1) {
   return window['go']['app']['App']['GetContactSource'](arg1);
 }
@@ -514,6 +518,10 @@ export function InitiateShutdown() {
   return window['go']['app']['App']['InitiateShutdown']();
 }
 
+export function IsExtensionEnabled(arg1) {
+  return window['go']['app']['App']['IsExtensionEnabled'](arg1);
+}
+
 export function IsFTSIndexComplete(arg1) {
   return window['go']['app']['App']['IsFTSIndexComplete'](arg1);
 }
@@ -538,12 +546,32 @@ export function LinkAccountContactSource(arg1, arg2, arg3) {
   return window['go']['app']['App']['LinkAccountContactSource'](arg1, arg2, arg3);
 }
 
+export function ListAccountSetupHooksForProvider(arg1) {
+  return window['go']['app']['App']['ListAccountSetupHooksForProvider'](arg1);
+}
+
 export function ListContacts(arg1) {
   return window['go']['app']['App']['ListContacts'](arg1);
 }
 
+export function ListContactsForBrowse(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['ListContactsForBrowse'](arg1, arg2, arg3, arg4);
+}
+
 export function ListDrafts(arg1) {
   return window['go']['app']['App']['ListDrafts'](arg1);
+}
+
+export function ListEnabledExtensions() {
+  return window['go']['app']['App']['ListEnabledExtensions']();
+}
+
+export function ListExtensionRailTabs() {
+  return window['go']['app']['App']['ListExtensionRailTabs']();
+}
+
+export function ListExtensions() {
+  return window['go']['app']['App']['ListExtensions']();
 }
 
 export function ListPGPKeys(arg1) {
@@ -808,6 +836,10 @@ export function SetDefaultPGPKey(arg1, arg2) {
 
 export function SetDefaultSMIMECertificate(arg1, arg2) {
   return window['go']['app']['App']['SetDefaultSMIMECertificate'](arg1, arg2);
+}
+
+export function SetExtensionEnabled(arg1, arg2) {
+  return window['go']['app']['App']['SetExtensionEnabled'](arg1, arg2);
 }
 
 export function SetLanguage(arg1) {

@@ -7,6 +7,7 @@ import {message} from '../models';
 import {folder} from '../models';
 import {app} from '../models';
 import {contact} from '../models';
+import {v1} from '../models';
 import {context} from '../models';
 import {smtp} from '../models';
 import {imap} from '../models';
@@ -130,6 +131,8 @@ export function GetConfiguredOAuthProviders():Promise<Array<string>>;
 export function GetConnectedComposers():Promise<number>;
 
 export function GetContact(arg1:string):Promise<contact.Contact>;
+
+export function GetContactDetail(arg1:string):Promise<v1.Contact>;
 
 export function GetContactSource(arg1:string):Promise<carddav.Source>;
 
@@ -273,6 +276,8 @@ export function ImportSMIMECertificateFromPathBER(arg1:string,arg2:string,arg3:s
 
 export function InitiateShutdown():Promise<void>;
 
+export function IsExtensionEnabled(arg1:string):Promise<boolean>;
+
 export function IsFTSIndexComplete(arg1:string):Promise<boolean>;
 
 export function IsFTSIndexing():Promise<boolean>;
@@ -285,9 +290,19 @@ export function IsOAuthConfigured(arg1:string):Promise<boolean>;
 
 export function LinkAccountContactSource(arg1:string,arg2:string,arg3:number):Promise<carddav.Source>;
 
+export function ListAccountSetupHooksForProvider(arg1:string):Promise<Array<v1.AccountSetupHookRequest>>;
+
 export function ListContacts(arg1:number):Promise<Array<contact.Contact>>;
 
+export function ListContactsForBrowse(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<v1.Contact>>;
+
 export function ListDrafts(arg1:string):Promise<Array<draft.Draft>>;
+
+export function ListEnabledExtensions():Promise<Array<string>>;
+
+export function ListExtensionRailTabs():Promise<Array<v1.RailTabRequest>>;
+
+export function ListExtensions():Promise<Array<app.ExtensionInfo>>;
 
 export function ListPGPKeys(arg1:string):Promise<Array<pgp.Key>>;
 
@@ -420,6 +435,8 @@ export function SetDefaultIdentity(arg1:string,arg2:string):Promise<void>;
 export function SetDefaultPGPKey(arg1:string,arg2:string):Promise<void>;
 
 export function SetDefaultSMIMECertificate(arg1:string,arg2:string):Promise<void>;
+
+export function SetExtensionEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetLanguage(arg1:string):Promise<void>;
 

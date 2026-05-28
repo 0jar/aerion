@@ -36,6 +36,23 @@ const (
 	KeyShowViewerCircles         = "show_viewer_circles"
 )
 
+// Extension enable/disable keys. Format: extension_<name>_enabled.
+// All extensions default to disabled — minimalists see no UI changes until
+// they explicitly opt in. Phase 1 reserves keys only for confirmed first-
+// party extensions (Calendar, Contacts).
+const (
+	KeyExtensionCalendarEnabled = "extension_calendar_enabled"
+	KeyExtensionContactsEnabled = "extension_contacts_enabled"
+)
+
+// AllExtensionKeys is the list of all known first-party extension names. Add
+// a new extension's name here when its enable/disable key is reserved above.
+// IsExtensionEnabled / SetExtensionEnabled work on names from this list.
+var AllExtensionKeys = []string{
+	"calendar",
+	"contacts",
+}
+
 // Density values for message list
 const (
 	DensityMicro    = "micro"
@@ -159,6 +176,28 @@ func (s *Store) Set(key, value string) error {
 
 	s.log.Debug().Str("key", key).Str("value", value).Msg("Setting updated")
 	return nil
+}
+
+// IsExtensionEnabled returns whether the given first-party extension is
+// enabled. Unknown / not-yet-set extensions return (false, nil) — the
+// app should treat "not present in settings" as disabled.
+func (s *Store) IsExtensionEnabled(name string) (bool, error) {
+	value, err := s.Get("extension_" + name + "_enabled")
+	if err != nil {
+		return false, err
+	}
+	return value == "true", nil
+}
+
+// SetExtensionEnabled writes the enable/disable flag for the given first-party
+// extension. The Wails-bound App method that wraps this is the only entry
+// point the frontend uses to toggle extensions on/off.
+func (s *Store) SetExtensionEnabled(name string, enabled bool) error {
+	v := "false"
+	if enabled {
+		v = "true"
+	}
+	return s.Set("extension_"+name+"_enabled", v)
 }
 
 // GetReadReceiptResponsePolicy returns the current read receipt response policy

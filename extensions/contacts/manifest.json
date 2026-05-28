@@ -1,0 +1,13 @@
+{
+  "id": "contacts",
+  "name": "Contacts",
+  "version": "0.1.0",
+  "description": "Browse contacts from your accounts (CardDAV, Google, Microsoft). Two-way edit/write capability lands in a future release.",
+  "author": "Aerion",
+  "minAerionVersion": "0.3.0",
+  "capabilities": [
+    "contacts.read",
+    "ui.rail-tab",
+    "ui.account-setup-hook"
+  ]
+}

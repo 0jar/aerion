@@ -705,4 +705,48 @@ var migrations = []Migration{
 		Version: 28,
 		SQL:     `ALTER TABLE accounts ADD COLUMN shared_mailbox_parent_id TEXT DEFAULT NULL;`,
 	},
+	{
+		Version: 29,
+		SQL: `
+			-- Extension system Phase 1: multi-config OAuth support.
+			--
+			-- Each extension owns its own OAuth client configuration (Google Cloud
+			-- project / Azure AD app registration). The same account can now have
+			-- separate token rows under different client_config_ids — Mail tokens
+			-- under 'google-mail', Calendar tokens under 'google-extensions', etc.
+			--
+			-- For backward compatibility: existing rows are backfilled to
+			-- 'google-mail' / 'microsoft-mail' so all current accounts keep working
+			-- with no user-visible change.
+
+			-- Step 1: Add column to oauth_tokens and backfill.
+			ALTER TABLE oauth_tokens ADD COLUMN client_config_id TEXT;
+			UPDATE oauth_tokens SET client_config_id = 'google-mail'    WHERE provider = 'google'    AND client_config_id IS NULL;
+			UPDATE oauth_tokens SET client_config_id = 'microsoft-mail' WHERE provider = 'microsoft' AND client_config_id IS NULL;
+
+			-- Step 2: Change PK from (account_id) to (account_id, client_config_id)
+			-- via the SQLite swap-table dance (ALTER TABLE can't change PK in place).
+			CREATE TABLE oauth_tokens_new (
+				account_id       TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+				client_config_id TEXT NOT NULL,
+				provider         TEXT NOT NULL,
+				expires_at       DATETIME,
+				scopes           TEXT,
+				created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (account_id, client_config_id)
+			);
+			INSERT INTO oauth_tokens_new (account_id, client_config_id, provider, expires_at, scopes, created_at, updated_at)
+				SELECT account_id, client_config_id, provider, expires_at, scopes, created_at, updated_at
+				FROM oauth_tokens;
+			DROP TABLE oauth_tokens;
+			ALTER TABLE oauth_tokens_new RENAME TO oauth_tokens;
+
+			-- Step 3: Add the same column to contact_source_oauth for routing parity.
+			-- PK stays as source_id (one source has one set of tokens).
+			ALTER TABLE contact_source_oauth ADD COLUMN client_config_id TEXT;
+			UPDATE contact_source_oauth SET client_config_id = 'google-mail'    WHERE provider = 'google'    AND client_config_id IS NULL;
+			UPDATE contact_source_oauth SET client_config_id = 'microsoft-mail' WHERE provider = 'microsoft' AND client_config_id IS NULL;
+		`,
+	},
 }

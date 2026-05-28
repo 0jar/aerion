@@ -15,6 +15,8 @@ These shortcuts work anywhere in the application (unless in composer).
 | `Ctrl+S` | Focus search bar |
 | `Ctrl+Shift+A` | Sync all accounts |
 | `Ctrl+Shift+S` | Sync selected folder |
+| `Ctrl+Tab` | Switch to next extension on the rail (Mail / Contacts / ...) |
+| `Ctrl+Shift+Tab` | Switch to previous extension on the rail |
 
 ### Pane Navigation
 
@@ -137,6 +139,8 @@ NAVIGATION
   Alt + H/J/K/L       Vim-style: pane (H/L) or folder (J/K)
   Alt(L) + Alt(R)     Brings context menu up for the focused folder
   Alt + Enter         Expand/collapse account
+  Ctrl + Tab          Switch to next extension on rail
+  Ctrl + Shift + Tab  Switch to previous extension on rail
   Arrow Keys / HJKL   Navigate within focused pane
   Enter               Open conversation / Expand account
   Space               Toggle checkbox / Expand account
@@ -215,6 +219,13 @@ First `Escape` clears checkboxes, second `Escape` closes the conversation viewer
 When the composer is open:
 - `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+F` are blocked to prevent accidental replies
 - Other global shortcuts continue to work
+
+### Extension Rail Navigation
+
+`Ctrl+Tab` cycles forward through the rail items: Mail → first enabled extension → next → wrap to Mail.
+`Ctrl+Shift+Tab` cycles backward. The shortcut is a no-op when no extensions are enabled (only Mail in the rail). Active extension is persisted across launches.
+
+Composer state is preserved across switches: switching to an extension and back does not unmount or clear the composer.
 
 ### Unified Inbox
 

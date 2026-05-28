@@ -605,6 +605,72 @@ func (s *Store) SearchContacts(query string, limit int) ([]*Contact, error) {
 	return contacts, nil
 }
 
+// ListContactsPaged returns contacts for a single source in display-name
+// order, with offset/limit paging and optional case-insensitive query filter
+// on email / display_name (pass "" for no filter). Only contacts from enabled
+// addressbooks of an enabled source are returned (matches SearchContacts
+// visibility). Used by the Contacts extension's browse UI.
+func (s *Store) ListContactsPaged(sourceID, query string, offset, limit int) ([]*Contact, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	sqlQuery := `
+		SELECT c.id, c.addressbook_id, c.email, c.display_name, c.href, c.etag, c.synced_at
+		FROM carddav_contacts c
+		JOIN contact_source_addressbooks ab ON c.addressbook_id = ab.id
+		JOIN contact_sources s ON ab.source_id = s.id
+		WHERE s.id = ? AND s.enabled = 1 AND ab.enabled = 1
+		  AND (? = '' OR LOWER(c.email) LIKE ? OR LOWER(c.display_name) LIKE ?)
+		ORDER BY c.display_name ASC, c.email ASC
+		LIMIT ? OFFSET ?
+	`
+
+	pattern := "%" + strings.ToLower(query) + "%"
+	rows, err := s.db.Query(sqlQuery, sourceID, query, pattern, pattern, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list contacts for source %s: %w", sourceID, err)
+	}
+	defer rows.Close()
+
+	var contacts []*Contact
+	for rows.Next() {
+		var c Contact
+		if err := rows.Scan(&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName, &c.Href, &c.ETag, &c.SyncedAt); err != nil {
+			s.log.Warn().Err(err).Msg("Failed to scan contact row")
+			continue
+		}
+		contacts = append(contacts, &c)
+	}
+
+	return contacts, rows.Err()
+}
+
+// GetContactByID returns a contact by its primary-key id (carddav UUID).
+// Returns (nil, nil) when not found.
+func (s *Store) GetContactByID(id string) (*Contact, error) {
+	query := `
+		SELECT id, addressbook_id, email, display_name, href, etag, synced_at
+		FROM carddav_contacts
+		WHERE id = ?
+	`
+
+	var c Contact
+	err := s.db.QueryRow(query, id).Scan(
+		&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName,
+		&c.Href, &c.ETag, &c.SyncedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get contact by id: %w", err)
+	}
+	return &c, nil
+}
+
 // GetContactByHref returns a contact by its href (for update checks)
 func (s *Store) GetContactByHref(addressbookID, href string) (*Contact, error) {
 	query := `

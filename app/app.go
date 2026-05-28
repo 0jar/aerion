@@ -15,9 +15,15 @@ import (
 	"github.com/hkdb/aerion/internal/carddav"
 	"github.com/hkdb/aerion/internal/certificate"
 	"github.com/hkdb/aerion/internal/contact"
+	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 	"github.com/hkdb/aerion/internal/credentials"
 	"github.com/hkdb/aerion/internal/database"
 	"github.com/hkdb/aerion/internal/draft"
+	extcontactsbe "github.com/hkdb/aerion/extensions/contacts/backend"
+	extauth "github.com/hkdb/aerion/internal/extensions/auth"
+	extcompose "github.com/hkdb/aerion/internal/extensions/compose"
+	extmail "github.com/hkdb/aerion/internal/extensions/mail"
+	extui "github.com/hkdb/aerion/internal/extensions/ui"
 	"github.com/hkdb/aerion/internal/folder"
 	"github.com/hkdb/aerion/internal/imap"
 	"github.com/hkdb/aerion/internal/ipc"
@@ -199,6 +205,17 @@ type App struct {
 	carddavStore     *carddav.Store
 	carddavSyncer    *carddav.Syncer
 	carddavScheduler *carddav.Scheduler
+
+	// Extension system
+	extContactsStore *extcontactsbe.Store // per-extension DB (always open; schema persists across enable/disable)
+	authBroker       *extauth.Broker      // coreapi.Auth impl for extensions
+	mailAPI          *extmail.API         // coreapi.Mail impl wrapping core stores
+	composerAPI      *extcompose.API      // coreapi.Composer impl wrapping OpenComposerWindow
+	contactsAPI      *extcontactsbe.API   // coreapi.Contacts impl wrapping core stores (Phase 2a)
+	uiRegistry       *extui.Registry      // coreapi.UI impl: rail tabs, account-setup hooks, ...
+	contactsExt      *extcontactsbe.Extension // first-party Contacts extension handle (lifecycle owner)
+	knownExtensions  []coreapi.Extension      // all first-party extensions, iterated by ListExtensions
+	extensionUnregs  []coreapi.Unregister     // teardown funcs returned from each Extension.Register
 
 	// S/MIME
 	smimeStore     *smime.Store
@@ -455,6 +472,38 @@ func (a *App) Startup(ctx context.Context) {
 	// Initialize CardDAV syncer and scheduler
 	a.carddavSyncer = carddav.NewSyncer(a.carddavStore, a.credStore)
 	a.carddavScheduler = carddav.NewScheduler(a.carddavSyncer, a.carddavStore)
+
+	// Extension system (Phase 1 infrastructure). Stores open eagerly even when
+	// the extension is disabled so the schema stays valid across enable/disable
+	// cycles. No background services start here — that's Phase 2 when actual
+	// extensions land.
+	extContacts, extErr := extcontactsbe.NewStore(a.paths.Data)
+	if extErr != nil {
+		log.Warn().Err(extErr).Msg("Failed to open contacts extension store")
+	}
+	a.extContactsStore = extContacts
+	a.authBroker = extauth.NewBroker(a.credStore, a.oauth2Manager)
+	a.mailAPI = extmail.NewAPI(a.messageStore, a.folderStore)
+	a.composerAPI = extcompose.NewAPI(a)
+	a.uiRegistry = extui.NewRegistry()
+
+	// Construct first-party extensions and call their lifecycle Register().
+	// Register is descriptive — it wires UI surfaces (rail tabs, hooks) that
+	// persist across enable/disable cycles. The frontend filters by enabled
+	// state at render time.
+	a.contactsExt = extcontactsbe.New(a.contactStore, a.carddavStore, a.extContactsStore)
+	a.contactsAPI = a.contactsExt.API()
+	a.knownExtensions = []coreapi.Extension{a.contactsExt}
+
+	core := newCore(a)
+	for _, ext := range a.knownExtensions {
+		unreg, err := ext.Register(core)
+		if err != nil {
+			log.Warn().Err(err).Str("extension", ext.Manifest().ID).Msg("Failed to register extension")
+			continue
+		}
+		a.extensionUnregs = append(a.extensionUnregs, unreg)
+	}
 
 	// Wire up network connectivity check so CardDAV scheduler skips ticks when offline
 	if a.networkMonitor != nil {

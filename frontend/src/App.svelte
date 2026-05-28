@@ -11,13 +11,17 @@
   import ToastContainer from './lib/components/ui/toast/ToastContainer.svelte'
   import TermsDialog from './lib/components/TermsDialog.svelte'
   import CertificateDialog from './lib/components/settings/CertificateDialog.svelte'
+  import ExtensionRail from './lib/components/rail/ExtensionRail.svelte'
+  import ContactsPane from '$extensions/contacts/frontend/components/ContactsPane.svelte'
+  import { refreshExtensionRegistry, getRailTabs } from '$lib/stores/extensionRegistry.svelte'
+  import { KEY } from '$lib/keyboard/shortcuts'
   import * as AlertDialog from '$lib/components/ui/alert-dialog'
   import { accountStore } from '$lib/stores/accounts.svelte'
   import { addToast } from '$lib/stores/toast'
   import { loadSettings, getThemeMode, getShowTitleBar, getNativeTitleBar, getComposerMode, getMailtoMode } from '$lib/stores/settings.svelte'
   import { loadImageAllowlist } from '$lib/stores/imageAllowlist.svelte'
   import { initTheme, applyThemeFromMode, handleSystemThemeEvent, handleMediaQueryChange } from '$lib/stores/theme.svelte'
-  import { loadUIState, saveUIState, paneConstraints } from '$lib/stores/uiState.svelte'
+  import { loadUIState, saveUIState, paneConstraints, getActiveExtension, setActiveExtension } from '$lib/stores/uiState.svelte'
   import {
     type FocusablePane,
     getFocusedPane,
@@ -26,7 +30,8 @@
     focusNextPane,
     isPaneFlashing,
     isInputElement,
-    setComposerOpen
+    setComposerOpen,
+    getPaneNav
   } from '$lib/stores/keyboard.svelte'
   import { isDialogGuardActive } from '$lib/stores/dialogGuard'
   import { initLayout, getLayoutMode, getResponsiveView, showViewer, hideViewer, showSidebar, hideSidebar, isResponsive } from '$lib/stores/layout.svelte'
@@ -38,7 +43,11 @@
   import { WindowShow, EventsOn } from '../wailsjs/runtime/runtime'
   import { _ } from '$lib/i18n'
 
-  // Component refs for keyboard navigation
+  // Component refs for keyboard navigation. Plain `let` (not $state) is
+  // intentional: svelte-check warns "Changing its value will not correctly
+  // trigger updates" but nothing here actually reads these refs in a reactive
+  // context — they're only used inside event handlers. Making them $state
+  // added bookkeeping cost (visible in idle-CPU profiling) without any benefit.
   let sidebarRef: Sidebar | null = null
   let messageListRef: MessageList | null = null
   let viewerRef: ConversationViewer | null = null
@@ -322,6 +331,10 @@
 
     // Load persisted UI state
     const uiState = await loadUIState()
+
+    // Load extension registry (enabled extensions, rail tabs) so the rail can
+    // render synchronously when the layout mounts.
+    await refreshExtensionRegistry()
 
     // Restore pane widths (already validated/clamped by loadUIState)
     sidebarWidth = uiState.sidebarWidth
@@ -738,8 +751,19 @@
       return
     }
 
-    // Handle Ctrl/Cmd shortcuts (global, always work)
+    // Handle Ctrl/Cmd shortcuts.
+    //
+    // Layout: GLOBAL cases first (fire regardless of which rail pane is active),
+    // then a guard that returns when an extension is the active rail pane, then
+    // MAIL-DOMAIN cases (fire only on mail). The kit's components (extension UI)
+    // handle their own list/sidebar shortcuts via local tabindex+keydown +
+    // stopPropagation, so those events never reach this handler in the first
+    // place. The guard catches the case where Ctrl+R / Ctrl+K / etc. fire
+    // with no kit pane DOM-focused but an extension is the active rail pane —
+    // we don't want those acting on the (hidden) mail UI.
+    const isMailActive = () => getActiveExtension() === 'mail'
     if (e.ctrlKey || e.metaKey) {
+      // GLOBAL Ctrl/Cmd shortcuts — fire regardless of active rail pane.
       switch (e.key.toLowerCase()) {
         case 'q':
           e.preventDefault()
@@ -749,6 +773,45 @@
           e.preventDefault()
           handleCompose()
           return
+        case 'tab': {
+          // Cycle through rail items: Mail + enabled extensions.
+          // Ctrl+Tab forward, Ctrl+Shift+Tab backward. Wraps at the ends.
+          e.preventDefault()
+          const tabs = getRailTabs()
+          const order = ['mail', ...tabs.map(t => t.extensionId)]
+          if (order.length <= 1) return // only Mail — nothing to cycle
+          const current = getActiveExtension()
+          const idx = order.indexOf(current)
+          const step = e.shiftKey ? -1 : 1
+          const next = (idx + step + order.length) % order.length
+          setActiveExtension(order[next])
+          return
+        }
+      }
+
+      // Ctrl+S (no shift) — focus the active pane's search input.
+      // Mail dispatches to messageListRef; extensions dispatch via the
+      // pane-nav registry. Ctrl+Shift+S (sync folder) is mail-only and
+      // stays in the mail-domain switch below.
+      if (e.key.toLowerCase() === 's' && !e.shiftKey) {
+        e.preventDefault()
+        if (isMailActive()) {
+          messageListRef?.toggleSearchFocus()
+          setFocusedPane('messageList')
+          return
+        }
+        getPaneNav('messageList')?.focusSearch?.()
+        setFocusedPane('messageList')
+        return
+      }
+
+      // Below: MAIL-DOMAIN Ctrl/Cmd shortcuts. Guarded so they no-op when an
+      // extension is the active rail pane (otherwise Ctrl+R would silently
+      // reply to the hidden mail thread while the user is browsing contacts).
+      if (!isMailActive()) return
+
+      // MAIL-DOMAIN Ctrl/Cmd cases (guarded above).
+      switch (e.key.toLowerCase()) {
         case 'r': {
           if (!hasConversation) return
           e.preventDefault()
@@ -777,15 +840,11 @@
           return
         }
         case 's':
+          // Ctrl+S (no shift) is handled globally above. Only Ctrl+Shift+S
+          // (sync current folder) is mail-domain and lives here.
+          if (!e.shiftKey) return
           e.preventDefault()
-          if (e.shiftKey) {
-            // Ctrl-Shift-S: Toggle sync current folder (start sync or cancel if already running)
-            messageListRef?.toggleFolderSync()
-          } else {
-            // Ctrl-S: Focus search
-            messageListRef?.toggleSearchFocus()
-            setFocusedPane('messageList')
-          }
+          messageListRef?.toggleFolderSync()
           return
         case 'a':
           if (e.shiftKey) {
@@ -903,51 +962,72 @@
     if (e.altKey) {
       // Pane navigation is meaningless in focus mode (other panes hidden)
       if (focusMode !== 'off') return
-      switch (e.key) {
-        case 'ArrowLeft':
-        case 'h':
-          e.preventDefault()
-          if (isResponsive()) {
-            const view = getResponsiveView()
-            const mode = getLayoutMode()
-            if (view === 'viewer') {
-              hideViewer()
-              return
-            }
-            if (mode === 'narrow' && view === 'default') {
-              showSidebar()
-              return
-            }
+
+      // Pane focus cycling (shared predicate — kit's pane components react to
+      // the same focusedPane store, so cycling works uniformly across mail
+      // and extensions).
+      if (KEY.PANE_FOCUS_PREV(e)) {
+        e.preventDefault()
+        if (isResponsive()) {
+          const view = getResponsiveView()
+          const mode = getLayoutMode()
+          if (view === 'viewer') {
+            hideViewer()
+            return
           }
-          focusPreviousPane()
-          return
-        case 'ArrowRight':
-        case 'l':
-          e.preventDefault()
-          if (isResponsive()) {
-            const view = getResponsiveView()
-            const mode = getLayoutMode()
-            if (mode === 'narrow' && view === 'sidebar') {
-              hideSidebar()
-              return
-            }
-            if (view === 'default' && selectedThreadId) {
-              showViewer()
-              return
-            }
+          if (mode === 'narrow' && view === 'default') {
+            showSidebar()
+            return
           }
-          focusNextPane()
-          return
-        case 'ArrowUp':
-        case 'k':
-          e.preventDefault()
+        }
+        focusPreviousPane()
+        return
+      }
+      if (KEY.PANE_FOCUS_NEXT(e)) {
+        e.preventDefault()
+        if (isResponsive()) {
+          const view = getResponsiveView()
+          const mode = getLayoutMode()
+          if (mode === 'narrow' && view === 'sidebar') {
+            hideSidebar()
+            return
+          }
+          if (view === 'default' && selectedThreadId) {
+            showViewer()
+            return
+          }
+        }
+        focusNextPane()
+        return
+      }
+
+      // Sidebar item navigation (Alt+Up/Down/J/K). Dispatches to mail's
+      // concrete ref when mail is active; otherwise to the kit pane that
+      // registered as 'sidebar' via registerPaneNav. This way extensions
+      // get the same "global Alt+J/K navigates the sidebar regardless of
+      // which pane is currently DOM-focused" behavior mail has.
+      if (KEY.SIDEBAR_PREV(e)) {
+        e.preventDefault()
+        if (isMailActive()) {
           sidebarRef?.selectPreviousFolder()
           return
-        case 'ArrowDown':
-        case 'j':
-          e.preventDefault()
+        }
+        getPaneNav('sidebar')?.navigatePrev?.()
+        return
+      }
+      if (KEY.SIDEBAR_NEXT(e)) {
+        e.preventDefault()
+        if (isMailActive()) {
           sidebarRef?.selectNextFolder()
           return
+        }
+        getPaneNav('sidebar')?.navigateNext?.()
+        return
+      }
+
+      // Alt+Enter — mail sidebar expand/collapse. Keep inline switch for
+      // single residual case.
+      switch (e.key) {
         case 'Enter':
           // Toggle expand/collapse for focused account header or selected folder with children
           if (sidebarRef?.hasFocusedAccount()) {
@@ -993,38 +1073,50 @@
       return
     }
 
-    // Handle pane-focused navigation shortcuts
+    // Handle pane-focused navigation shortcuts.
+    //
+    // Mail-domain: these run for the mail UI's focused pane. The kit's
+    // components handle their own list/sidebar navigation via local
+    // keydown + stopPropagation (so the events never reach this handler).
+    // Guard for safety in case an event slips through while an extension
+    // is the active rail pane.
+    if (KEY.LIST_PREV(e) || KEY.LIST_PREV_CHECK(e)) {
+      if (!isMailActive()) return
+      e.preventDefault()
+      if (focusedPane === 'sidebar') {
+        sidebarRef?.selectPreviousFolder()
+      } else if (focusedPane === 'messageList') {
+        if (e.shiftKey) {
+          messageListRef?.selectPreviousWithCheck()
+        } else {
+          messageListRef?.selectPrevious()
+        }
+      } else if (focusedPane === 'viewer') {
+        viewerRef?.scrollUp()
+      }
+      return
+    }
+    if (KEY.LIST_NEXT(e) || KEY.LIST_NEXT_CHECK(e)) {
+      if (!isMailActive()) return
+      e.preventDefault()
+      if (focusedPane === 'sidebar') {
+        sidebarRef?.selectNextFolder()
+      } else if (focusedPane === 'messageList') {
+        if (e.shiftKey) {
+          messageListRef?.selectNextWithCheck()
+        } else {
+          messageListRef?.selectNext()
+        }
+      } else if (focusedPane === 'viewer') {
+        viewerRef?.scrollDown()
+      }
+      return
+    }
+
+    // Enter and Space — domain-specific button-vs-pane disambiguation logic
+    // stays as inline switch (kit components handle their own Enter/Space
+    // locally so they don't depend on this dispatch).
     switch (e.key) {
-      case 'ArrowUp':
-      case 'k':
-        e.preventDefault()
-        if (focusedPane === 'sidebar') {
-          sidebarRef?.selectPreviousFolder()
-        } else if (focusedPane === 'messageList') {
-          if (e.shiftKey) {
-            messageListRef?.selectPreviousWithCheck()
-          } else {
-            messageListRef?.selectPrevious()
-          }
-        } else if (focusedPane === 'viewer') {
-          viewerRef?.scrollUp()
-        }
-        return
-      case 'ArrowDown':
-      case 'j':
-        e.preventDefault()
-        if (focusedPane === 'sidebar') {
-          sidebarRef?.selectNextFolder()
-        } else if (focusedPane === 'messageList') {
-          if (e.shiftKey) {
-            messageListRef?.selectNextWithCheck()
-          } else {
-            messageListRef?.selectNext()
-          }
-        } else if (focusedPane === 'viewer') {
-          viewerRef?.scrollDown()
-        }
-        return
       case 'Enter':
         // Only let buttons handle Enter if they're in the focused pane
         // This prevents sidebar buttons from intercepting Enter when messageList is focused
@@ -1244,6 +1336,18 @@
 
   <!-- Main Content -->
   <div class="flex flex-1 min-h-0 overflow-hidden relative">
+    <ExtensionRail />
+
+    {#if getActiveExtension() === 'contacts'}
+      <ContactsPane />
+    {/if}
+
+    <!-- Mail layout is ALWAYS mounted; only its visibility is toggled when an
+         extension takes over the pane. Unmounting+remounting the mail tree on
+         every extension switch was leaking state (zombie listeners) and pinning
+         the main thread on the second mount. display:contents keeps the flex
+         children as direct flex items so the layout doesn't shift. -->
+    <div style:display={getActiveExtension() === 'mail' ? 'contents' : 'none'}>
     <!-- Sidebar (Folder List) -->
     <aside
       class="{getLayoutMode() === 'narrow' ? `responsive-sidebar-overlay w-72 border-r border-border bg-background ${getResponsiveView() === 'sidebar' ? 'responsive-sidebar-visible' : ''}` : 'flex-shrink-0 border-r border-border bg-muted/30'}"
@@ -1358,6 +1462,7 @@
         onToggleMessageFocus={toggleMessageFocus}
       />
     </main>
+    </div>
   </div>
 </div>
 
