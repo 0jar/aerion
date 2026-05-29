@@ -3,6 +3,10 @@
   // non-focusable <div role="option"> for the same reason as ListRow:
   // DOM focus stays on the parent SourceSidebar container so keyboard
   // nav (J/K/Up/Down) continues working after a click.
+  //
+  // Active-row styling mirrors mail's FolderTreeItem (subtle primary-tinted
+  // background + primary text + medium weight) so the two sidebars look
+  // consistent across the app.
 
   import Icon from '@iconify/svelte'
 
@@ -21,13 +25,13 @@
 <div
   role="option"
   aria-selected={active}
-  class="flex items-center gap-2.5 w-full px-4 py-2 border-l-[3px] text-left text-foreground transition-colors cursor-pointer select-none {active
-    ? 'border-l-primary bg-accent/40'
-    : 'border-l-transparent hover:bg-accent/30'}"
+  class="flex items-center gap-2 mx-2 px-3 py-1.5 text-sm rounded-md text-left transition-colors cursor-pointer select-none {active
+    ? 'bg-primary/10 text-primary font-medium'
+    : 'text-foreground hover:bg-muted/50'}"
   onclick={(e) => onclick?.(e)}
 >
   {#if icon}
-    <Icon {icon} width="18" height="18" />
+    <Icon {icon} class="w-4 h-4 flex-shrink-0" />
   {/if}
   <span class="truncate">{label}</span>
 </div>

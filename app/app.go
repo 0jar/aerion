@@ -409,6 +409,18 @@ func (a *App) Startup(ctx context.Context) {
 	}
 	a.credStore = credStore
 
+	// Wire user-supplied OAuth client credentials override into the oauth2
+	// resolver chain. When the user has saved their own client_id + secret
+	// for a given config id via Settings → OAuth Credentials, those values
+	// take priority over any shipped (build-time) defaults.
+	oauth2.UserOverrideLookup = func(configID string) (oauth2.ClientCredentials, bool) {
+		clientID, clientSecret, ok, err := credStore.GetUserClientCreds(configID)
+		if err != nil || !ok {
+			return oauth2.ClientCredentials{}, false
+		}
+		return oauth2.ClientCredentials{ClientID: clientID, ClientSecret: clientSecret}, true
+	}
+
 	// Initialize certificate trust store (TOFU)
 	a.certStore = certificate.NewStore(db.DB)
 
@@ -495,9 +507,13 @@ func (a *App) Startup(ctx context.Context) {
 	a.contactsAPI = a.contactsExt.API()
 	a.knownExtensions = []coreapi.Extension{a.contactsExt}
 
-	core := newCore(a)
+	// Construct one Core per known extension. The Core's Auth surface is
+	// scoped to that extension's identity, so HTTPClient calls route via
+	// the extension's manifest-declared client config (or via mail OAuth
+	// for scopes listed in first_party_uses_core_for_scopes).
 	for _, ext := range a.knownExtensions {
-		unreg, err := ext.Register(core)
+		extCore := newCoreForExtension(a, ext)
+		unreg, err := ext.Register(extCore)
 		if err != nil {
 			log.Warn().Err(err).Str("extension", ext.Manifest().ID).Msg("Failed to register extension")
 			continue
@@ -526,22 +542,9 @@ func (a *App) Startup(ctx context.Context) {
 		},
 	)
 
-	// Set up CardDAV search function for contact autocomplete
-	a.contactStore.SetCardDAVSearchFunc(func(query string, limit int) ([]*contact.Contact, error) {
-		contacts, err := a.carddavStore.SearchContacts(query, limit)
-		if err != nil {
-			return nil, err
-		}
-		result := make([]*contact.Contact, len(contacts))
-		for i, c := range contacts {
-			result[i] = &contact.Contact{
-				Email:       c.Email,
-				DisplayName: c.DisplayName,
-				Source:      "carddav",
-			}
-		}
-		return result, nil
-	})
+	// Removed in 2b.2.a: contactStore.Search now natively walks both local and
+	// carddav contacts via the unified contact_records schema. The bridge
+	// function is no longer needed.
 
 	// Start CardDAV background sync scheduler
 	a.carddavScheduler.Start(ctx)

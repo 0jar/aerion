@@ -45,7 +45,7 @@
         {@render emptyState()}
       {:else}
         <Icon icon={emptyIcon} width="48" height="48" />
-        <p>{emptyText}</p>
+        <p class="text-lg">{emptyText}</p>
       {/if}
     </div>
   {:else}
@@ -54,7 +54,7 @@
         {@render header()}
       </header>
     {/if}
-    <div class="flex-1 overflow-y-auto p-6">
+    <div class="flex-1 min-h-0 overflow-y-auto p-6">
       {#if body}
         {@render body()}
       {/if}

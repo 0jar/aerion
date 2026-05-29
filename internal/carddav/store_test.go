@@ -247,3 +247,107 @@ func TestListContactsPaged_DefaultsLimit(t *testing.T) {
 		t.Fatalf("expected default limit 50, got %d", len(got))
 	}
 }
+
+func TestGetContactByEmail_Match(t *testing.T) {
+	db := openCardDAVTestDB(t)
+	s := NewStore(db.DB)
+
+	seedSource(t, s, "src1", "ab1", true, true, []*Contact{
+		{ID: "c1", Email: "alice@example.com", DisplayName: "Alice"},
+		{ID: "c2", Email: "bob@example.com", DisplayName: "Bob"},
+	})
+
+	got, err := s.GetContactByEmail("alice@example.com")
+	if err != nil {
+		t.Fatalf("GetContactByEmail: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected match, got nil")
+	}
+	if got.ID != "c1" || got.DisplayName != "Alice" {
+		t.Errorf("got %+v, want c1/Alice", got)
+	}
+}
+
+func TestGetContactByEmail_CaseInsensitive(t *testing.T) {
+	db := openCardDAVTestDB(t)
+	s := NewStore(db.DB)
+
+	seedSource(t, s, "src1", "ab1", true, true, []*Contact{
+		{ID: "c1", Email: "alice@example.com", DisplayName: "Alice"},
+	})
+
+	got, err := s.GetContactByEmail("ALICE@EXAMPLE.COM")
+	if err != nil {
+		t.Fatalf("GetContactByEmail: %v", err)
+	}
+	if got == nil || got.ID != "c1" {
+		t.Errorf("case-insensitive lookup failed: got %+v", got)
+	}
+}
+
+func TestGetContactByEmail_NoMatch(t *testing.T) {
+	db := openCardDAVTestDB(t)
+	s := NewStore(db.DB)
+
+	seedSource(t, s, "src1", "ab1", true, true, []*Contact{
+		{ID: "c1", Email: "alice@example.com", DisplayName: "Alice"},
+	})
+
+	got, err := s.GetContactByEmail("nobody@example.com")
+	if err != nil {
+		t.Fatalf("GetContactByEmail: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil for no match, got %+v", got)
+	}
+}
+
+func TestGetContactByEmail_FiltersDisabledSource(t *testing.T) {
+	db := openCardDAVTestDB(t)
+	s := NewStore(db.DB)
+
+	// Source is DISABLED — the contact should be invisible to GetContactByEmail
+	// (matches SearchContacts visibility).
+	seedSource(t, s, "src1", "ab1", false, true, []*Contact{
+		{ID: "c1", Email: "alice@example.com", DisplayName: "Alice"},
+	})
+
+	got, err := s.GetContactByEmail("alice@example.com")
+	if err != nil {
+		t.Fatalf("GetContactByEmail: %v", err)
+	}
+	if got != nil {
+		t.Errorf("disabled source should not surface: got %+v", got)
+	}
+}
+
+func TestGetContactByEmail_FiltersDisabledAddressbook(t *testing.T) {
+	db := openCardDAVTestDB(t)
+	s := NewStore(db.DB)
+
+	seedSource(t, s, "src1", "ab1", true, false, []*Contact{
+		{ID: "c1", Email: "alice@example.com", DisplayName: "Alice"},
+	})
+
+	got, err := s.GetContactByEmail("alice@example.com")
+	if err != nil {
+		t.Fatalf("GetContactByEmail: %v", err)
+	}
+	if got != nil {
+		t.Errorf("disabled addressbook should not surface: got %+v", got)
+	}
+}
+
+func TestGetContactByEmail_EmptyArg(t *testing.T) {
+	db := openCardDAVTestDB(t)
+	s := NewStore(db.DB)
+
+	got, err := s.GetContactByEmail("")
+	if err != nil {
+		t.Fatalf("GetContactByEmail(\"\"): %v", err)
+	}
+	if got != nil {
+		t.Errorf("empty email should return nil, got %+v", got)
+	}
+}

@@ -49,13 +49,43 @@ func resolveClientConfigID(provider string, extConfigProvisioned bool) coreapi.C
 
 // extConfigForProvider maps a provider name to the corresponding extension
 // client config id used in the ClientConfigForID registry. Used by the broker
-// for the "is extension config provisioned?" probe.
+// for the "is extension config provisioned?" probe (LEGACY — the old
+// shared-`*-extensions` model from Phase 1; phase 2b uses per-extension slots
+// via extClientConfigForProvider instead).
 func extConfigForProvider(provider string) string {
 	switch provider {
 	case "google":
 		return "google-extensions"
 	case "microsoft":
 		return "microsoft-extensions"
+	default:
+		return ""
+	}
+}
+
+// mailClientConfigForProvider returns Aerion core's mail client config id for
+// the given provider. Used by Path 1 routing (extension's manifest declares
+// some scopes should reuse mail OAuth via first_party_uses_core_for_scopes).
+func mailClientConfigForProvider(provider string) string {
+	switch provider {
+	case "google":
+		return "google-mail"
+	case "microsoft":
+		return "microsoft-mail"
+	default:
+		return ""
+	}
+}
+
+// extClientConfigForProvider returns the per-extension client config id for
+// the given provider + extension. Used by Path 2 routing (the extension's own
+// OAuth project). Examples: "google-contacts", "microsoft-calendar".
+func extClientConfigForProvider(provider, extensionID string) string {
+	switch provider {
+	case "google":
+		return "google-" + extensionID
+	case "microsoft":
+		return "microsoft-" + extensionID
 	default:
 		return ""
 	}

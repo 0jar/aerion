@@ -104,16 +104,76 @@ type MessageFilter struct {
 	Offset    int       `json:"offset,omitempty"`
 }
 
-// Contact is the API-surface representation of a contact.
+// Contact is the API-surface representation of a contact. As of Phase 2b.2.a
+// it carries the full multi-field shape from the unified contact_records
+// schema. Single-value fields (Org/Title/Note/Bday/Nickname) are surfaced
+// directly; multi-value fields are slices of small sub-types.
+//
+// Empty/zero-valued sub-fields are omitted from JSON so the frontend can
+// cleanly hide UI sections that have no data.
 type Contact struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Emails    []string `json:"emails"`
-	SourceID  string   `json:"sourceId,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID         string           `json:"id"`
+	Name       string           `json:"name"`
+	Emails     []string         `json:"emails"`
+	EmailItems []ContactEmail   `json:"emailItems,omitempty"` // richer per-email metadata (type, isPrimary)
+	Phones     []ContactPhone   `json:"phones,omitempty"`
+	Addresses  []ContactAddress `json:"addresses,omitempty"`
+	URLs       []ContactURL     `json:"urls,omitempty"`
+	IMPPs      []ContactIMPP    `json:"impps,omitempty"`
+	Org        string           `json:"org,omitempty"`
+	Title      string           `json:"title,omitempty"`
+	Note       string           `json:"note,omitempty"`
+	Bday       string           `json:"bday,omitempty"`
+	Nickname   string           `json:"nickname,omitempty"`
+	Categories []string         `json:"categories,omitempty"`
+	SourceID   string           `json:"sourceId,omitempty"`
+	UpdatedAt  time.Time        `json:"updatedAt"`
+}
+
+// ContactEmail is one email on a Contact, with its TYPE and primary flag.
+type ContactEmail struct {
+	Email     string `json:"email"`
+	Type      string `json:"type,omitempty"`
+	IsPrimary bool   `json:"isPrimary,omitempty"`
+}
+
+// ContactPhone is one phone number on a Contact.
+type ContactPhone struct {
+	Number    string `json:"number"`
+	Type      string `json:"type,omitempty"`
+	IsPrimary bool   `json:"isPrimary,omitempty"`
+}
+
+// ContactAddress is a structured postal address.
+type ContactAddress struct {
+	Type     string `json:"type,omitempty"`
+	Street   string `json:"street,omitempty"`
+	City     string `json:"city,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Postcode string `json:"postcode,omitempty"`
+	Country  string `json:"country,omitempty"`
+}
+
+// ContactURL is a URL associated with a Contact.
+type ContactURL struct {
+	URL  string `json:"url"`
+	Type string `json:"type,omitempty"`
+}
+
+// ContactIMPP is an instant-messaging handle on a Contact.
+type ContactIMPP struct {
+	Handle string `json:"handle"`
+	Type   string `json:"type,omitempty"`
 }
 
 // ContactFilter is the input to Contacts.ListContacts.
+//
+// SourceID accepts these values (in addition to the empty-string default
+// which merges all sources):
+//   - "local"            → all local contacts (both manual and collected)
+//   - "local:manual"     → only user-added local contacts
+//   - "local:collected"  → only auto-collected (from sent-mail) local contacts
+//   - <CardDAV UUID>     → a specific CardDAV source
 type ContactFilter struct {
 	Query    string `json:"query,omitempty"`
 	SourceID string `json:"sourceId,omitempty"`

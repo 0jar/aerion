@@ -8,15 +8,19 @@
 // tabindex + stopPropagation. The bridge is THIS file — rebinding a key
 // changes exactly one place.
 
-function noMods(e: KeyboardEvent): boolean {
+// Modifier-state helpers. Exported so extension shortcut files
+// (extensions/<name>/frontend/keyboard/shortcuts.ts) compose their predicates
+// against the SAME helpers mail and the kit use — single convention for
+// "no modifiers," "ctrl-or-cmd," "alt only" across the whole app.
+export function noMods(e: KeyboardEvent): boolean {
   return !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
 }
 
-function ctrlOrMeta(e: KeyboardEvent): boolean {
+export function ctrlOrMeta(e: KeyboardEvent): boolean {
   return (e.ctrlKey || e.metaKey) && !e.altKey
 }
 
-function altOnly(e: KeyboardEvent): boolean {
+export function altOnly(e: KeyboardEvent): boolean {
   return e.altKey && !e.ctrlKey && !e.metaKey
 }
 
@@ -48,6 +52,12 @@ export const LIST_OPEN = (e: KeyboardEvent): boolean =>
 export const LIST_SELECT_ALL = (e: KeyboardEvent): boolean =>
   e.key.toLowerCase() === 'a' && ctrlOrMeta(e) && !e.shiftKey
 
+// Delete/Backspace on the focused row. Matches mail's App.svelte behavior
+// (both keys trigger delete intent). Consumers MUST stopPropagation so the
+// global mail handler doesn't ALSO fire on the focused mail message.
+export const LIST_DELETE = (e: KeyboardEvent): boolean =>
+  (e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+
 // Pane focus cycling — Alt+H/L / Alt+Left/Right
 export const PANE_FOCUS_NEXT = (e: KeyboardEvent): boolean =>
   altOnly(e) && (e.key === 'l' || e.key === 'ArrowRight')
@@ -71,6 +81,7 @@ export const KEY = {
   LIST_TOGGLE_CHECK,
   LIST_OPEN,
   LIST_SELECT_ALL,
+  LIST_DELETE,
   PANE_FOCUS_NEXT,
   PANE_FOCUS_PREV,
   SIDEBAR_NEXT,

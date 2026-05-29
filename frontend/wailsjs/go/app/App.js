@@ -74,6 +74,10 @@ export function ClearContactSourceError(arg1) {
   return window['go']['app']['App']['ClearContactSourceError'](arg1);
 }
 
+export function ClearOAuthCreds(arg1) {
+  return window['go']['app']['App']['ClearOAuthCreds'](arg1);
+}
+
 export function CloseWindow() {
   return window['go']['app']['App']['CloseWindow']();
 }
@@ -86,12 +90,20 @@ export function CompleteOAuthAccountSetup(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['app']['App']['CompleteOAuthAccountSetup'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function CopyOAuthCreds(arg1, arg2) {
+  return window['go']['app']['App']['CopyOAuthCreds'](arg1, arg2);
+}
+
 export function CopyToFolder(arg1, arg2) {
   return window['go']['app']['App']['CopyToFolder'](arg1, arg2);
 }
 
 export function CreateIdentity(arg1, arg2) {
   return window['go']['app']['App']['CreateIdentity'](arg1, arg2);
+}
+
+export function CreateLocalContact(arg1, arg2) {
+  return window['go']['app']['App']['CreateLocalContact'](arg1, arg2);
 }
 
 export function DeleteContact(arg1) {
@@ -108,6 +120,10 @@ export function DeleteDraft(arg1) {
 
 export function DeleteIdentity(arg1) {
   return window['go']['app']['App']['DeleteIdentity'](arg1);
+}
+
+export function DeleteLocalContact(arg1) {
+  return window['go']['app']['App']['DeleteLocalContact'](arg1);
 }
 
 export function DeleteLocalMessages(arg1) {
@@ -360,6 +376,10 @@ export function GetMicrosoftSharedMailboxes(arg1) {
 
 export function GetNativeTitleBar() {
   return window['go']['app']['App']['GetNativeTitleBar']();
+}
+
+export function GetOAuthCredsStatus(arg1) {
+  return window['go']['app']['App']['GetOAuthCredsStatus'](arg1);
 }
 
 export function GetOAuthStatus(arg1) {
@@ -822,6 +842,10 @@ export function SetComposerMode(arg1) {
   return window['go']['app']['App']['SetComposerMode'](arg1);
 }
 
+export function SetContactSourceWritable(arg1, arg2) {
+  return window['go']['app']['App']['SetContactSourceWritable'](arg1, arg2);
+}
+
 export function SetDarkMailContent(arg1) {
   return window['go']['app']['App']['SetDarkMailContent'](arg1);
 }
@@ -864,6 +888,10 @@ export function SetMessageListSortOrder(arg1) {
 
 export function SetNativeTitleBar(arg1) {
   return window['go']['app']['App']['SetNativeTitleBar'](arg1);
+}
+
+export function SetOAuthCreds(arg1, arg2, arg3) {
+  return window['go']['app']['App']['SetOAuthCreds'](arg1, arg2, arg3);
 }
 
 export function SetPGPEncryptPolicy(arg1, arg2) {
@@ -1008,6 +1036,10 @@ export function UpdateContactSource(arg1, arg2) {
 
 export function UpdateIdentity(arg1, arg2) {
   return window['go']['app']['App']['UpdateIdentity'](arg1, arg2);
+}
+
+export function UpdateLocalContact(arg1, arg2) {
+  return window['go']['app']['App']['UpdateLocalContact'](arg1, arg2);
 }
 
 export function UpdateLocalFlags(arg1, arg2, arg3) {

@@ -54,15 +54,21 @@ export function CheckRecipientPGPKeys(arg1:Array<string>):Promise<Record<string,
 
 export function ClearContactSourceError(arg1:string):Promise<void>;
 
+export function ClearOAuthCreds(arg1:string):Promise<void>;
+
 export function CloseWindow():Promise<void>;
 
 export function CompleteContactSourceOAuthSetup(arg1:string,arg2:number):Promise<carddav.Source>;
 
 export function CompleteOAuthAccountSetup(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<account.Account>;
 
+export function CopyOAuthCreds(arg1:string,arg2:string):Promise<void>;
+
 export function CopyToFolder(arg1:Array<string>,arg2:string):Promise<void>;
 
 export function CreateIdentity(arg1:string,arg2:account.IdentityConfig):Promise<account.Identity>;
+
+export function CreateLocalContact(arg1:string,arg2:string):Promise<string>;
 
 export function DeleteContact(arg1:string):Promise<void>;
 
@@ -71,6 +77,8 @@ export function DeleteContactSource(arg1:string):Promise<void>;
 export function DeleteDraft(arg1:string):Promise<void>;
 
 export function DeleteIdentity(arg1:string):Promise<void>;
+
+export function DeleteLocalContact(arg1:string):Promise<void>;
 
 export function DeleteLocalMessages(arg1:Array<string>):Promise<void>;
 
@@ -197,6 +205,8 @@ export function GetMessages(arg1:string,arg2:string,arg3:number,arg4:number):Pro
 export function GetMicrosoftSharedMailboxes(arg1:string):Promise<Array<account.Account>>;
 
 export function GetNativeTitleBar():Promise<boolean>;
+
+export function GetOAuthCredsStatus(arg1:string):Promise<app.OAuthCredsStatus>;
 
 export function GetOAuthStatus(arg1:string):Promise<app.OAuthStatus>;
 
@@ -428,6 +438,8 @@ export function SetComposerFormat(arg1:string):Promise<void>;
 
 export function SetComposerMode(arg1:string):Promise<void>;
 
+export function SetContactSourceWritable(arg1:string,arg2:boolean):Promise<void>;
+
 export function SetDarkMailContent(arg1:boolean):Promise<void>;
 
 export function SetDefaultIdentity(arg1:string,arg2:string):Promise<void>;
@@ -449,6 +461,8 @@ export function SetMessageListDensity(arg1:string):Promise<void>;
 export function SetMessageListSortOrder(arg1:string):Promise<void>;
 
 export function SetNativeTitleBar(arg1:boolean):Promise<void>;
+
+export function SetOAuthCreds(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetPGPEncryptPolicy(arg1:string,arg2:string):Promise<void>;
 
@@ -521,5 +535,7 @@ export function UpdateAccount(arg1:string,arg2:account.AccountConfig):Promise<ac
 export function UpdateContactSource(arg1:string,arg2:carddav.SourceConfig):Promise<void>;
 
 export function UpdateIdentity(arg1:string,arg2:account.IdentityConfig):Promise<account.Identity>;
+
+export function UpdateLocalContact(arg1:string,arg2:string):Promise<void>;
 
 export function UpdateLocalFlags(arg1:Array<string>,arg2:any,arg3:any):Promise<void>;

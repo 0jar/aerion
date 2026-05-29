@@ -342,8 +342,9 @@ func resolveURL(baseURL, path string) string {
 	return base.ResolveReference(ref).String()
 }
 
-// FetchContacts fetches all contacts from an addressbook
-func (c *Client) FetchContacts(addressbookPath string) ([]ParsedContact, error) {
+// FetchContacts fetches all contacts from an addressbook. Returns one
+// ParsedRecord per vCard (no per-email fan-out).
+func (c *Client) FetchContacts(addressbookPath string) ([]*ParsedRecord, error) {
 	ctx := context.Background()
 	c.log.Debug().Str("path", addressbookPath).Msg("Fetching contacts")
 
@@ -375,76 +376,216 @@ func (c *Client) FetchContacts(addressbookPath string) ([]ParsedContact, error) 
 
 	c.log.Debug().Int("count", len(addressObjects)).Msg("Fetched address objects")
 
-	var contacts []ParsedContact
+	records := make([]*ParsedRecord, 0, len(addressObjects))
 	for _, obj := range addressObjects {
 		parsed := parseVCard(obj)
-		contacts = append(contacts, parsed...)
+		if parsed == nil {
+			continue
+		}
+		records = append(records, parsed)
 	}
 
-	c.log.Info().Int("contacts", len(contacts)).Str("path", addressbookPath).Msg("Parsed contacts from addressbook")
-	return contacts, nil
+	c.log.Info().Int("records", len(records)).Str("path", addressbookPath).Msg("Parsed records from addressbook")
+	return records, nil
 }
 
-// ParsedContact represents a contact parsed from vCard data
-type ParsedContact struct {
-	Href        string
-	ETag        string
-	Email       string
-	DisplayName string
+// ParsedRecord is the full vCard parse result — one ParsedRecord per vCard,
+// carrying all standard fields the Phase 2b.2.a multi-field schema can hold.
+// Replaces the legacy ParsedContact (one-per-email fan-out shape).
+//
+// VCardRaw stores the re-encoded vCard body for round-trip preservation: when
+// 2b.2.b adds write paths, we parse vcard_raw to surface unknown properties
+// and mutate only the known field set.
+type ParsedRecord struct {
+	Href     string
+	ETag     string
+	VCardRaw string
+
+	FN       string
+	NGiven   string
+	NFamily  string
+
+	Emails    []ParsedEmail
+	Phones    []ParsedPhone
+	Addresses []ParsedAddress
+	URLs      []ParsedURL
+	IMPPs     []ParsedIMPP
+
+	Org      string
+	Title    string
+	Note     string
+	Bday     string
+	Nickname string
+
+	Categories []string
 }
 
-// parseVCard parses a vCard and extracts contacts (one per email address)
-func parseVCard(obj carddav.AddressObject) []ParsedContact {
+// ParsedEmail is one EMAIL property on a vCard, with its first TYPE param.
+type ParsedEmail struct {
+	Value     string
+	Type      string
+	IsPrimary bool
+}
+
+// ParsedPhone is one TEL property.
+type ParsedPhone struct {
+	Value     string
+	Type      string
+	IsPrimary bool
+}
+
+// ParsedAddress is one ADR property, with structured parts.
+type ParsedAddress struct {
+	Type     string
+	Street   string
+	City     string
+	Region   string
+	Postcode string
+	Country  string
+}
+
+// ParsedURL is one URL property.
+type ParsedURL struct {
+	Value string
+	Type  string
+}
+
+// ParsedIMPP is one IMPP (instant-messaging) property.
+type ParsedIMPP struct {
+	Handle string
+	Type   string
+}
+
+// parseVCard returns one ParsedRecord per vCard (no per-email fan-out).
+// Returns nil when the address object has no Card data.
+func parseVCard(obj carddav.AddressObject) *ParsedRecord {
 	if obj.Card == nil {
 		return nil
 	}
-
 	card := obj.Card
 
-	// Get display name
-	displayName := ""
+	rec := &ParsedRecord{
+		Href: obj.Path,
+		ETag: obj.ETag,
+	}
+
+	// FN + N
 	if fn := card.PreferredValue(vcard.FieldFormattedName); fn != "" {
-		displayName = fn
-	} else if n := card.Name(); n != nil {
-		parts := []string{}
-		if n.GivenName != "" {
-			parts = append(parts, n.GivenName)
+		rec.FN = strings.TrimSpace(fn)
+	}
+	if n := card.Name(); n != nil {
+		rec.NGiven = strings.TrimSpace(n.GivenName)
+		rec.NFamily = strings.TrimSpace(n.FamilyName)
+		if rec.FN == "" {
+			parts := []string{}
+			if rec.NGiven != "" {
+				parts = append(parts, rec.NGiven)
+			}
+			if rec.NFamily != "" {
+				parts = append(parts, rec.NFamily)
+			}
+			rec.FN = strings.Join(parts, " ")
 		}
-		if n.FamilyName != "" {
-			parts = append(parts, n.FamilyName)
-		}
-		displayName = strings.Join(parts, " ")
 	}
 
-	// Get all email addresses
-	emails := card.Values(vcard.FieldEmail)
-	if len(emails) == 0 {
-		return nil
-	}
-
-	var contacts []ParsedContact
-	for _, email := range emails {
-		email = strings.TrimSpace(email)
-		if email == "" {
+	// EMAIL (multi)
+	for i, f := range card[vcard.FieldEmail] {
+		val := strings.TrimSpace(f.Value)
+		if val == "" {
 			continue
 		}
-
-		contacts = append(contacts, ParsedContact{
-			Href:        obj.Path,
-			ETag:        obj.ETag,
-			Email:       email,
-			DisplayName: displayName,
+		rec.Emails = append(rec.Emails, ParsedEmail{
+			Value:     val,
+			Type:      firstFieldType(f),
+			IsPrimary: i == 0,
 		})
 	}
 
-	return contacts
+	// TEL (multi)
+	for i, f := range card[vcard.FieldTelephone] {
+		val := strings.TrimSpace(f.Value)
+		if val == "" {
+			continue
+		}
+		rec.Phones = append(rec.Phones, ParsedPhone{
+			Value:     val,
+			Type:      firstFieldType(f),
+			IsPrimary: i == 0,
+		})
+	}
+
+	// ADR (multi, structured)
+	for _, addr := range card.Addresses() {
+		t := ""
+		if addr.Field != nil {
+			t = firstFieldType(addr.Field)
+		}
+		rec.Addresses = append(rec.Addresses, ParsedAddress{
+			Type:     t,
+			Street:   strings.TrimSpace(addr.StreetAddress),
+			City:     strings.TrimSpace(addr.Locality),
+			Region:   strings.TrimSpace(addr.Region),
+			Postcode: strings.TrimSpace(addr.PostalCode),
+			Country:  strings.TrimSpace(addr.Country),
+		})
+	}
+
+	// URL (multi)
+	for _, f := range card[vcard.FieldURL] {
+		val := strings.TrimSpace(f.Value)
+		if val == "" {
+			continue
+		}
+		rec.URLs = append(rec.URLs, ParsedURL{Value: val, Type: firstFieldType(f)})
+	}
+
+	// IMPP (multi)
+	for _, f := range card[vcard.FieldIMPP] {
+		val := strings.TrimSpace(f.Value)
+		if val == "" {
+			continue
+		}
+		rec.IMPPs = append(rec.IMPPs, ParsedIMPP{Handle: val, Type: firstFieldType(f)})
+	}
+
+	// Single-value scalars.
+	rec.Org = strings.TrimSpace(card.PreferredValue(vcard.FieldOrganization))
+	rec.Title = strings.TrimSpace(card.PreferredValue(vcard.FieldTitle))
+	rec.Note = strings.TrimSpace(card.PreferredValue(vcard.FieldNote))
+	rec.Bday = strings.TrimSpace(card.PreferredValue(vcard.FieldBirthday))
+	rec.Nickname = strings.TrimSpace(card.PreferredValue(vcard.FieldNickname))
+
+	// CATEGORIES (multi).
+	rec.Categories = card.Categories()
+
+	// Re-encode the card for vcard_raw round-trip preservation.
+	var buf bytes.Buffer
+	if err := vcard.NewEncoder(&buf).Encode(card); err == nil {
+		rec.VCardRaw = buf.String()
+	}
+
+	return rec
+}
+
+// firstFieldType returns the first TYPE parameter on a Field (lowercased so
+// downstream consumers don't deal with HOME vs home variance). Returns "" when
+// the field has no TYPE param.
+func firstFieldType(f *vcard.Field) string {
+	if f == nil || f.Params == nil {
+		return ""
+	}
+	types := f.Params.Types()
+	if len(types) == 0 {
+		return ""
+	}
+	return strings.ToLower(types[0])
 }
 
 // SyncResult represents the result of an incremental sync
 type SyncResult struct {
 	SyncToken string          // New sync token to store
-	Updated   []ParsedContact // Contacts that were added/modified
-	Deleted   []string        // Hrefs of contacts that were deleted
+	Updated   []*ParsedRecord // Records that were added/modified (one entry per vCard)
+	Deleted   []string        // Hrefs of records that were deleted
 }
 
 // SyncAddressbook performs an incremental sync using sync-collection
@@ -510,23 +651,27 @@ func (c *Client) SyncAddressbook(addressbookPath, syncToken string) (*SyncResult
 		}
 
 		if hasCardData {
-			// Parse contacts directly from sync response
+			// Parse records directly from sync response.
 			for _, obj := range syncResp.Updated {
 				parsed := parseVCard(obj)
-				result.Updated = append(result.Updated, parsed...)
+				if parsed == nil {
+					continue
+				}
+				result.Updated = append(result.Updated, parsed)
 			}
-		} else {
-			// Need to fetch full card data using multiget
+		}
+		if !hasCardData {
+			// Need to fetch full card data using multiget.
 			paths := make([]string, len(syncResp.Updated))
 			for i, obj := range syncResp.Updated {
 				paths[i] = obj.Path
 			}
 
-			contacts, err := c.fetchContactsByPath(abClient, addressbookPath, paths)
+			records, err := c.fetchContactsByPath(abClient, addressbookPath, paths)
 			if err != nil {
-				return nil, fmt.Errorf("failed to fetch updated contacts: %w", err)
+				return nil, fmt.Errorf("failed to fetch updated records: %w", err)
 			}
-			result.Updated = contacts
+			result.Updated = records
 		}
 	}
 
@@ -539,8 +684,9 @@ func (c *Client) SyncAddressbook(addressbookPath, syncToken string) (*SyncResult
 	return result, nil
 }
 
-// fetchContactsByPath fetches contacts by their paths using addressbook-multiget
-func (c *Client) fetchContactsByPath(client *carddav.Client, addressbookPath string, paths []string) ([]ParsedContact, error) {
+// fetchContactsByPath fetches records by their paths using addressbook-multiget.
+// Returns one ParsedRecord per vCard.
+func (c *Client) fetchContactsByPath(client *carddav.Client, addressbookPath string, paths []string) ([]*ParsedRecord, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
@@ -548,7 +694,7 @@ func (c *Client) fetchContactsByPath(client *carddav.Client, addressbookPath str
 	ctx := context.Background()
 	c.log.Debug().
 		Int("count", len(paths)).
-		Msg("Fetching contacts by path using multiget")
+		Msg("Fetching records by path using multiget")
 
 	multiGet := &carddav.AddressBookMultiGet{
 		Paths: paths,
@@ -562,13 +708,15 @@ func (c *Client) fetchContactsByPath(client *carddav.Client, addressbookPath str
 		return nil, fmt.Errorf("multiget failed: %w", err)
 	}
 
-	var contacts []ParsedContact
+	records := make([]*ParsedRecord, 0, len(addressObjects))
 	for _, obj := range addressObjects {
 		parsed := parseVCard(obj)
-		contacts = append(contacts, parsed...)
+		if parsed == nil {
+			continue
+		}
+		records = append(records, parsed)
 	}
-
-	return contacts, nil
+	return records, nil
 }
 
 // TestConnection tests the connection to the CardDAV server

@@ -25,8 +25,9 @@ This doc is the contract every Aerion extension uses to interact with the host a
 13. [Testing conventions](#testing-conventions)
 14. [Frontend conventions](#frontend-conventions)
 15. [Extension UI Kit](#extension-ui-kit)
-16. [Distribution model](#distribution-model)
-17. [Not yet implemented](#not-yet-implemented)
+16. [Write capability](#write-capability)
+17. [Distribution model](#distribution-model)
+18. [Not yet implemented](#not-yet-implemented)
 
 ---
 
@@ -320,14 +321,25 @@ Phase 1 impl ([`internal/extensions/compose/api.go`](../internal/extensions/comp
 
 ```go
 type Contacts interface {
+    // Read
     SearchContacts(query string, limit int) ([]Contact, error)
     GetContact(emailOrID string) (*Contact, error)
     ListContacts(filter ContactFilter) ([]Contact, error)
+
+    // Write (Phase 2b)
+    UpdateContact(id string, patch ContactPatch) error
+    DeleteContact(id string) error
+
+    // Events (Phase 3+)
     SubscribeToContactEvents(types []ContactEventType) (<-chan ContactEvent, Unsubscribe, error)
+}
+
+type ContactPatch struct {
+    Name *string `json:"name,omitempty"` // nil = leave unchanged
 }
 ```
 
-Concrete impl: [`internal/extensions/contacts/api.go`](../internal/extensions/contacts/api.go) (Phase 2a). Search/Get/List wrap the existing core `contact.Store` + `carddav.Store`. `SubscribeToContactEvents` returns `ErrUnimplemented` until a core event bus exists.
+Concrete impl: [`extensions/contacts/backend/api.go`](../extensions/contacts/backend/api.go). Search/Get/List wrap the existing core `contact.Store` + `carddav.Store`. UpdateContact/DeleteContact dispatch by source (see "Local-contact edit/delete" in §16). `SubscribeToContactEvents` returns `ErrUnimplemented` until a core event bus exists.
 
 **`ContactFilter.SourceID` conventions:**
 
@@ -337,7 +349,7 @@ Concrete impl: [`internal/extensions/contacts/api.go`](../internal/extensions/co
 | `"local"` (`extcontacts.SourceIDLocal`) | Aerion's core local contacts only (sent recipients, vCard). Paged via `Limit`/`Offset`. |
 | `<carddav source UUID>` | Contacts from a specific CardDAV source. Uses `carddav.Store.ListContactsPaged`; only enabled sources + addressbooks are returned. |
 
-**`GetContact` argument:** if the string contains `@`, treated as an email and looked up in the core local store; otherwise treated as a CardDAV UUID via `carddav.Store.GetContactByID`. Returns `(nil, nil)` when not found — never an error for missing.
+**`GetContact` / `UpdateContact` / `DeleteContact` argument:** if the id contains `@`, treated as an email and routed to the core local store; otherwise treated as a CardDAV UUID. Read methods look up via `carddav.Store.GetContactByID`. Write methods on CardDAV/Google/Microsoft sources return `ErrUnimplemented` in Phase 2b.1; filled in by 2b.2 (CardDAV PUT) and 2b.3 (Google People / MS Graph). `GetContact` returns `(nil, nil)` when not found — never an error for missing. `ContactPatch` with no fields set is a no-op success.
 
 ### `Auth`
 
@@ -892,15 +904,23 @@ Because extension files live outside `frontend/`, Rollup's default node-modules 
 
 ## Extension UI Kit
 
-The kit at [`frontend/src/lib/components/kit/`](../frontend/src/lib/components/kit) is the **SDK** extensions compose their UI from. Theme tokens, keyboard navigation, density, accent-bar selection, and avatar palette are all baked in — your extension provides data and callbacks, the kit owns rendering.
+The kit at [`frontend/src/lib/components/kit/`](../frontend/src/lib/components/kit) is the layer extensions compose their UI from. Theme tokens, keyboard navigation, density, accent-bar selection, avatar palette, dialog interactions — all are baked in, **matching mail's behavior 1-for-1**. Your extension provides data and callbacks, the kit owns rendering, and the end user gets a UX indistinguishable from the rest of Aerion.
 
-### Why an SDK (not a refactor)
+### Why the UI kit exists
 
-The kit is **standalone**. Mail UI (`MessageList`, `Sidebar`, `ConversationViewer`) is independent and is NOT refactored to share components with the kit. Code duplication between the kit and mail is the explicit trade-off: Mail has real users and 1700+ LOC components tangled with sync state / S/MIME / PGP / drafts — touching them to serve extension consistency is regression-risk for no user benefit. The kit copies the good patterns (avatar color hash, density modes, j/k navigation) from mail into greenfield components that consume the same theme tokens.
+Extensions need to look and behave like the rest of Aerion — same keys, same focus rules, same scrolling, same dialog interactions. Modifying mail's code (`MessageList.svelte`, `Sidebar.svelte`, `ConversationViewer.svelte`, etc.) to share components directly carries too much regression risk to do that way. The kit is the mechanism for getting cohesion without touching mail. **It's not an alternative design — it's the necessary copy of mail's UX, made consumable by extensions.**
 
-Visual consistency is preserved at the **theme layer**, not the JS layer. The kit's `Avatar` uses the same `.avatar-1..14` CSS classes (defined in [`frontend/src/themes/_utilities.css`](../frontend/src/themes/_utilities.css)) that mail's avatar uses — so the colors match even though the hash function lives in two files. Same applies to all theme tokens (`bg-muted`, `border-border`, `text-foreground`, `bg-accent`, `text-primary`).
+### The 1-for-1 rule
 
-This SDK pattern is anchored in [the lightweight-by-default motto](../README.md) — Aerion remains a simple email client for users who don't enable extensions, and extensions opt-in to features at the cost of weight. Mail must never carry kit overhead.
+Every kit primitive (`Avatar`, `ListPane`, `ListRow`, `SourceSidebar`, `SourceItem`, `DetailPane`, `ConfirmDialog`, `OAuthCredsSlotEditor`, …) is a behavioral replica of how the equivalent functionality works in mail today: same key bindings, same focus semantics, same scroll-into-view, same edge-case behavior. The backwards-compat test: **if mail were ever refactored to consume the kit, the user should see zero difference**. If you can't pass that test on a kit primitive you're writing, you've diverged.
+
+**Practical consequence: read the mail equivalent before implementing a kit primitive.** Don't infer behavior. Don't reach for a generic third-party pattern. Open `MessageList.svelte` / `Sidebar.svelte` / `ConversationViewer.svelte` / the relevant `ui/` host primitive and study how it handles keyboard, focus, scroll, and edge cases. Then match that behavior in the kit.
+
+Visual consistency is also preserved at the **theme layer**. The kit's `Avatar` uses the same `.avatar-1..14` CSS classes (defined in [`frontend/src/themes/_utilities.css`](../frontend/src/themes/_utilities.css)) that mail's avatar uses, so colors match. Same applies to all theme tokens (`bg-muted`, `border-border`, `text-foreground`, `bg-accent`, `text-primary`).
+
+When the host primitive has a bug that affects the kit, **fix it at the host layer** so both benefit. Don't add the fix only to the kit wrapper — that creates drift and silently breaks the 1-for-1 contract. Example: `ui/confirm-dialog/ConfirmDialog.svelte` was missing `dialogGuard` registration (which prevents mail's global key handler from killing Enter/Space activation on dialog buttons). The fix landed on the host primitive, and the kit's thin pass-through inherited it automatically.
+
+This pattern is anchored in [the lightweight-by-default motto](../README.md) — Aerion remains a simple email client for users who don't enable extensions, and extensions opt-in to features at the cost of weight. Mail must never carry kit overhead.
 
 ### Keyboard bridge
 
@@ -964,10 +984,36 @@ Inside the kit, treat `density` as the standard prop; only override `size` when 
 - Enter to activate (`onActivate ?? onSelect`)
 - Space to toggle check (when `onToggleCheck` provided)
 - Ctrl+A to select all (when `onSelectAll` provided)
+- **Delete/Backspace** — always swallowed when the list is focused (preventDefault + stopPropagation). When `onDelete` is provided, fires it with the selected id. Always swallowing — even with no handler — prevents mail's global key handler from acting on the focused message in the background.
+- **Auto-scroll-into-view** on selection change (matches `MessageList.svelte`'s pattern). Uses `scrollIntoView({ block: 'nearest', behavior: 'smooth' })` so the row enters view but doesn't scroll if it's already visible.
 - DOM-level focus via `tabindex=0`; registers as the focused pane's slot via `setFocusedPane(focusSlot)` when DOM-focused
 - `e.stopPropagation()` when matched so the global handler doesn't double-fire
 
 **Generic over `T extends { id: string }`** — items just need a stable `id`. The `row` snippet renderer decides everything else.
+
+**Layout requirement**: any wrapper around `ListPane` must allow the flex children to shrink — apply `min-h-0` to the wrapper's flex column. Without it, the inner `overflow-y-auto` won't engage and the list grows past its container. Tailwind classes:
+
+```svelte
+<div class="flex-1 min-w-0 min-h-0 flex flex-col">
+  <div>...toolbar...</div>
+  <ListPane ... />
+</div>
+```
+
+**Delete handler example:**
+
+```svelte
+<ListPane
+  items={contacts}
+  selectedId={selected}
+  onSelect={(id) => select(id)}
+  onDelete={(id) => requestDelete(id)}
+>
+  ...
+</ListPane>
+```
+
+The `onDelete` handler typically opens a `ConfirmDialog` (see below) rather than deleting immediately — matches mail's confirmation pattern for destructive actions.
 
 #### `SourceSidebar` + `SourceItem` — sectioned sidebar
 
@@ -1013,6 +1059,110 @@ Inside the kit, treat `density` as the standard prop; only override `size` when 
 
 Read-only shell — no keyboard ownership. Header is fixed; body scrolls. Empty-state can be customized via snippet or just `emptyIcon`/`emptyText` props.
 
+#### `ConfirmDialog` — destructive-action confirmation
+
+[`frontend/src/lib/components/kit/ConfirmDialog.svelte`](../frontend/src/lib/components/kit/ConfirmDialog.svelte)
+
+```svelte
+<ConfirmDialog
+  bind:open={showDeleteConfirm}
+  title="Delete this contact?"
+  description={`${contact.name} will be removed from your local contacts.`}
+  confirmLabel="Delete"
+  cancelLabel="Cancel"
+  variant="destructive"
+  loading={deleting}
+  onConfirm={confirmDelete}
+/>
+```
+
+| Prop | Type | Notes |
+|---|---|---|
+| `open` | `bindable boolean` | Two-way bound — flip to false to close, or call cancel inside `onConfirm`. |
+| `title` | `string` | Dialog heading. |
+| `description` | `string` | Body text — full sentence describing what will happen. |
+| `confirmLabel` | `string?` | Default: `"Confirm"`. |
+| `cancelLabel` | `string?` | Default: `"Cancel"`. |
+| `variant` | `'default' \| 'destructive'?` | `destructive` applies red styling to the confirm button. |
+| `loading` | `boolean?` | Show spinner on confirm + disable both buttons. |
+| `onConfirm` | `() => void` | Required. Called on confirm-button click or Enter. |
+| `onCancel` | `() => void?` | Called when cancel button, Escape, or click-outside dismisses the dialog. |
+
+Pass-through to the host's [`ui/confirm-dialog/ConfirmDialog.svelte`](../frontend/src/lib/components/ui/confirm-dialog/ConfirmDialog.svelte). Same component mail uses for its permanent-delete and empty-trash confirms — behavior is identical, including Enter/Space activation, Escape to cancel, and focus trap. Extensions consume the kit version so they don't reach into the host's `ui/` namespace; the host can swap its underlying primitive (bits-ui today, anything else later) without breaking extensions.
+
+The dialog registers with [`dialogGuard`](../frontend/src/lib/stores/dialogGuard.ts) while open, which makes mail's global key handler in `App.svelte` step out of the way. Without that guard, Enter/Space on dialog buttons get `preventDefault`'d by mail's button-pane disambiguation logic.
+
+**If your extension defines its own custom dialog** (one that doesn't go through the kit's `ConfirmDialog`), you MUST register `dialogGuard` yourself or Enter/Space activation on the dialog's buttons will be killed by mail's global key handler. Match the convention every mail dialog uses ([`SettingsDialog.svelte:87–92`](../frontend/src/lib/components/settings/SettingsDialog.svelte), [`AccountDialog.svelte:140–141`](../frontend/src/lib/components/settings/AccountDialog.svelte)):
+
+```svelte
+<script lang="ts">
+  import { dialogGuardOpen, dialogGuardClose } from '$lib/stores/dialogGuard'
+
+  let { open = $bindable(false) }: Props = $props()
+
+  $effect(() => {
+    if (open) {
+      dialogGuardOpen()
+      return () => dialogGuardClose()
+    }
+  })
+</script>
+```
+
+The bits-ui Root wrappers (`ui/dialog/Dialog`, `ui/alert-dialog/AlertDialog`) deliberately don't register on their own — the convention is "consumer owns it" so registration only happens when the dialog is actually open, not just rendered.
+
+### Extension keyboard shortcuts
+
+Extensions register their own pane-local keyboard shortcuts through a small registry. Mail's global key handler in `App.svelte` calls `dispatchExtensionShortcut(e)` before its own mail-domain switch; when the active rail pane is NOT mail, the dispatcher walks the active extension's registered predicates and invokes the first match.
+
+**Where things live**:
+
+| File | Owner | Purpose |
+|---|---|---|
+| [`frontend/src/lib/keyboard/shortcuts.ts`](../frontend/src/lib/keyboard/shortcuts.ts) | host | Predicates shared by mail AND the kit (`LIST_NEXT`, `LIST_DELETE`, `PANE_FOCUS_*`, etc.) + the composable mod-state helpers (`noMods`, `ctrlOrMeta`, `altOnly`). Exported so extensions compose their predicates against the same helpers. |
+| [`frontend/src/lib/stores/extensionShortcuts.svelte.ts`](../frontend/src/lib/stores/extensionShortcuts.svelte.ts) | host | The registry — `registerExtensionShortcut(extensionId, predicate, handler)` + `dispatchExtensionShortcut(e)`. |
+| `extensions/<name>/frontend/keyboard/shortcuts.ts` | extension | Predicates owned by that extension. Extension imports the host helpers and exports its own KEY namespace. |
+
+**Defining an extension shortcut**:
+
+```ts
+// extensions/contacts/frontend/keyboard/shortcuts.ts
+import { noMods } from '$lib/keyboard/shortcuts'
+
+/** `e` — edit the currently-focused contact. */
+export const CONTACT_EDIT = (e: KeyboardEvent): boolean =>
+  e.key === 'e' && noMods(e)
+
+export const KEY = { CONTACT_EDIT }
+```
+
+**Registering at component mount**:
+
+```ts
+import { onMount, onDestroy } from 'svelte'
+import { registerExtensionShortcut } from '$lib/stores/extensionShortcuts.svelte'
+import { KEY } from '$extensions/contacts/frontend/keyboard/shortcuts'
+
+const unreg = registerExtensionShortcut('contacts', KEY.CONTACT_EDIT, () => {
+  const id = contactsView.selectedContactId
+  if (id) openEditDialog(id)
+})
+onDestroy(unreg)
+```
+
+The registration is scoped to the extension's id — the dispatcher only fires it when `getActiveExtension() === 'contacts'`. Multiple shortcuts per extension are supported and evaluated in registration order; first match wins.
+
+**Important rules**:
+
+- **Register at the highest pane component** (e.g., the extension's root pane `ContactsPane.svelte`, not the leaf `ContactList.svelte`). That way the shortcut survives across re-renders of inner components and remains active whenever the pane is mounted.
+- **Always call the returned Unregister** from `onDestroy` (or equivalent cleanup). Without it, repeated mount/unmount cycles pile up stale handlers.
+- **Inputs are excluded automatically**: the host dispatcher checks `inInput` before invoking extension shortcuts, so the shortcut doesn't fire while the user is typing in a text field.
+- **Dialog guard suppresses extension shortcuts too**: when a `ConfirmDialog` or other guarded dialog is open, the host handler bails before the dispatcher runs. Same as mail's behavior with its own dialogs.
+- **Mail-side shortcuts stay**. Extension shortcuts only run when the active rail pane is the extension. Mail's own shortcuts (`Ctrl+R`, `Ctrl+K`, `j/k` via window handler when no kit pane is focused, etc.) continue to fire when the rail pane is mail.
+- **Use shared helpers** from `$lib/keyboard/shortcuts` (`noMods`, `ctrlOrMeta`, `altOnly`) to define predicates. Match mail's modifier-checking conventions exactly — that's the 1-for-1 rule applied to keyboard.
+
+**Why the registry instead of inline dispatch**: the registry shape is what lets the host's global key handler stay extension-agnostic. App.svelte doesn't need to know about every extension's shortcuts — it just defers to whichever extension is active. Adding a new extension means adding the extension's own shortcut file + registering at mount; no host changes.
+
 ### Pane focus slots
 
 The kit reuses Aerion's existing pane-focus store at [`frontend/src/lib/stores/keyboard.svelte.ts`](../frontend/src/lib/stores/keyboard.svelte.ts). The slot type is `'sidebar' | 'messageList' | 'viewer'` — those names are kept as-is for backward compatibility with mail's existing focus dispatch. Extension panes register against these same slots:
@@ -1029,11 +1179,166 @@ Alt+H/L pane cycling already cycles through these three slot names — when an e
 
 When a future extension needs a primitive that doesn't exist yet (e.g., Calendar's grid view):
 
-1. Add the new component under `frontend/src/lib/components/kit/`.
-2. Keep the kit standalone — never import from `frontend/src/lib/components/{list,sidebar,viewer}/` (mail's components). If the kit needs the same pattern mail has, copy it.
-3. Reference shared predicates from `shortcuts.ts` for any new keyboard bindings; add new predicates there if needed.
-4. Document the component here with prop table + minimal usage example.
-5. Verify the lightweight invariant: with the new component built but no extension enabled, htop should show no Aerion/webkit2gtk activity. The kit must be lazily mounted only when an extension is active.
+1. **Find the mail equivalent first.** Open the matching `frontend/src/lib/components/{list,sidebar,viewer,ui,...}/` file and study how it handles keyboard, focus, scroll-into-view, and edge cases. The 1-for-1 rule starts here.
+2. **Build the kit primitive to match that behavior exactly.** Where the host already has a working primitive in `ui/` (`Button`, `Input`, `Dialog`, `AlertDialog`, etc.), wrap it as a thin pass-through — see [`ConfirmDialog.svelte`](../frontend/src/lib/components/kit/ConfirmDialog.svelte) for the canonical example. Where the kit has to copy (j/k navigation, accent-bar selection, density), copy faithfully and reference the same `shortcuts.ts` predicates.
+3. **Don't reach into mail's components** (`frontend/src/lib/components/{list,sidebar,viewer}/`). Those are the live mail UI, not reusable primitives. Copy the pattern, don't import it.
+4. **If you find a bug in the host primitive that affects the kit, fix it at the host layer** so mail benefits too. Don't patch the kit wrapper — that creates drift that breaks the 1-for-1 contract. Same code paths, same behavior, same fixes.
+5. **Add new shortcut predicates to `shortcuts.ts`** if introducing new keys. Both mail and any kit consumer should reference the same predicate.
+6. Document the component here with prop table + minimal usage example.
+7. **Verify the lightweight invariant**: with the new component built but no extension enabled, htop should show no Aerion/webkit2gtk activity. The kit must be lazily mounted only when an extension is active.
+
+---
+
+## Write capability
+
+Phase 2b introduces write capability to extensions. Reads continue through Aerion core's existing data paths (mail OAuth + per-source CardDAV creds); writes go through a parallel per-extension OAuth path.
+
+### Per-extension OAuth client configs
+
+Each first-party extension that needs OAuth writes owns its OWN client config slot, with its own credentials, injected at build time from the extension's package — Aerion core compiles in only `*-mail`.
+
+```
+google-mail            ← Aerion core (mail + contacts READ via existing grant)
+microsoft-mail         ← Aerion core
+google-contacts        ← Contacts extension (WRITE only)
+microsoft-contacts     ← Contacts extension
+google-calendar        ← Calendar extension (READ + WRITE; future)
+microsoft-calendar     ← Calendar extension (future)
+```
+
+Each extension's package contains:
+- `extensions/<name>/manifest.json` — declares the extension
+- `extensions/<name>/manifest.go` — embeds the manifest JSON
+- `extensions/<name>/creds.go` — package-level `GoogleClientID` / `GoogleClientSecret` / `MicrosoftClientID` vars + a `CredentialsProvider` registered with `oauth2.RegisterCredentialsProvider`
+- `extensions/<name>/.env.example` — template for build-time injection of those vars
+
+See [`extensions/contacts/creds.go`](../extensions/contacts/creds.go) for the canonical pattern. Vars can be injected via Makefile ldflags from `extensions/<name>/.env` or a per-extension shim binary; if both are empty, the slot resolves to `(zero, false)` and the consent prompt fires.
+
+### Manifest OAuth routing — `first_party_uses_core_for_scopes`
+
+When an extension calls `core.Auth().HTTPClient(accountID, scopes)`, the Auth Broker reads the calling extension's manifest to decide whether each scope:
+
+- **Routes to Aerion core's mail OAuth** (`<provider>-mail`) — listed in `manifest.oauth.first_party_uses_core_for_scopes`. Reuses the user's existing mail consent; no new OAuth prompt. Only viable for scopes the user's mail OAuth already covers.
+- **Routes to the extension's own creds** (`<provider>-<extensionID>`) — NOT listed. If the account lacks those scopes under the extension's config, broker returns `*coreapi.ErrAdditionalConsentRequired`; the host runs an incremental-consent flow.
+
+```jsonc
+// Contacts: READ piggybacks on mail OAuth, WRITE uses own creds
+{
+  "id": "contacts",
+  "oauth": {
+    "first_party_uses_core_for_scopes": [
+      "https://www.googleapis.com/auth/contacts.readonly",
+      "Contacts.Read"
+    ]
+  }
+}
+
+// Calendar: nothing overlaps with mail OAuth — everything uses own creds
+{
+  "id": "calendar",
+  "oauth": {
+    "first_party_uses_core_for_scopes": []
+  }
+}
+```
+
+Mixed-scope calls (some routing to core, some to extension) are REJECTED — the extension must split into two HTTPClient calls.
+
+**THE GATE**: `first_party_uses_core_for_scopes` is honored ONLY for first-party extensions. Community extensions (v0.4+) declaring this field will fail manifest validation upstream. Handing community extensions the user's mail OAuth tokens would be a privilege-escalation vector — capped at the manifest boundary.
+
+### User-supplied OAuth credentials (override UI)
+
+Users can paste their own Client ID + Secret per slot via Aerion's settings:
+
+- **Aerion core's `*-mail` slots** → Settings → Accounts → "OAuth Credentials (advanced)" disclosure (collapsed by default). See [`AerionCoreOAuthSection.svelte`](../frontend/src/lib/components/settings/AerionCoreOAuthSection.svelte).
+- **Per-extension slots** → that extension's own settings dialog. See [`ContactsSettingsDialog.svelte`](../extensions/contacts/frontend/components/ContactsSettingsDialog.svelte) for the canonical layout.
+
+Both UIs use the same shared primitive [`kit/OAuthCredsSlotEditor.svelte`](../frontend/src/lib/components/kit/OAuthCredsSlotEditor.svelte) (composed from existing `ui/input`, `ui/button`, `ui/select`, `ui/confirm-dialog` — no new low-level inputs). Each slot supports:
+
+- Edit (paste Client ID + Secret; values are password-masked and never read back to the frontend)
+- Reset (clear the override and revert to shipped defaults)
+- "Copy from another slot…" — server-side copy through the credentials store; secret never crosses the Wails boundary
+
+Resolution order in `oauth2.ClientConfigForID(configID)`:
+1. User override from `credentials.Store` (Settings UI override) via `oauth2.UserOverrideLookup`
+2. Registered `CredentialsProvider` chain (Aerion core's, then each extension's own)
+3. `(zero, false)` → triggers `ErrAdditionalConsentRequired` or "no creds available" UX
+
+Storage: encrypted via `credentials.Store` (OS keyring primary, encrypted DB fallback in the `user_oauth_clients` table). See [`internal/credentials/oauth_user_creds.go`](../internal/credentials/oauth_user_creds.go).
+
+### Per-extension settings dialog
+
+Extensions register their settings dialog via `core.UI().RegisterSettingsTab(...)`. The host dispatcher [`ExtensionSettingsDialog.svelte`](../frontend/src/lib/components/settings/ExtensionSettingsDialog.svelte) opens the matching dialog (static dispatch by extension ID — same pattern as account-setup hooks).
+
+Two entry paths:
+1. **Explicit Edit button** in Settings → Extensions → row (when the extension is enabled)
+2. **Extension-driven auto-open** via `openExtensionSettings(extensionId)` — the extension's frontend code can open its own settings dialog when needed (e.g., on pane mount when the extension detects it's missing OAuth creds for write capability)
+
+### Incremental consent flow
+
+When an extension's HTTPClient call hits `ErrAdditionalConsentRequired`, the host emits an `oauth:incremental-consent-required` Wails event. The globally-mounted [`IncrementalConsentDialog.svelte`](../frontend/src/lib/components/oauth/IncrementalConsentDialog.svelte) listens for that event, displays a prompt showing the missing scopes, and (in Phase 2b.3) triggers an OAuth flow targeted at the extension's specific client config + missing scopes.
+
+The dialog is GENERIC — all extension-specific text comes from manifest data + the missing-scope resource strings. Calendar will reuse this same dialog when its write paths land.
+
+Phase 2b.1 SCAFFOLDS this flow but the Connect button doesn't yet kick a real OAuth handshake — that lands in 2b.3 alongside the Google People / MS Graph write paths.
+
+### Local-contact edit/delete
+
+For sent-recipient (local) contacts, the Contacts extension supports inline rename + delete via [`ContactEditDialog.svelte`](../extensions/contacts/frontend/components/ContactEditDialog.svelte).
+
+**Flow** (read the table top-to-bottom — same SDK pattern future extensions follow):
+
+| Layer | Responsibility |
+|---|---|
+| Frontend (`ContactEditDialog.svelte`) | Collects new name; calls `contactsView.updateLocalContact(email, name)` |
+| Frontend store ([`contactsView.svelte.ts`](../extensions/contacts/frontend/stores/contactsView.svelte.ts)) | Calls Wails-bound `App.UpdateLocalContact(email, name)` |
+| Wails-bound host method ([`app/extension_contacts.go`](../app/extension_contacts.go)) | Guards on `IsExtensionEnabled("contacts")`. Routes through `a.contactsAPI.UpdateContact(email, coreapi.ContactPatch{Name: &name})` — **does NOT call the core store directly**. |
+| Extension API ([`extensions/contacts/backend/api.go`](../extensions/contacts/backend/api.go)) | `UpdateContact` source-dispatches by id: `@` → local (calls `contact.Store.UpdateName`); UUID → returns `ErrUnimplemented` (filled in by 2b.2/2b.3) |
+| Core store ([`internal/contact/store.go`](../internal/contact/store.go)) | `UpdateName` sets `display_name` + flips `name_overridden=1`. `AddOrUpdate` (called on sent mail) honors the flag so auto-collection never clobbers a user edit. |
+
+**Why route through the extension API instead of calling the core store directly:** writes follow the same SDK pattern as reads. When 2b.2 (CardDAV write) and 2b.3 (Google/MS write) land, they fill in the source-branches inside `extcontactsbe.API.UpdateContact`/`DeleteContact` — NO new Wails methods, NO new direct-store call sites. Future extensions (Calendar) declare their CRUD on their own `coreapi` interface and follow the same pattern.
+
+CardDAV / Google / Microsoft contact edits land in Phase 2b.2 (CardDAV write) and 2b.3 (provider OAuth write paths). Same Wails methods, same extension API methods — only the now-`ErrUnimplemented` branches inside the API impl get filled in.
+
+### Source-dispatch pattern (transferable to Calendar / future extensions)
+
+When an extension's API needs to mutate data that lives across multiple backends (local store, CardDAV-style WebDAV, OAuth APIs), the canonical Aerion pattern is **source dispatch inside the extension's `coreapi` impl**:
+
+```go
+// extensions/<name>/backend/api.go
+func (a *API) UpdateThing(id string, patch coreapi.ThingPatch) error {
+    if id == "" {
+        return fmt.Errorf("…: id is required")
+    }
+    if isLocalID(id) {        // e.g., email format, or a "local:" prefix
+        return a.localPath(id, patch)
+    }
+    if isCardDAVID(id) {      // e.g., UUID + lookup in carddav store
+        return a.carddavPath(id, patch) // returns ErrUnimplemented until ready
+    }
+    if isGoogleID(id) {
+        return a.googlePath(id, patch)
+    }
+    if isMicrosoftID(id) {
+        return a.microsoftPath(id, patch)
+    }
+    return coreapi.ErrUnimplemented
+}
+```
+
+Rules that hold across this pattern:
+
+- The extension API ONLY routes; it doesn't gate. Capability checks (`IsExtensionEnabled`, source `writable` flag) live in the host's Wails-bound methods.
+- Each provider branch starts as `ErrUnimplemented` and gets filled in when that provider's write path lands. This lets sub-phases ship independently.
+- Empty/nil patch is a no-op success — callers can issue a "touch" without sending fields. Useful for refresh-driven flows.
+- Patch types use pointer fields (`*string`, `*[]string`) so consumers can distinguish "leave unchanged" from "set to empty."
+- Source-dispatch keys (id format, source-table joins) are extension-specific. Contacts uses `@` → local / UUID → carddav. Calendar will use its own conventions.
+
+When Calendar lands, its `coreapi.Calendar` interface gains `CreateEvent`/`UpdateEvent`/`DeleteEvent` with `EventPatch`, dispatched by source the same way.
+
+### Source `writable` flag
+
+`contact_sources.writable` is a boolean (default 0) tracking whether the user has opted in to write capability on a given source. Set per-source via the source-edit UI (Phase 2b.2). For CardDAV sources, flipping the flag is purely a UI choice — credentials already cover both directions. For OAuth sources (Phase 2b.3), the flag is set after successful incremental consent stores write-scoped tokens under the extension's client config.
 
 ---
 

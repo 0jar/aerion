@@ -85,6 +85,108 @@ func (b *Broker) HTTPClient(accountID string, scopes []coreapi.AuthScope) (*http
 	}, nil
 }
 
+// HTTPClientForExtension is the Phase 2b entry point that knows WHICH extension
+// is making the request, and reads that extension's manifest to decide whether
+// each requested scope routes through:
+//
+//   - Aerion core's mail OAuth (<provider>-mail client config) — when the
+//     scope is listed in manifest.OAuth.FirstPartyUsesCoreForScopes; reuses
+//     the user's existing mail consent.
+//   - The extension's own client config (<provider>-<extensionID>) — when the
+//     scope is NOT in the manifest list; triggers ErrAdditionalConsentRequired
+//     if the account lacks the scope under that config.
+//
+// Mixed-scope calls (some core-routed, some own-routed) are REJECTED — the
+// extension must split into separate HTTPClient calls per routing target.
+//
+// GATE: FirstPartyUsesCoreForScopes is honored ONLY for first-party extensions.
+// Community extensions (v0.4+) declaring the field will fail manifest
+// validation upstream. For Phase 2b every extension is first-party.
+func (b *Broker) HTTPClientForExtension(
+	extensionID string,
+	manifest coreapi.Manifest,
+	accountID string,
+	scopes []coreapi.AuthScope,
+) (*http.Client, error) {
+	// Discover the account's provider via its existing Mail tokens. Every
+	// authenticated OAuth account has a Mail row (per migration v29 backfill).
+	mailTokens, err := b.credStore.GetOAuthTokens(accountID)
+	if err != nil {
+		return nil, fmt.Errorf("auth broker: get account tokens: %w", err)
+	}
+
+	// Classify each requested scope: does it use Aerion core's mail OAuth
+	// (per the manifest's first_party_uses_core_for_scopes) or the extension's
+	// own client config?
+	useCoreSet := map[string]bool{}
+	if manifest.OAuth != nil {
+		for _, s := range manifest.OAuth.FirstPartyUsesCoreForScopes {
+			useCoreSet[s] = true
+		}
+	}
+	var coreScopes, ownScopes []coreapi.AuthScope
+	for _, s := range scopes {
+		if useCoreSet[s.Resource] {
+			coreScopes = append(coreScopes, s)
+			continue
+		}
+		ownScopes = append(ownScopes, s)
+	}
+	if len(coreScopes) > 0 && len(ownScopes) > 0 {
+		return nil, fmt.Errorf(
+			"auth broker: extension %q requested mixed routing scopes; split into separate HTTPClient calls (core-routed: %d, own-routed: %d)",
+			extensionID, len(coreScopes), len(ownScopes),
+		)
+	}
+
+	// Resolve the target client config ID.
+	var clientConfigID string
+	switch {
+	case len(coreScopes) > 0:
+		// Path 1: core mail OAuth.
+		clientConfigID = mailClientConfigForProvider(mailTokens.Provider)
+	default:
+		// Path 2: extension's own creds. ownScopes carries everything (and may
+		// be empty if scopes was empty — degenerate case).
+		clientConfigID = extClientConfigForProvider(mailTokens.Provider, extensionID)
+	}
+	if clientConfigID == "" {
+		return nil, fmt.Errorf("auth broker: cannot resolve client config for provider %q (extension %q)", mailTokens.Provider, extensionID)
+	}
+
+	// Check whether the account already has tokens under that client config
+	// with sufficient scope coverage. If not, signal the host to run consent.
+	existing, err := b.credStore.GetOAuthTokensForClientConfig(accountID, clientConfigID)
+	if err == credentials.ErrCredentialNotFound {
+		return nil, &coreapi.ErrAdditionalConsentRequired{
+			AccountID:      accountID,
+			ClientConfigID: coreapi.ClientConfigID(clientConfigID),
+			MissingScopes:  scopes,
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("auth broker: check tokens: %w", err)
+	}
+
+	if missing := missingScopes(existing.Scopes, scopes); len(missing) > 0 {
+		return nil, &coreapi.ErrAdditionalConsentRequired{
+			AccountID:      accountID,
+			ClientConfigID: coreapi.ClientConfigID(clientConfigID),
+			MissingScopes:  missing,
+		}
+	}
+
+	return &http.Client{
+		Transport: &bearerRefreshTransport{
+			base:           http.DefaultTransport,
+			credStore:      b.credStore,
+			oauthManager:   b.oauthManager,
+			accountID:      accountID,
+			clientConfigID: clientConfigID,
+		},
+	}, nil
+}
+
 // IMAPClient returns an authenticated IMAP client for the account. Phase 1
 // scaffolds the interface; real IMAP wiring lands in Phase 2 when an
 // extension needs it (Sieve, custom X-* commands, etc.). Mail itself

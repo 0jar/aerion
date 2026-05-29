@@ -125,6 +125,150 @@ func TestBrokerHTTPClient_ScopesCovered_ReturnsClient(t *testing.T) {
 	}
 }
 
+// HTTPClientForExtension tests: verify the Phase 2b manifest-driven routing.
+
+func TestHTTPClientForExtension_RoutesToCoreForListedScopes(t *testing.T) {
+	broker, credStore, db := newTestBroker(t)
+	insertTestAccount(t, db, "acct-route-core")
+
+	// Account has mail tokens that include the contacts.readonly scope (which
+	// is what mail OAuth includes for autocomplete).
+	if err := credStore.SetOAuthTokens("acct-route-core", &credentials.OAuthTokens{
+		Provider:     "google",
+		AccessToken:  "mail-access",
+		RefreshToken: "mail-refresh",
+		Scopes: []string{
+			"https://mail.google.com/",
+			"https://www.googleapis.com/auth/contacts.readonly",
+		},
+	}); err != nil {
+		t.Fatalf("set mail tokens: %v", err)
+	}
+
+	// Contacts manifest declares contacts.readonly as core-routed.
+	manifest := coreapi.Manifest{
+		ID: "contacts",
+		OAuth: &coreapi.ManifestOAuth{
+			FirstPartyUsesCoreForScopes: []string{
+				"https://www.googleapis.com/auth/contacts.readonly",
+			},
+		},
+	}
+
+	client, err := broker.HTTPClientForExtension("contacts", manifest, "acct-route-core", []coreapi.AuthScope{
+		{Resource: "https://www.googleapis.com/auth/contacts.readonly"},
+	})
+	if err != nil {
+		t.Fatalf("expected success routing through mail config, got: %v", err)
+	}
+	if client == nil {
+		t.Fatal("expected *http.Client, got nil")
+	}
+}
+
+func TestHTTPClientForExtension_RoutesToExtensionForUnlistedScopes(t *testing.T) {
+	broker, credStore, db := newTestBroker(t)
+	insertTestAccount(t, db, "acct-route-ext")
+
+	// Account has mail tokens but NO write-scope tokens under google-contacts.
+	if err := credStore.SetOAuthTokens("acct-route-ext", &credentials.OAuthTokens{
+		Provider:     "google",
+		AccessToken:  "mail-access",
+		RefreshToken: "mail-refresh",
+		Scopes:       []string{"https://mail.google.com/"},
+	}); err != nil {
+		t.Fatalf("set mail tokens: %v", err)
+	}
+
+	// Contacts manifest lists only the READ scope as core-routed. The write
+	// scope below is NOT listed, so the broker should route to google-contacts.
+	manifest := coreapi.Manifest{
+		ID: "contacts",
+		OAuth: &coreapi.ManifestOAuth{
+			FirstPartyUsesCoreForScopes: []string{
+				"https://www.googleapis.com/auth/contacts.readonly",
+			},
+		},
+	}
+
+	_, err := broker.HTTPClientForExtension("contacts", manifest, "acct-route-ext", []coreapi.AuthScope{
+		{Resource: "https://www.googleapis.com/auth/contacts"},
+	})
+	if err == nil {
+		t.Fatal("expected ErrAdditionalConsentRequired (no tokens under google-contacts), got nil")
+	}
+	consentErr, ok := err.(*coreapi.ErrAdditionalConsentRequired)
+	if !ok {
+		t.Fatalf("expected *ErrAdditionalConsentRequired, got %T: %v", err, err)
+	}
+	if string(consentErr.ClientConfigID) != "google-contacts" {
+		t.Errorf("ClientConfigID: got %q, want google-contacts", consentErr.ClientConfigID)
+	}
+}
+
+func TestHTTPClientForExtension_RejectsMixedScopes(t *testing.T) {
+	broker, credStore, db := newTestBroker(t)
+	insertTestAccount(t, db, "acct-mixed")
+
+	if err := credStore.SetOAuthTokens("acct-mixed", &credentials.OAuthTokens{
+		Provider:     "google",
+		AccessToken:  "mail-access",
+		RefreshToken: "mail-refresh",
+		Scopes:       []string{"https://mail.google.com/"},
+	}); err != nil {
+		t.Fatalf("set mail tokens: %v", err)
+	}
+
+	manifest := coreapi.Manifest{
+		ID: "contacts",
+		OAuth: &coreapi.ManifestOAuth{
+			FirstPartyUsesCoreForScopes: []string{
+				"https://www.googleapis.com/auth/contacts.readonly",
+			},
+		},
+	}
+
+	// Mix of a core-routed scope and an ext-routed scope in one call.
+	_, err := broker.HTTPClientForExtension("contacts", manifest, "acct-mixed", []coreapi.AuthScope{
+		{Resource: "https://www.googleapis.com/auth/contacts.readonly"},
+		{Resource: "https://www.googleapis.com/auth/contacts"},
+	})
+	if err == nil {
+		t.Fatal("expected error for mixed-scope call, got nil")
+	}
+}
+
+func TestHTTPClientForExtension_NoManifestOAuthRoutesToExtension(t *testing.T) {
+	broker, credStore, db := newTestBroker(t)
+	insertTestAccount(t, db, "acct-no-manifest")
+
+	if err := credStore.SetOAuthTokens("acct-no-manifest", &credentials.OAuthTokens{
+		Provider:     "google",
+		AccessToken:  "mail-access",
+		RefreshToken: "mail-refresh",
+		Scopes:       []string{"https://mail.google.com/"},
+	}); err != nil {
+		t.Fatalf("set mail tokens: %v", err)
+	}
+
+	// Manifest omits OAuth entirely → all scopes route to extension's own config.
+	manifest := coreapi.Manifest{ID: "myext"}
+
+	_, err := broker.HTTPClientForExtension("myext", manifest, "acct-no-manifest", []coreapi.AuthScope{
+		{Resource: "https://www.googleapis.com/auth/anything"},
+	})
+	if err == nil {
+		t.Fatal("expected ErrAdditionalConsentRequired, got nil")
+	}
+	consentErr, ok := err.(*coreapi.ErrAdditionalConsentRequired)
+	if !ok {
+		t.Fatalf("expected *ErrAdditionalConsentRequired, got %T", err)
+	}
+	if string(consentErr.ClientConfigID) != "google-myext" {
+		t.Errorf("ClientConfigID: got %q, want google-myext", consentErr.ClientConfigID)
+	}
+}
+
 func TestBrokerIMAPClient_Unimplemented(t *testing.T) {
 	broker, _, _ := newTestBroker(t)
 	_, err := broker.IMAPClient("any", nil)

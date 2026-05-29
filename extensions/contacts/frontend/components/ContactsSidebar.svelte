@@ -15,9 +15,11 @@
     contactSourcesStore.load()
   })
 
-  // Two synthetic source ids:
-  //   ''      → all (merged search)
-  //   'local' → core local contacts
+  // Source IDs:
+  //   ''                  → all (merged search across every source)
+  //   'local'             → all local contacts (manual + collected)
+  //   'local:manual'      → user-added local contacts
+  //   'local:collected'   → auto-collected from sent mail
   // Plus the user's configured CardDAV sources, each with a UUID id.
   type SidebarItem = {
     id: string
@@ -30,7 +32,9 @@
   function buildSections() {
     const builtins: SidebarItem[] = [
       { id: '', label: 'All', icon: 'mdi:account-multiple' },
-      { id: 'local', label: 'Local (sent recipients)', icon: 'mdi:account' },
+      { id: 'local', label: 'Local - All', icon: 'mdi:folder-account-outline' },
+      { id: 'local:manual', label: 'Local - Contacts', icon: 'mdi:account-plus-outline' },
+      { id: 'local:collected', label: 'Local - Collected', icon: 'mdi:email-outline' },
     ]
     const carddavItems: SidebarItem[] = contactSourcesStore.sources.map(s => ({
       id: s.id,

@@ -3,6 +3,7 @@ package oauth2
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // ClientCredentials is the OAuth2 client_id + secret pair for one client
@@ -13,42 +14,72 @@ type ClientCredentials struct {
 	ClientSecret string
 }
 
+// CredentialsProvider is the source-of-credentials interface that Aerion core
+// and each extension implement. ClientConfigForID walks the registered chain
+// at lookup time; first provider that knows the requested configID wins.
+//
+// Each extension owns its OWN credential injection at build time (per-extension
+// .env / shim + a small creds.go in the extension package that registers a
+// CredentialsProvider during Extension.Register()). Aerion core compiles in
+// only its own *-mail creds via the built-in core provider.
+type CredentialsProvider interface {
+	// Lookup returns the credentials for the given client config id, or
+	// (zero, false) if this provider doesn't know that id (or the value is
+	// not yet provisioned, e.g., empty build-time var).
+	Lookup(configID string) (ClientCredentials, bool)
+}
+
+// UserOverrideLookup is an optional pluggable hook for user-supplied creds
+// (Settings → OAuth Credentials). If non-nil, it's checked BEFORE the provider
+// chain — user values always win. Set during App.Startup by the credentials
+// store package; can be nil during tests or if user-overrides are unused.
+var UserOverrideLookup func(configID string) (ClientCredentials, bool)
+
+var (
+	providersMu sync.RWMutex
+	providers   []CredentialsProvider
+)
+
+// RegisterCredentialsProvider appends a provider to the resolution chain.
+// Safe to call from package init() functions or from Extension.Register().
+// Order matters: providers are queried in registration order, first-hit wins.
+// Aerion core registers itself early (init); extensions register at their
+// Register() time, after core. Result: core's *-mail slots always resolve
+// before any extension's slots — but since slot names don't collide between
+// core and extensions, the order is purely a performance hint.
+func RegisterCredentialsProvider(p CredentialsProvider) {
+	providersMu.Lock()
+	defer providersMu.Unlock()
+	providers = append(providers, p)
+}
+
 // ClientConfigForID returns the credentials registered for the given client
-// config id, or (zero, false) if the config is unknown or not yet provisioned
-// (e.g., 'google-extensions' before the second Google project is set up).
+// config id. Resolution order:
 //
-// Known ids:
-//   - "google-mail"          — current verified Mail-scoped Google project
-//   - "google-extensions"    — extension-scoped Google project (Calendar/Contacts)
-//   - "microsoft-mail"       — current Mail-scoped Azure AD registration
-//   - "microsoft-extensions" — extension-scoped Azure AD registration
+//  1. User override from credentials.Store (Settings UI override), if any
+//  2. Walk registered CredentialsProviders in registration order
+//  3. (zero, false) if nothing matches
 //
-// Build-time vars backing these ids live in config.go.
+// Known config ids today: 'google-mail' / 'microsoft-mail' (Aerion core),
+// 'google-contacts' / 'microsoft-contacts' (Contacts extension), and
+// (future) 'google-calendar' / 'microsoft-calendar' (Calendar extension).
+// Extension provider registration happens in each extension's package; if
+// the extension hasn't been compiled in (or its credentials aren't yet
+// provisioned), its slots return (zero, false) gracefully.
 func ClientConfigForID(id string) (ClientCredentials, bool) {
-	switch id {
-	case "google-mail":
-		if GoogleClientID == "" {
-			return ClientCredentials{}, false
+	if UserOverrideLookup != nil {
+		if creds, ok := UserOverrideLookup(id); ok {
+			return creds, true
 		}
-		return ClientCredentials{ClientID: GoogleClientID, ClientSecret: GoogleClientSecret}, true
-	case "google-extensions":
-		if GoogleExtClientID == "" {
-			return ClientCredentials{}, false
-		}
-		return ClientCredentials{ClientID: GoogleExtClientID, ClientSecret: GoogleExtClientSecret}, true
-	case "microsoft-mail":
-		if MicrosoftClientID == "" {
-			return ClientCredentials{}, false
-		}
-		return ClientCredentials{ClientID: MicrosoftClientID, ClientSecret: ""}, true
-	case "microsoft-extensions":
-		if MicrosoftExtClientID == "" {
-			return ClientCredentials{}, false
-		}
-		return ClientCredentials{ClientID: MicrosoftExtClientID, ClientSecret: ""}, true
-	default:
-		return ClientCredentials{}, false
 	}
+	providersMu.RLock()
+	defer providersMu.RUnlock()
+	for _, p := range providers {
+		if creds, ok := p.Lookup(id); ok {
+			return creds, true
+		}
+	}
+	return ClientCredentials{}, false
 }
 
 // ClientConfigIDForProvider maps a provider name (as used by the existing

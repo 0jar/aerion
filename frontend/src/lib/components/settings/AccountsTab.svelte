@@ -3,6 +3,7 @@
   import { Button } from '$lib/components/ui/button'
   import { accountStore } from '$lib/stores/accounts.svelte'
   import AccountDialog from './AccountDialog.svelte'
+  import AerionCoreOAuthSection from './AerionCoreOAuthSection.svelte'
   // @ts-ignore - wailsjs path
   import type { account } from '../../../../wailsjs/go/models'
   import { _ } from '$lib/i18n'
@@ -130,6 +131,9 @@
       </Button>
     </div>
   {/if}
+
+  <!-- Aerion core OAuth credentials (advanced, collapsed by default) -->
+  <AerionCoreOAuthSection />
 </div>
 
 <!-- Account Dialog -->

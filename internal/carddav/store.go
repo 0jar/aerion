@@ -2,11 +2,13 @@ package carddav
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hkdb/aerion/internal/contact"
 	"github.com/hkdb/aerion/internal/logging"
 	"github.com/rs/zerolog"
 )
@@ -71,7 +73,7 @@ func (s *Store) CreateSource(config *SourceConfig) (*Source, error) {
 // GetSource returns a source by ID
 func (s *Store) GetSource(id string) (*Source, error) {
 	query := `
-		SELECT id, name, type, url, username, account_id, enabled, sync_interval,
+		SELECT id, name, type, url, username, account_id, enabled, writable, sync_interval,
 		       last_synced_at, last_error, last_error_at, created_at
 		FROM contact_sources
 		WHERE id = ?
@@ -83,7 +85,7 @@ func (s *Store) GetSource(id string) (*Source, error) {
 
 	err := s.db.QueryRow(query, id).Scan(
 		&source.ID, &source.Name, &source.Type, &source.URL, &source.Username,
-		&accountID, &source.Enabled, &source.SyncInterval,
+		&accountID, &source.Enabled, &source.Writable, &source.SyncInterval,
 		&lastSyncedAt, &lastError, &lastErrorAt, &source.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -111,7 +113,7 @@ func (s *Store) GetSource(id string) (*Source, error) {
 // ListSources returns all contact sources
 func (s *Store) ListSources() ([]*Source, error) {
 	query := `
-		SELECT id, name, type, url, username, account_id, enabled, sync_interval,
+		SELECT id, name, type, url, username, account_id, enabled, writable, sync_interval,
 		       last_synced_at, last_error, last_error_at, created_at
 		FROM contact_sources
 		ORDER BY created_at ASC
@@ -131,7 +133,7 @@ func (s *Store) ListSources() ([]*Source, error) {
 
 		err := rows.Scan(
 			&source.ID, &source.Name, &source.Type, &source.URL, &source.Username,
-			&accountID, &source.Enabled, &source.SyncInterval,
+			&accountID, &source.Enabled, &source.Writable, &source.SyncInterval,
 			&lastSyncedAt, &lastError, &lastErrorAt, &source.CreatedAt)
 		if err != nil {
 			s.log.Warn().Err(err).Msg("Failed to scan source row")
@@ -155,6 +157,26 @@ func (s *Store) ListSources() ([]*Source, error) {
 	}
 
 	return sources, nil
+}
+
+// SetSourceWritable flips the writable flag for a CardDAV source. Used by the
+// "Enable write access" toggle in the source-settings dialog.
+//
+// CardDAV writes use the source's existing per-source credentials (basic auth),
+// so toggling writable is a pure flag flip — no consent flow needed. OAuth-
+// based sources (Google/Microsoft) gain their toggle in 2b.3 alongside the
+// incremental-consent flow.
+func (s *Store) SetSourceWritable(id string, writable bool) error {
+	result, err := s.db.Exec(`UPDATE contact_sources SET writable = ? WHERE id = ?`, writable, id)
+	if err != nil {
+		return fmt.Errorf("failed to update source writable: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("source not found: %s", id)
+	}
+	s.log.Info().Str("id", id).Bool("writable", writable).Msg("Contact source writable toggled")
+	return nil
 }
 
 // UpdateSource updates a source's configuration
@@ -438,35 +460,217 @@ func (s *Store) DeleteAddressbooksForSource(sourceID string) error {
 }
 
 // ============================================================================
-// Contact CRUD
+// Contact CRUD — Phase 2b.2.a
+//
+// As of migration 31, CardDAV contacts live in the unified contact_records
+// schema rather than the legacy `carddav_contacts` table. These methods keep
+// their public signatures (Contact struct return shape) so callers — the sync
+// engine, the extension API, and tests — don't change. Internally:
+//
+//   - One contact_records row per vCard (identified by carddav_record_state.href
+//     within an addressbook). The legacy "one row per email" fan-out is gone;
+//     emails are now sub-rows in contact_emails.
+//   - For back-compat, read methods fan results back out: a vCard with 3 emails
+//     returns 3 *Contact rows (one per email). Each fan-out row carries the
+//     SAME contact_records.id as Contact.ID; the extension API or sync caller
+//     can group by ID if needed.
+//   - Writes consolidate at upsert time: multiple UpsertContact calls with the
+//     same (addressbook_id, href) converge on a single record_id.
+//
+// Two delete semantics are now distinct:
+//   - DeleteContactByHref / DeleteContactsByHrefs: delete the entire RECORD
+//     (and cascade-delete all its emails). Used by sync's delta-deletion path.
+//   - DeleteContactsForAddressbook: delete all records for an addressbook.
 // ============================================================================
 
-// UpsertContact creates or updates a contact
-func (s *Store) UpsertContact(contact *Contact) error {
-	if contact.ID == "" {
-		contact.ID = uuid.New().String()
-	}
-	contact.SyncedAt = time.Now()
-
-	query := `
-		INSERT INTO carddav_contacts (id, addressbook_id, email, display_name, href, etag, synced_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			email = excluded.email,
-			display_name = excluded.display_name,
-			href = excluded.href,
-			etag = excluded.etag,
-			synced_at = excluded.synced_at
-	`
-
-	_, err := s.db.Exec(query,
-		contact.ID, contact.AddressbookID, contact.Email, contact.DisplayName,
-		contact.Href, contact.ETag, contact.SyncedAt)
-	return err
+// execQueryer is satisfied by both *sql.DB and *sql.Tx; lets upsertContactTx
+// share logic across single-call and batched paths.
+type execQueryer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
-// UpsertContactsBatch creates or updates multiple contacts in a single transaction.
-// This is much faster than calling UpsertContact individually for each contact.
+// UpsertContact creates or updates a CardDAV contact. Identity is
+// (addressbook_id, href). Multiple calls with the same href but different
+// emails accumulate on a single contact_records row.
+//
+// Back-compat: contact.ID is treated as the legacy synthetic id. On new-record
+// insert, ID is reused as the record_id when non-empty (lets tests seed with
+// explicit IDs). On subsequent calls for the same href, the caller's ID is
+// OVERWRITTEN by the existing record_id.
+func (s *Store) UpsertContact(contact *Contact) error {
+	if contact.Email == "" {
+		return fmt.Errorf("UpsertContact: email is required")
+	}
+	if contact.Href == "" {
+		// Synthesize a per-row href for test-style seeds. Production sync
+		// always sets href from the CardDAV server.
+		if contact.ID == "" {
+			contact.ID = uuid.New().String()
+		}
+		contact.Href = "/__synth__/" + contact.ID + ".vcf"
+	}
+	contact.SyncedAt = time.Now()
+	return s.upsertContactTx(s.db, contact)
+}
+
+// upsertContactTx performs the actual upsert against either *sql.DB or *sql.Tx.
+// Extracted so UpsertContactsBatch can share the logic inside a transaction.
+func (s *Store) upsertContactTx(eq execQueryer, contact *Contact) error {
+	// Look up existing record by (addressbook_id, href).
+	var existingRecordID string
+	err := eq.QueryRow(`
+		SELECT record_id FROM carddav_record_state
+		WHERE addressbook_id = ? AND href = ?
+	`, contact.AddressbookID, contact.Href).Scan(&existingRecordID)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// New record path.
+		recordID := contact.ID
+		if recordID == "" {
+			recordID = uuid.New().String()
+			contact.ID = recordID
+		}
+		if _, err := eq.Exec(`
+			INSERT INTO contact_records (id, source, source_ref, fn, created_at, updated_at)
+			VALUES (?, 'carddav', ?, ?, ?, ?)
+		`, recordID, contact.AddressbookID, contact.DisplayName, contact.SyncedAt, contact.SyncedAt); err != nil {
+			return fmt.Errorf("insert contact_records: %w", err)
+		}
+		if _, err := eq.Exec(`
+			INSERT INTO carddav_record_state (record_id, addressbook_id, href, etag, synced_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, recordID, contact.AddressbookID, contact.Href, contact.ETag, contact.SyncedAt); err != nil {
+			return fmt.Errorf("insert carddav_record_state: %w", err)
+		}
+	case err != nil:
+		return fmt.Errorf("lookup record by href: %w", err)
+	default:
+		// Existing record path — update fn/etag/synced_at and back-propagate id.
+		contact.ID = existingRecordID
+		if _, err := eq.Exec(`
+			UPDATE contact_records SET fn = ?, updated_at = ? WHERE id = ?
+		`, contact.DisplayName, contact.SyncedAt, existingRecordID); err != nil {
+			return fmt.Errorf("update contact_records: %w", err)
+		}
+		if _, err := eq.Exec(`
+			UPDATE carddav_record_state SET etag = ?, synced_at = ? WHERE record_id = ?
+		`, contact.ETag, contact.SyncedAt, existingRecordID); err != nil {
+			return fmt.Errorf("update carddav_record_state: %w", err)
+		}
+	}
+
+	// Attach the email idempotently — same email twice is a no-op.
+	if _, err := eq.Exec(`
+		INSERT OR IGNORE INTO contact_emails (record_id, email, is_primary)
+		VALUES (?, ?, 1)
+	`, contact.ID, contact.Email); err != nil {
+		return fmt.Errorf("attach contact_email: %w", err)
+	}
+	return nil
+}
+
+// RecordSyncEntry bundles a parsed multi-field contact record with the
+// addressbook/href/etag triplet needed to write its carddav_record_state row.
+// Used by UpsertRecordsBatch — the multi-field replacement for UpsertContactsBatch.
+type RecordSyncEntry struct {
+	Record        *contact.Record
+	AddressbookID string
+	Href          string
+	ETag          string
+}
+
+// UpsertRecordsBatch is the Phase 2b.2.a multi-field replacement for
+// UpsertContactsBatch. For each entry it:
+//
+//  1. Looks up an existing record by (addressbook_id, href) in
+//     carddav_record_state; if found, reuses that record_id (so re-sync hits
+//     UPDATE paths rather than creating duplicate records).
+//  2. Calls contact.UpsertRecordTx to write the record + all sub-tables
+//     (replacing existing sub-table rows wholesale; preserving per-email
+//     send_count/last_used/name_overridden).
+//  3. Upserts the carddav_record_state row with the new href/etag/synced_at.
+//
+// All entries in one transaction. Used by the sync engine to land batches of
+// vCards from sync-collection/multiget.
+func (s *Store) UpsertRecordsBatch(entries []RecordSyncEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now()
+	inserted := 0
+	for _, e := range entries {
+		if e.Record == nil {
+			continue
+		}
+		if e.AddressbookID == "" || e.Href == "" {
+			s.log.Warn().Msg("Skipping record with missing addressbook_id or href")
+			continue
+		}
+
+		// Reuse existing record_id when (addressbook_id, href) matches; new
+		// otherwise.
+		var existingID string
+		err := tx.QueryRow(`
+			SELECT record_id FROM carddav_record_state
+			WHERE addressbook_id = ? AND href = ?
+		`, e.AddressbookID, e.Href).Scan(&existingID)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if e.Record.ID == "" {
+				e.Record.ID = uuid.New().String()
+			}
+		case err != nil:
+			s.log.Warn().Err(err).Str("href", e.Href).Msg("Failed to look up existing record")
+			continue
+		default:
+			e.Record.ID = existingID
+		}
+
+		e.Record.Source = "carddav"
+		e.Record.SourceRef = e.AddressbookID
+
+		if err := contact.UpsertRecordTx(tx, e.Record); err != nil {
+			s.log.Warn().Err(err).Str("href", e.Href).Msg("Failed to upsert record in batch")
+			continue
+		}
+
+		if _, err := tx.Exec(`
+			INSERT INTO carddav_record_state (record_id, addressbook_id, href, etag, synced_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(record_id) DO UPDATE SET
+				addressbook_id = excluded.addressbook_id,
+				href = excluded.href,
+				etag = excluded.etag,
+				synced_at = excluded.synced_at
+		`, e.Record.ID, e.AddressbookID, e.Href, e.ETag, now); err != nil {
+			s.log.Warn().Err(err).Str("href", e.Href).Msg("Failed to upsert carddav_record_state")
+			continue
+		}
+		inserted++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit batch upsert: %w", err)
+	}
+	s.log.Debug().Int("inserted", inserted).Int("total", len(entries)).Msg("Batch record upsert complete")
+	return nil
+}
+
+// UpsertContactsBatch creates or updates multiple CardDAV contacts in a single
+// transaction. Each contact goes through the same per-call upsert as
+// UpsertContact; entries sharing (addressbook_id, href) consolidate.
+//
+// Deprecated: legacy fan-out shape (one *Contact per email). Use UpsertRecordsBatch
+// for multi-field writes from the sync engine.
 func (s *Store) UpsertContactsBatch(contacts []*Contact) error {
 	if len(contacts) == 0 {
 		return nil
@@ -474,66 +678,63 @@ func (s *Store) UpsertContactsBatch(contacts []*Contact) error {
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
-
-	// Prepare statement once, execute many times
-	stmt, err := tx.Prepare(`
-		INSERT INTO carddav_contacts (id, addressbook_id, email, display_name, href, etag, synced_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			email = excluded.email,
-			display_name = excluded.display_name,
-			href = excluded.href,
-			etag = excluded.etag,
-			synced_at = excluded.synced_at
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
+	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now()
 	inserted := 0
-
 	for _, c := range contacts {
-		if c.ID == "" {
-			c.ID = uuid.New().String()
+		if c.Email == "" {
+			s.log.Warn().Str("href", c.Href).Msg("Skipping batch contact with empty email")
+			continue
+		}
+		if c.Href == "" {
+			if c.ID == "" {
+				c.ID = uuid.New().String()
+			}
+			c.Href = "/__synth__/" + c.ID + ".vcf"
 		}
 		c.SyncedAt = now
-
-		_, err := stmt.Exec(c.ID, c.AddressbookID, c.Email, c.DisplayName, c.Href, c.ETag, c.SyncedAt)
-		if err != nil {
-			s.log.Warn().Err(err).Str("email", c.Email).Msg("Failed to upsert contact in batch")
+		if err := s.upsertContactTx(tx, c); err != nil {
+			s.log.Warn().Err(err).Str("email", c.Email).Str("href", c.Href).Msg("Failed to upsert contact in batch")
 			continue
 		}
 		inserted++
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("commit batch upsert: %w", err)
 	}
-
 	s.log.Debug().Int("inserted", inserted).Int("total", len(contacts)).Msg("Batch upsert complete")
 	return nil
 }
 
-// DeleteContactsForAddressbook deletes all contacts for an addressbook
+// DeleteContactsForAddressbook deletes all CardDAV contact records belonging to
+// an addressbook. Cascades to contact_emails and carddav_record_state via FK.
 func (s *Store) DeleteContactsForAddressbook(addressbookID string) error {
-	_, err := s.db.Exec("DELETE FROM carddav_contacts WHERE addressbook_id = ?", addressbookID)
+	_, err := s.db.Exec(`
+		DELETE FROM contact_records
+		WHERE source = 'carddav'
+		  AND id IN (SELECT record_id FROM carddav_record_state WHERE addressbook_id = ?)
+	`, addressbookID)
 	return err
 }
 
-// DeleteContactByHref deletes a contact by its href
+// DeleteContactByHref deletes a CardDAV contact (entire record) by its href.
+// Cascades to contact_emails and carddav_record_state.
 func (s *Store) DeleteContactByHref(addressbookID, href string) error {
-	_, err := s.db.Exec(
-		"DELETE FROM carddav_contacts WHERE addressbook_id = ? AND href = ?",
-		addressbookID, href)
+	_, err := s.db.Exec(`
+		DELETE FROM contact_records
+		WHERE id IN (
+			SELECT record_id FROM carddav_record_state
+			WHERE addressbook_id = ? AND href = ?
+		)
+	`, addressbookID, href)
 	return err
 }
 
-// DeleteContactsByHrefs deletes multiple contacts by their hrefs in a single transaction
+// DeleteContactsByHrefs deletes multiple CardDAV records by href in one transaction.
 func (s *Store) DeleteContactsByHrefs(addressbookID string, hrefs []string) error {
 	if len(hrefs) == 0 {
 		return nil
@@ -541,75 +742,64 @@ func (s *Store) DeleteContactsByHrefs(addressbookID string, hrefs []string) erro
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare("DELETE FROM carddav_contacts WHERE addressbook_id = ? AND href = ?")
+	stmt, err := tx.Prepare(`
+		DELETE FROM contact_records
+		WHERE id IN (
+			SELECT record_id FROM carddav_record_state
+			WHERE addressbook_id = ? AND href = ?
+		)
+	`)
 	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
+		return fmt.Errorf("prepare delete: %w", err)
 	}
 	defer stmt.Close()
 
 	for _, href := range hrefs {
 		if _, err := stmt.Exec(addressbookID, href); err != nil {
-			return fmt.Errorf("failed to delete contact with href %s: %w", href, err)
+			return fmt.Errorf("delete contact with href %s: %w", href, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+		return fmt.Errorf("commit batch delete: %w", err)
 	}
-
 	s.log.Debug().Int("count", len(hrefs)).Msg("Batch delete complete")
 	return nil
 }
 
-// SearchContacts searches CardDAV contacts by query
+// SearchContacts searches CardDAV contacts by query. Returns one *Contact per
+// (record, email) pair — fan-out preserved for caller compatibility. Only
+// contacts from enabled sources + addressbooks are returned.
 func (s *Store) SearchContacts(query string, limit int) ([]*Contact, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-
 	pattern := "%" + strings.ToLower(query) + "%"
 
 	sqlQuery := `
-		SELECT c.id, c.addressbook_id, c.email, c.display_name, c.href, c.etag, c.synced_at
-		FROM carddav_contacts c
-		JOIN contact_source_addressbooks ab ON c.addressbook_id = ab.id
-		JOIN contact_sources s ON ab.source_id = s.id
-		WHERE s.enabled = 1 AND ab.enabled = 1
-		  AND (LOWER(c.email) LIKE ? OR LOWER(c.display_name) LIKE ?)
-		ORDER BY c.display_name ASC
+		SELECT cr.id, crs.addressbook_id, ce.email, COALESCE(cr.fn, ''),
+		       crs.href, COALESCE(crs.etag, ''), COALESCE(crs.synced_at, cr.updated_at)
+		FROM contact_records cr
+		JOIN carddav_record_state crs ON crs.record_id = cr.id
+		JOIN contact_emails ce ON ce.record_id = cr.id
+		JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+		JOIN contact_sources s ON s.id = ab.source_id
+		WHERE cr.source = 'carddav'
+		  AND s.enabled = 1 AND ab.enabled = 1
+		  AND (LOWER(ce.email) LIKE ? OR LOWER(COALESCE(cr.fn, '')) LIKE ?)
+		ORDER BY cr.fn ASC, ce.email ASC
 		LIMIT ?
 	`
-
-	rows, err := s.db.Query(sqlQuery, pattern, pattern, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search contacts: %w", err)
-	}
-	defer rows.Close()
-
-	var contacts []*Contact
-	for rows.Next() {
-		var c Contact
-		err := rows.Scan(
-			&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName,
-			&c.Href, &c.ETag, &c.SyncedAt)
-		if err != nil {
-			continue
-		}
-		contacts = append(contacts, &c)
-	}
-
-	return contacts, nil
+	return s.scanContactRows(sqlQuery, pattern, pattern, limit)
 }
 
-// ListContactsPaged returns contacts for a single source in display-name
-// order, with offset/limit paging and optional case-insensitive query filter
-// on email / display_name (pass "" for no filter). Only contacts from enabled
-// addressbooks of an enabled source are returned (matches SearchContacts
-// visibility). Used by the Contacts extension's browse UI.
+// ListContactsPaged returns contacts for a single source in fn order, with
+// offset/limit paging and optional case-insensitive query filter. Only enabled
+// sources + addressbooks visible. Fan-out shape preserved.
 func (s *Store) ListContactsPaged(sourceID, query string, offset, limit int) ([]*Contact, error) {
 	if limit <= 0 {
 		limit = 50
@@ -619,94 +809,220 @@ func (s *Store) ListContactsPaged(sourceID, query string, offset, limit int) ([]
 	}
 
 	sqlQuery := `
-		SELECT c.id, c.addressbook_id, c.email, c.display_name, c.href, c.etag, c.synced_at
-		FROM carddav_contacts c
-		JOIN contact_source_addressbooks ab ON c.addressbook_id = ab.id
-		JOIN contact_sources s ON ab.source_id = s.id
-		WHERE s.id = ? AND s.enabled = 1 AND ab.enabled = 1
-		  AND (? = '' OR LOWER(c.email) LIKE ? OR LOWER(c.display_name) LIKE ?)
-		ORDER BY c.display_name ASC, c.email ASC
+		SELECT cr.id, crs.addressbook_id, ce.email, COALESCE(cr.fn, ''),
+		       crs.href, COALESCE(crs.etag, ''), COALESCE(crs.synced_at, cr.updated_at)
+		FROM contact_records cr
+		JOIN carddav_record_state crs ON crs.record_id = cr.id
+		JOIN contact_emails ce ON ce.record_id = cr.id
+		JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+		JOIN contact_sources s ON s.id = ab.source_id
+		WHERE cr.source = 'carddav'
+		  AND s.id = ? AND s.enabled = 1 AND ab.enabled = 1
+		  AND (? = '' OR LOWER(ce.email) LIKE ? OR LOWER(COALESCE(cr.fn, '')) LIKE ?)
+		ORDER BY cr.fn ASC, ce.email ASC
 		LIMIT ? OFFSET ?
 	`
-
 	pattern := "%" + strings.ToLower(query) + "%"
+	return s.scanContactRows(sqlQuery, sourceID, query, pattern, pattern, limit, offset)
+}
+
+// ListRecordIDsForSource returns the contact_record IDs belonging to a
+// CardDAV source, in fn ASC order with offset/limit paging. The caller
+// (typically the extension API) hydrates each id via contact.Store.GetRecord
+// to populate the multi-field record shape.
+//
+// Visibility filtering matches SearchContacts: only contacts from enabled
+// sources + addressbooks. Empty `query` returns everything. Non-empty `query`
+// case-insensitively matches against fn OR any email belonging to the record.
+//
+// Phase 2b.2.a — used by the Contacts pane's per-source listing to fix the
+// duplicate-row UX wart (one record per vCard, not one row per email).
+func (s *Store) ListRecordIDsForSource(sourceID, query string, offset, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	pattern := "%" + strings.ToLower(query) + "%"
+
+	sqlQuery := `
+		SELECT DISTINCT cr.id, COALESCE(cr.fn, '')
+		FROM contact_records cr
+		JOIN carddav_record_state crs ON crs.record_id = cr.id
+		JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+		JOIN contact_sources s ON s.id = ab.source_id
+		WHERE cr.source = 'carddav'
+		  AND s.id = ? AND s.enabled = 1 AND ab.enabled = 1
+		  AND (
+		    ? = ''
+		    OR LOWER(COALESCE(cr.fn, '')) LIKE ?
+		    OR cr.id IN (SELECT record_id FROM contact_emails WHERE LOWER(email) LIKE ?)
+		  )
+		ORDER BY COALESCE(cr.fn, '') ASC, cr.id ASC
+		LIMIT ? OFFSET ?
+	`
 	rows, err := s.db.Query(sqlQuery, sourceID, query, pattern, pattern, limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list contacts for source %s: %w", sourceID, err)
+		return nil, fmt.Errorf("list record ids for source %s: %w", sourceID, err)
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0, limit)
+	for rows.Next() {
+		var id, fn string
+		if err := rows.Scan(&id, &fn); err != nil {
+			s.log.Warn().Err(err).Msg("Failed to scan record id row")
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// scanContactRows runs a SELECT producing the standard (id, addressbook_id,
+// email, fn, href, etag, synced_at) shape and returns *Contact rows.
+//
+// synced_at is scanned as sql.NullTime because COALESCE(crs.synced_at, cr.updated_at)
+// can produce a TEXT result that the SQLite driver doesn't always convert to
+// time.Time cleanly. sql.NullTime accepts both.
+func (s *Store) scanContactRows(sqlQuery string, args ...any) ([]*Contact, error) {
+	rows, err := s.db.Query(sqlQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("contacts query failed: %w", err)
 	}
 	defer rows.Close()
 
 	var contacts []*Contact
 	for rows.Next() {
 		var c Contact
-		if err := rows.Scan(&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName, &c.Href, &c.ETag, &c.SyncedAt); err != nil {
+		var syncedAt sql.NullString
+		if err := rows.Scan(&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName, &c.Href, &c.ETag, &syncedAt); err != nil {
 			s.log.Warn().Err(err).Msg("Failed to scan contact row")
 			continue
 		}
+		if syncedAt.Valid {
+			c.SyncedAt = parseSyncedAt(syncedAt.String)
+		}
 		contacts = append(contacts, &c)
 	}
-
 	return contacts, rows.Err()
 }
 
-// GetContactByID returns a contact by its primary-key id (carddav UUID).
-// Returns (nil, nil) when not found.
+// GetContactByID returns a CardDAV contact by record_id. Returns one
+// representative (record, primary-email) pair. Returns (nil, nil) when not found.
 func (s *Store) GetContactByID(id string) (*Contact, error) {
 	query := `
-		SELECT id, addressbook_id, email, display_name, href, etag, synced_at
-		FROM carddav_contacts
-		WHERE id = ?
+		SELECT cr.id, crs.addressbook_id, ce.email, COALESCE(cr.fn, ''),
+		       crs.href, COALESCE(crs.etag, ''), COALESCE(crs.synced_at, cr.updated_at)
+		FROM contact_records cr
+		JOIN carddav_record_state crs ON crs.record_id = cr.id
+		JOIN contact_emails ce ON ce.record_id = cr.id
+		WHERE cr.id = ? AND cr.source = 'carddav'
+		ORDER BY ce.is_primary DESC, ce.email ASC
+		LIMIT 1
 	`
-
 	var c Contact
-	err := s.db.QueryRow(query, id).Scan(
-		&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName,
-		&c.Href, &c.ETag, &c.SyncedAt)
-	if err == sql.ErrNoRows {
+	var syncedAt sql.NullString
+	err := s.db.QueryRow(query, id).Scan(&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName, &c.Href, &c.ETag, &syncedAt)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to get contact by id: %w", err)
+		return nil, fmt.Errorf("get contact by id: %w", err)
+	}
+	if syncedAt.Valid {
+		c.SyncedAt = parseSyncedAt(syncedAt.String)
 	}
 	return &c, nil
 }
 
-// GetContactByHref returns a contact by its href (for update checks)
+// GetContactByEmail returns the most-recently-synced CardDAV contact matching
+// the given email across all enabled sources + addressbooks. Returns (nil, nil)
+// on no match.
+//
+// If the same email is on multiple records, the most recently synced one wins
+// (ORDER BY synced_at DESC). Used by the Contacts extension's "All" view to
+// resolve emails that came in via the search merge.
+func (s *Store) GetContactByEmail(email string) (*Contact, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return nil, nil
+	}
+	query := `
+		SELECT cr.id, crs.addressbook_id, ce.email, COALESCE(cr.fn, ''),
+		       crs.href, COALESCE(crs.etag, ''), COALESCE(crs.synced_at, cr.updated_at)
+		FROM contact_records cr
+		JOIN carddav_record_state crs ON crs.record_id = cr.id
+		JOIN contact_emails ce ON ce.record_id = cr.id
+		JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+		JOIN contact_sources s ON s.id = ab.source_id
+		WHERE cr.source = 'carddav'
+		  AND s.enabled = 1 AND ab.enabled = 1
+		  AND LOWER(ce.email) = ?
+		ORDER BY crs.synced_at DESC, cr.updated_at DESC
+		LIMIT 1
+	`
+	var c Contact
+	var syncedAt sql.NullString
+	err := s.db.QueryRow(query, email).Scan(&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName, &c.Href, &c.ETag, &syncedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get contact by email: %w", err)
+	}
+	if syncedAt.Valid {
+		c.SyncedAt = parseSyncedAt(syncedAt.String)
+	}
+	return &c, nil
+}
+
+// GetContactByHref returns a contact by its href within an addressbook. Used
+// by sync to check the existing record/etag before updating. Returns one
+// representative (record, primary-email) pair.
 func (s *Store) GetContactByHref(addressbookID, href string) (*Contact, error) {
 	query := `
-		SELECT id, addressbook_id, email, display_name, href, etag, synced_at
-		FROM carddav_contacts
-		WHERE addressbook_id = ? AND href = ?
+		SELECT cr.id, crs.addressbook_id, ce.email, COALESCE(cr.fn, ''),
+		       crs.href, COALESCE(crs.etag, ''), COALESCE(crs.synced_at, cr.updated_at)
+		FROM contact_records cr
+		JOIN carddav_record_state crs ON crs.record_id = cr.id
+		JOIN contact_emails ce ON ce.record_id = cr.id
+		WHERE crs.addressbook_id = ? AND crs.href = ?
+		ORDER BY ce.is_primary DESC, ce.email ASC
+		LIMIT 1
 	`
-
 	var c Contact
-	err := s.db.QueryRow(query, addressbookID, href).Scan(
-		&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName,
-		&c.Href, &c.ETag, &c.SyncedAt)
-	if err == sql.ErrNoRows {
+	var syncedAt sql.NullString
+	err := s.db.QueryRow(query, addressbookID, href).Scan(&c.ID, &c.AddressbookID, &c.Email, &c.DisplayName, &c.Href, &c.ETag, &syncedAt)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get contact by href: %w", err)
 	}
-
+	if syncedAt.Valid {
+		c.SyncedAt = parseSyncedAt(syncedAt.String)
+	}
 	return &c, nil
 }
 
-// CountContacts returns the total number of CardDAV contacts
+// CountContacts returns the total number of CardDAV contact records (one count
+// per vCard regardless of how many emails it carries).
 func (s *Store) CountContacts() (int, error) {
 	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM carddav_contacts").Scan(&count)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM contact_records WHERE source = 'carddav'`).Scan(&count)
 	return count, err
 }
 
-// CountContactsForSource returns the number of contacts for a source
+// CountContactsForSource returns the number of CardDAV records for a source.
 func (s *Store) CountContactsForSource(sourceID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
-		FROM carddav_contacts c
-		JOIN contact_source_addressbooks ab ON c.addressbook_id = ab.id
-		WHERE ab.source_id = ?
+		FROM contact_records cr
+		JOIN carddav_record_state crs ON crs.record_id = cr.id
+		JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+		WHERE ab.source_id = ? AND cr.source = 'carddav'
 	`
 	var count int
 	err := s.db.QueryRow(query, sourceID).Scan(&count)
@@ -716,7 +1032,7 @@ func (s *Store) CountContactsForSource(sourceID string) (int, error) {
 // GetSourceByAccountID returns a contact source linked to an email account
 func (s *Store) GetSourceByAccountID(accountID string) (*Source, error) {
 	query := `
-		SELECT id, name, type, url, username, account_id, enabled, sync_interval,
+		SELECT id, name, type, url, username, account_id, enabled, writable, sync_interval,
 		       last_synced_at, last_error, last_error_at, created_at
 		FROM contact_sources
 		WHERE account_id = ?
@@ -728,7 +1044,7 @@ func (s *Store) GetSourceByAccountID(accountID string) (*Source, error) {
 
 	err := s.db.QueryRow(query, accountID).Scan(
 		&source.ID, &source.Name, &source.Type, &source.URL, &source.Username,
-		&accID, &source.Enabled, &source.SyncInterval,
+		&accID, &source.Enabled, &source.Writable, &source.SyncInterval,
 		&lastSyncedAt, &lastError, &lastErrorAt, &source.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -751,4 +1067,21 @@ func (s *Store) GetSourceByAccountID(accountID string) (*Source, error) {
 	}
 
 	return &source, nil
+}
+
+// parseSyncedAt parses a synced_at string from SQLite into a time.Time. The
+// SQLite driver may return DATETIME columns as either time.Time (when stored
+// via Go time.Time) or RFC3339 / "YYYY-MM-DD HH:MM:SS" strings (when stored
+// via CURRENT_TIMESTAMP or COALESCEd with a TEXT column). This helper tries
+// both formats and returns the zero time on parse failure.
+func parseSyncedAt(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }

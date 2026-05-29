@@ -17,6 +17,12 @@ import type { v1 } from '../../../wailsjs/go/models'
 let enabledExtensions = $state<string[]>([])
 let railTabs = $state<v1.RailTabRequest[]>([])
 
+// Currently-open per-extension settings dialog. Null when no dialog is
+// open. Set via openExtensionSettings(id). The host's
+// ExtensionSettingsDialog dispatcher watches this via getOpenSettingsExtension()
+// and renders the matching extension's dialog component.
+let openSettingsExtension = $state<string | null>(null)
+
 export function getEnabledExtensions(): string[] {
   return enabledExtensions
 }
@@ -45,6 +51,26 @@ export async function refreshExtensionRegistry(): Promise<void> {
     enabledExtensions = []
     railTabs = []
   }
+}
+
+// Per-extension settings dialog control. Two callers:
+//  1. ExtensionsTab.svelte's "Edit" button on each row (explicit user action)
+//  2. The extension's own pane auto-detect on mount (e.g., ContactsPane checks
+//     if write-capable but missing creds and opens the dialog).
+//
+// The host's ExtensionSettingsDialog dispatches by extension ID to render the
+// extension's registered settings component (static dispatch like the
+// account-setup hook pattern).
+export function openExtensionSettings(extensionID: string): void {
+  openSettingsExtension = extensionID
+}
+
+export function closeExtensionSettings(): void {
+  openSettingsExtension = null
+}
+
+export function getOpenSettingsExtension(): string | null {
+  return openSettingsExtension
 }
 
 // Provider-keyed hook cache. Hooks change rarely (only when extension state

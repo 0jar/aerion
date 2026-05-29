@@ -9,13 +9,43 @@ package v1
 // import paths, no compiled-type references, no host-coupled fields. The
 // host reads the manifest before deciding whether to load an extension.
 type Manifest struct {
-	ID               string   `json:"id"`               // canonical extension id (matches settings.AllExtensionKeys)
-	Name             string   `json:"name"`             // user-facing display name
-	Version          string   `json:"version"`          // semver
-	Description      string   `json:"description"`      // 1-2 sentence summary shown in Settings
-	Author           string   `json:"author"`
-	MinAerionVersion string   `json:"minAerionVersion"` // semver — host refuses to load if lower
-	Capabilities     []string `json:"capabilities"`     // coarse capabilities; see below
+	ID               string         `json:"id"`               // canonical extension id (matches settings.AllExtensionKeys)
+	Name             string         `json:"name"`             // user-facing display name
+	Version          string         `json:"version"`          // semver
+	Description      string         `json:"description"`      // 1-2 sentence summary shown in Settings
+	Author           string         `json:"author"`
+	MinAerionVersion string         `json:"minAerionVersion"` // semver — host refuses to load if lower
+	Capabilities     []string       `json:"capabilities"`     // coarse capabilities; see below
+	OAuth            *ManifestOAuth `json:"oauth,omitempty"`  // OAuth routing config; nil if extension uses no OAuth
+}
+
+// ManifestOAuth declares how an extension's OAuth scope requests route through
+// the Auth Broker. For each requested scope:
+//
+//   - If the scope is listed in FirstPartyUsesCoreForScopes, the broker routes
+//     through Aerion core's mail OAuth (<provider>-mail client config). This
+//     reuses the user's existing mail consent — no new OAuth prompt — but it's
+//     only viable when the mail OAuth grant already covers that scope (e.g.,
+//     contacts.readonly is on the mail grant for Google).
+//
+//   - Otherwise the broker routes through the extension's own client config
+//     (<provider>-<extensionID>). If the account lacks the scope under that
+//     config, broker returns *ErrAdditionalConsentRequired; the host runs an
+//     incremental-consent flow.
+//
+// Mixed-scope HTTPClient calls (some scopes that route to mail, some to ext)
+// are REJECTED — the extension must split into two calls.
+//
+// GATE: FirstPartyUsesCoreForScopes is honored ONLY for first-party extensions.
+// Community extensions (v0.4+) declaring this field will fail manifest
+// validation — handing them the user's mail OAuth would be a privilege
+// escalation vector. For Phase 2b every extension is first-party so the field
+// is unconditionally honored.
+type ManifestOAuth struct {
+	// FirstPartyUsesCoreForScopes lists the scope strings (exact match) that
+	// should route through Aerion core's mail OAuth instead of the extension's
+	// own client config. See gate above.
+	FirstPartyUsesCoreForScopes []string `json:"first_party_uses_core_for_scopes,omitempty"`
 }
 
 // Capability is a coarse permission string an extension declares in its

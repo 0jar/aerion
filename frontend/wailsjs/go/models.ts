@@ -489,6 +489,24 @@ export namespace app {
 	        this.body = source["body"];
 	    }
 	}
+	export class OAuthCredsStatus {
+	    configId: string;
+	    hasUserOverride: boolean;
+	    hasShipped: boolean;
+	    clientIdFingerprint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OAuthCredsStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configId = source["configId"];
+	        this.hasUserOverride = source["hasUserOverride"];
+	        this.hasShipped = source["hasShipped"];
+	        this.clientIdFingerprint = source["clientIdFingerprint"];
+	    }
+	}
 	export class OAuthStatus {
 	    isOAuth: boolean;
 	    provider: string;
@@ -731,6 +749,7 @@ export namespace carddav {
 	    username: string;
 	    account_id?: string;
 	    enabled: boolean;
+	    writable: boolean;
 	    sync_interval: number;
 	    // Go type: time
 	    last_synced_at?: any;
@@ -754,6 +773,7 @@ export namespace carddav {
 	        this.username = source["username"];
 	        this.account_id = source["account_id"];
 	        this.enabled = source["enabled"];
+	        this.writable = source["writable"];
 	        this.sync_interval = source["sync_interval"];
 	        this.last_synced_at = this.convertValues(source["last_synced_at"], null);
 	        this.last_error = source["last_error"];
@@ -788,6 +808,7 @@ export namespace carddav {
 	    password: string;
 	    account_id?: string;
 	    enabled: boolean;
+	    writable: boolean;
 	    sync_interval: number;
 	    enabled_addressbooks?: string[];
 	
@@ -804,6 +825,7 @@ export namespace carddav {
 	        this.password = source["password"];
 	        this.account_id = source["account_id"];
 	        this.enabled = source["enabled"];
+	        this.writable = source["writable"];
 	        this.sync_interval = source["sync_interval"];
 	        this.enabled_addressbooks = source["enabled_addressbooks"];
 	    }
@@ -885,6 +907,7 @@ export namespace contact {
 	    email: string;
 	    display_name: string;
 	    source: string;
+	    kind?: string;
 	    avatar_url?: string;
 	    send_count: number;
 	    // Go type: time
@@ -901,6 +924,7 @@ export namespace contact {
 	        this.email = source["email"];
 	        this.display_name = source["display_name"];
 	        this.source = source["source"];
+	        this.kind = source["kind"];
 	        this.avatar_url = source["avatar_url"];
 	        this.send_count = source["send_count"];
 	        this.last_used = this.convertValues(source["last_used"], null);
@@ -2039,10 +2063,103 @@ export namespace v1 {
 	        this.component = source["component"];
 	    }
 	}
+	export class ContactIMPP {
+	    handle: string;
+	    type?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContactIMPP(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.handle = source["handle"];
+	        this.type = source["type"];
+	    }
+	}
+	export class ContactURL {
+	    url: string;
+	    type?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContactURL(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.type = source["type"];
+	    }
+	}
+	export class ContactAddress {
+	    type?: string;
+	    street?: string;
+	    city?: string;
+	    region?: string;
+	    postcode?: string;
+	    country?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContactAddress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.street = source["street"];
+	        this.city = source["city"];
+	        this.region = source["region"];
+	        this.postcode = source["postcode"];
+	        this.country = source["country"];
+	    }
+	}
+	export class ContactPhone {
+	    number: string;
+	    type?: string;
+	    isPrimary?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContactPhone(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.number = source["number"];
+	        this.type = source["type"];
+	        this.isPrimary = source["isPrimary"];
+	    }
+	}
+	export class ContactEmail {
+	    email: string;
+	    type?: string;
+	    isPrimary?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContactEmail(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.type = source["type"];
+	        this.isPrimary = source["isPrimary"];
+	    }
+	}
 	export class Contact {
 	    id: string;
 	    name: string;
 	    emails: string[];
+	    emailItems?: ContactEmail[];
+	    phones?: ContactPhone[];
+	    addresses?: ContactAddress[];
+	    urls?: ContactURL[];
+	    impps?: ContactIMPP[];
+	    org?: string;
+	    title?: string;
+	    note?: string;
+	    bday?: string;
+	    nickname?: string;
+	    categories?: string[];
 	    sourceId?: string;
 	    // Go type: time
 	    updatedAt: any;
@@ -2056,6 +2173,17 @@ export namespace v1 {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.emails = source["emails"];
+	        this.emailItems = this.convertValues(source["emailItems"], ContactEmail);
+	        this.phones = this.convertValues(source["phones"], ContactPhone);
+	        this.addresses = this.convertValues(source["addresses"], ContactAddress);
+	        this.urls = this.convertValues(source["urls"], ContactURL);
+	        this.impps = this.convertValues(source["impps"], ContactIMPP);
+	        this.org = source["org"];
+	        this.title = source["title"];
+	        this.note = source["note"];
+	        this.bday = source["bday"];
+	        this.nickname = source["nickname"];
+	        this.categories = source["categories"];
 	        this.sourceId = source["sourceId"];
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
 	    }
@@ -2078,6 +2206,11 @@ export namespace v1 {
 		    return a;
 		}
 	}
+	
+	
+	
+	
+	
 	export class RailTabRequest {
 	    extensionId: string;
 	    label: string;

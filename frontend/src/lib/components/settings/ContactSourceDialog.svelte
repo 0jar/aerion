@@ -17,6 +17,7 @@
     AddContactSource,
     UpdateContactSource,
     GetSourceAddressbooks,
+    SetContactSourceWritable,
   } from '../../../../wailsjs/go/app/App.js'
   // @ts-ignore - wailsjs path
   import type { carddav } from '../../../../wailsjs/go/models'
@@ -43,6 +44,10 @@
   let username = $state('')
   let password = $state('')
   let syncInterval = $state(60)
+  // Phase 2b.2.a — opt-in write access. CardDAV uses the source's existing
+  // basic-auth creds, so this is a pure flag. OAuth sources gain their toggle
+  // in 2b.3 alongside incremental consent.
+  let writable = $state(false)
 
   // Discovery state
   let discovering = $state(false)
@@ -111,6 +116,7 @@
       username = editSource.username || ''
       password = '' // Don't load password
       syncInterval = editSource.sync_interval || 60
+      writable = !!editSource.writable
       hasDiscovered = false
       discoveredAddressbooks = []
       selectedAddressbooks = new Set()
@@ -128,6 +134,7 @@
       username = ''
       password = ''
       syncInterval = 60
+      writable = false
       hasDiscovered = false
       discoveredAddressbooks = []
       selectedAddressbooks = new Set()
@@ -302,18 +309,29 @@
           username,
           password,
           enabled: true,
+          writable,
           sync_interval: syncInterval,
           enabled_addressbooks: Array.from(selectedAddressbooks),
         }
 
+        let savedSourceID = editSource?.id || ''
         if (editSource) {
           await UpdateContactSource(editSource.id, config)
           addToast({ type: 'success', message: $_('toast.contactSourceUpdated') })
-        } else {
-          await AddContactSource(config)
+        }
+        if (!editSource) {
+          const created = await AddContactSource(config)
+          savedSourceID = created?.id || ''
           addToast({ type: 'success', message: $_('toast.contactSourceAdded') })
         }
-      } else {
+        // Persist the writable flag via its dedicated Wails method (separate
+        // from UpdateContactSource/AddContactSource so it can be toggled
+        // without rediscovering addressbooks).
+        if (savedSourceID) {
+          await SetContactSourceWritable(savedSourceID, writable)
+        }
+      }
+      if (sourceType !== 'carddav') {
         // Google or Microsoft source
         if (editSource && isEditingOAuthSource) {
           // Editing existing OAuth source - just update name and sync interval
@@ -324,6 +342,7 @@
             username: '',
             password: '',
             enabled: true,
+            writable: !!editSource.writable,
             sync_interval: syncInterval,
             enabled_addressbooks: [],
           }
@@ -527,6 +546,25 @@
               </Select.Content>
             </Select.Root>
           </div>
+
+          <!-- Phase 2b.2.a writable toggle. Edit/Create/Delete on contacts
+               in this source unlock when this is enabled. The actual edit
+               write paths land in 2b.2.b. -->
+          <label class="flex items-start gap-2 pt-2 cursor-pointer">
+            <input
+              type="checkbox"
+              bind:checked={writable}
+              class="mt-1 h-4 w-4 rounded border-border accent-primary cursor-pointer"
+            />
+            <span class="flex flex-col text-sm">
+              <span class="font-medium text-foreground">Enable write access to this source</span>
+              <span class="text-xs text-muted-foreground">
+                Allow editing, creating, and deleting contacts on this CardDAV
+                server. Uses the credentials above. Write features land
+                progressively across the 0.3.0 release cycle.
+              </span>
+            </span>
+          </label>
         {/if}
 
       {:else}

@@ -11,6 +11,8 @@
   import ToastContainer from './lib/components/ui/toast/ToastContainer.svelte'
   import TermsDialog from './lib/components/TermsDialog.svelte'
   import CertificateDialog from './lib/components/settings/CertificateDialog.svelte'
+  import ExtensionSettingsDialog from './lib/components/settings/ExtensionSettingsDialog.svelte'
+  import IncrementalConsentDialog from './lib/components/oauth/IncrementalConsentDialog.svelte'
   import ExtensionRail from './lib/components/rail/ExtensionRail.svelte'
   import ContactsPane from '$extensions/contacts/frontend/components/ContactsPane.svelte'
   import { refreshExtensionRegistry, getRailTabs } from '$lib/stores/extensionRegistry.svelte'
@@ -34,6 +36,7 @@
     getPaneNav
   } from '$lib/stores/keyboard.svelte'
   import { isDialogGuardActive } from '$lib/stores/dialogGuard'
+  import { dispatchExtensionShortcut } from '$lib/stores/extensionShortcuts.svelte'
   import { initLayout, getLayoutMode, getResponsiveView, showViewer, hideViewer, showSidebar, hideSidebar, isResponsive } from '$lib/stores/layout.svelte'
   // @ts-ignore - wailsjs path
   import { PrepareReply, GetPendingMailto, GetDraft, MarkAsRead, MarkAsUnread, Star, Unstar, Archive, MarkAsSpam, MarkAsNotSpam, Undo, GetTermsAccepted, SetTermsAccepted, RefreshWindowConstraints, AcceptCertificate, GetStartHiddenActive, CloseWindow, QuitApp, OpenComposerWindow, GetSystemTheme, NotifyStartupComplete } from '../wailsjs/go/app/App.js'
@@ -740,6 +743,19 @@
     // Don't intercept while a modal dialog has the guard active — keystrokes
     // (especially Ctrl+A) should target dialog inputs, not the background.
     if (isDialogGuardActive()) return
+
+    // Extension shortcut dispatch: when the active rail pane is NOT mail, let
+    // the extension's registered shortcuts run first. dispatchExtensionShortcut
+    // returns true when a handler matched — in that case we treat the event as
+    // handled and skip mail's downstream dispatch. Skipped while typing in an
+    // input element (consistent with mail's inInput guard below) so extension
+    // shortcuts don't fire from inside text fields. See [[extension-sdk-pattern]]
+    // and frontend/src/lib/stores/extensionShortcuts.svelte.ts.
+    if (!inInput && dispatchExtensionShortcut(e)) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
 
     // When composer is open, only handle Escape (composer handles its own shortcuts)
     if (showComposer) {
@@ -1473,6 +1489,14 @@
 
 <!-- Toast notifications -->
 <ToastContainer />
+
+<!-- Per-extension settings dialog dispatcher (Settings → Extensions → Edit) -->
+<ExtensionSettingsDialog />
+
+<!-- Generic OAuth incremental-consent prompt; listens for
+     `oauth:incremental-consent-required` from the host. Scaffolded in 2b.1;
+     wired to real flows in 2b.3 when Google/MS write paths land. -->
+<IncrementalConsentDialog />
 
 <!-- Composer Modal -->
 {#if showComposer && composerAccountId}

@@ -29,14 +29,19 @@
     return `avatar-${(Math.abs(hash) % 14) + 1}`
   }
 
+  // Ported verbatim from mail's getInitials in ConversationRow.svelte:158-170.
+  // Split-on-single-space (not whitespace regex), map to first char, join +
+  // uppercase + slice(0,2). Kept identical so an extension's contact and a
+  // mail sender with the same display name render the same letters.
   function initials(displayName: string | undefined, fallbackEmail: string): string {
-    const src = (displayName || fallbackEmail || '').trim()
-    if (!src) return '?'
-    const parts = src.split(/\s+/).filter(Boolean)
-    if (parts.length >= 2) {
-      return ((parts[0][0] ?? '') + (parts[parts.length - 1][0] ?? '')).toUpperCase()
-    }
-    return src[0].toUpperCase()
+    if (!displayName && !fallbackEmail) return '?'
+    const name = displayName || fallbackEmail
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2)
   }
 
   // Density → pixel size table. Tuned to match mail UI's density visual weight.

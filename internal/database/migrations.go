@@ -749,4 +749,253 @@ var migrations = []Migration{
 			UPDATE contact_source_oauth SET client_config_id = 'microsoft-mail' WHERE provider = 'microsoft' AND client_config_id IS NULL;
 		`,
 	},
+	{
+		Version: 30,
+		SQL: `
+			-- Phase 2b: write capability flag for contact sources.
+			--
+			-- contact_sources.writable: explicit per-source write capability flag.
+			-- CardDAV sources flip this on when the user opts in (no consent needed,
+			-- credentials already cover both directions). OAuth sources flip this on
+			-- only after the user completes incremental consent for write scopes
+			-- under the per-extension client_config_id (e.g., google-contacts).
+			--
+			-- Note: contacts.name_overridden is added by contact.Store.ensureTable
+			-- (lazy schema) since the contacts table isn't part of the migration
+			-- system — see internal/contact/store.go.
+
+			ALTER TABLE contact_sources ADD COLUMN writable INTEGER NOT NULL DEFAULT 0;
+		`,
+	},
+	{
+		Version: 31,
+		SQL: `
+			-- Phase 2b.2.a: Unified contact-record schema.
+			--
+			-- This migration replaces the legacy denormalized "contacts" (autocomplete-
+			-- by-email-only) and "carddav_contacts" (per-email fan-out) tables with a
+			-- single unified record-based shape:
+			--
+			--   contact_records      → one row per logical contact (local or carddav)
+			--   contact_emails       → composite-PK (record_id, email) with per-email
+			--                          autocomplete metadata (send_count, last_used,
+			--                          name_overridden). Replaces the legacy contacts
+			--                          table as the autocomplete index.
+			--   contact_phones       → multi-value per record
+			--   contact_addresses    → multi-value per record (structured parts)
+			--   contact_urls         → multi-value per record
+			--   contact_impps        → multi-value per record (instant messaging)
+			--   contact_categories   → multi-value per record (tags)
+			--   carddav_record_state → CardDAV-only sidecar: href + etag + synced_at
+			--                          + addressbook_id. ON DELETE CASCADE so removing
+			--                          a record removes its sync state.
+			--
+			-- This migration is the architectural pivot for the Contacts extension:
+			-- - Mail's autocomplete still works through contact.Store's public API
+			--   (Search/AddOrUpdate/Get) — only the internals change to query the
+			--   unified tables.
+			-- - Multi-field reads land (phone/address/org/etc.) — vCard parser
+			--   expanded to extract them in the same release.
+			-- - One-row-per-vCard semantics for CardDAV (fixes the duplicate-row UX
+			--   wart where a 2-email vCard appeared twice in the list).
+			--
+			-- Downgrade: tools/db/rollback-v31.sql reconstructs the legacy tables from
+			-- this unified schema via JOIN — no separate backup file required.
+			-- Multi-field data is inherently lost on rollback (v30 schema has no
+			-- columns for it). Documented in docs/SQL_ROLLBACK.md.
+
+			-- Defensive: contact.Store.ensureTable creates "contacts" lazily AFTER
+			-- migrations run, so on a fresh install the table won't exist here. Make
+			-- sure it exists so the backfill SELECTs below don't error.
+			CREATE TABLE IF NOT EXISTS contacts (
+				email TEXT PRIMARY KEY,
+				display_name TEXT,
+				send_count INTEGER DEFAULT 0,
+				last_used DATETIME,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				name_overridden INTEGER NOT NULL DEFAULT 0,
+				kind TEXT NOT NULL DEFAULT 'collected'
+			);
+
+			-- New tables.
+
+			CREATE TABLE contact_records (
+				id            TEXT PRIMARY KEY,
+				source        TEXT NOT NULL,             -- 'local' | 'carddav' (future: 'google' | 'microsoft')
+				kind          TEXT,                      -- local: 'manual' | 'collected'; NULL for carddav
+				source_ref    TEXT,                      -- carddav: addressbook_id. local: NULL
+				fn            TEXT,                      -- vCard FN (display name)
+				n_given       TEXT,                      -- vCard N: given name
+				n_family      TEXT,                      -- vCard N: family name
+				org           TEXT,
+				title         TEXT,
+				note          TEXT,
+				bday          TEXT,                      -- ISO-8601 date string (vCard BDAY)
+				nickname      TEXT,
+				vcard_raw     TEXT,                      -- Preserved original vCard for unknown-property round-trip; NULL for local
+				created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+				updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+			);
+
+			CREATE INDEX idx_contact_records_source ON contact_records(source);
+			CREATE INDEX idx_contact_records_source_kind ON contact_records(source, kind);
+			CREATE INDEX idx_contact_records_source_ref ON contact_records(source_ref);
+
+			CREATE TABLE contact_emails (
+				record_id       TEXT NOT NULL REFERENCES contact_records(id) ON DELETE CASCADE,
+				email           TEXT NOT NULL,                  -- normalized lowercase
+				email_type      TEXT,                           -- vCard TYPE param: 'home', 'work', 'internet', etc.
+				is_primary      INTEGER NOT NULL DEFAULT 0,
+				send_count      INTEGER NOT NULL DEFAULT 0,     -- per-email autocomplete ranking
+				last_used       DATETIME,
+				name_overridden INTEGER NOT NULL DEFAULT 0,     -- preserves user-edited fn across auto-collection
+				PRIMARY KEY (record_id, email)
+			);
+
+			CREATE INDEX idx_contact_emails_email ON contact_emails(email);
+			CREATE INDEX idx_contact_emails_rank ON contact_emails(send_count DESC, last_used DESC);
+
+			CREATE TABLE contact_phones (
+				record_id   TEXT NOT NULL REFERENCES contact_records(id) ON DELETE CASCADE,
+				number      TEXT NOT NULL,
+				phone_type  TEXT,
+				is_primary  INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY (record_id, number)
+			);
+
+			CREATE TABLE contact_addresses (
+				record_id   TEXT NOT NULL REFERENCES contact_records(id) ON DELETE CASCADE,
+				addr_type   TEXT,                       -- 'home', 'work', etc.
+				street      TEXT,
+				city        TEXT,
+				region      TEXT,
+				postcode    TEXT,
+				country     TEXT,
+				-- No natural PK; allow duplicates and let app sort it out
+				idx         INTEGER NOT NULL DEFAULT 0  -- ordinal for stable display order
+			);
+
+			CREATE INDEX idx_contact_addresses_record ON contact_addresses(record_id);
+
+			CREATE TABLE contact_urls (
+				record_id   TEXT NOT NULL REFERENCES contact_records(id) ON DELETE CASCADE,
+				url         TEXT NOT NULL,
+				url_type    TEXT,
+				PRIMARY KEY (record_id, url)
+			);
+
+			CREATE TABLE contact_impps (
+				record_id   TEXT NOT NULL REFERENCES contact_records(id) ON DELETE CASCADE,
+				handle      TEXT NOT NULL,            -- e.g. xmpp:user@host
+				impp_type   TEXT,
+				PRIMARY KEY (record_id, handle)
+			);
+
+			CREATE TABLE contact_categories (
+				record_id   TEXT NOT NULL REFERENCES contact_records(id) ON DELETE CASCADE,
+				category    TEXT NOT NULL,
+				PRIMARY KEY (record_id, category)
+			);
+
+			CREATE TABLE carddav_record_state (
+				record_id       TEXT PRIMARY KEY REFERENCES contact_records(id) ON DELETE CASCADE,
+				addressbook_id  TEXT NOT NULL,
+				href            TEXT NOT NULL UNIQUE,
+				etag            TEXT,
+				synced_at       DATETIME
+			);
+
+			CREATE INDEX idx_carddav_record_state_addressbook ON carddav_record_state(addressbook_id);
+
+			-- Backfill from legacy contacts. One record per row (email is the natural
+			-- record-grain for local contacts today; multi-field expansion for local
+			-- happens via the new sub-tables which start empty).
+			-- record id: derived from email so subsequent linking via record_id is
+			-- stable. Older Aerion never exposed contact ids externally; this just
+			-- needs to be unique + deterministic within the migration.
+			INSERT INTO contact_records (id, source, kind, fn, created_at, updated_at)
+			SELECT
+				'local-' || email,
+				'local',
+				kind,
+				display_name,
+				created_at,
+				created_at
+			FROM contacts;
+
+			INSERT INTO contact_emails (record_id, email, send_count, last_used, name_overridden, is_primary)
+			SELECT
+				'local-' || email,
+				email,
+				send_count,
+				last_used,
+				name_overridden,
+				1
+			FROM contacts;
+
+			-- Backfill from legacy carddav_contacts. Consolidate fan-out: group by
+			-- (addressbook_id, href) so one record represents one vCard regardless
+			-- of how many email rows the old schema fanned it into. The MIN(id)
+			-- picks an arbitrary-but-deterministic representative id to reuse.
+			INSERT INTO contact_records (id, source, source_ref, fn, created_at, updated_at)
+			SELECT
+				MIN(id),
+				'carddav',
+				addressbook_id,
+				MIN(display_name),  -- first display_name encountered for the href
+				MIN(synced_at),
+				MAX(synced_at)
+			FROM carddav_contacts
+			WHERE href IS NOT NULL AND href != ''
+			GROUP BY addressbook_id, href;
+
+			-- Temp index so the canonical-group JOIN below isn't O(N²) on large
+			-- addressbooks. carddav_contacts has indexes on addressbook_id and
+			-- email but not (addressbook_id, href). Without this, the next
+			-- INSERT can take minutes on a 5k-contact source. Index goes away
+			-- when we DROP carddav_contacts at the end of the migration.
+			CREATE INDEX IF NOT EXISTS idx_carddav_contacts_ab_href_tmp
+				ON carddav_contacts(addressbook_id, href);
+
+			-- All emails from each fanned-out group attach to the same record_id
+			-- (the MIN(id) chosen above). Pre-compute the (addressbook_id, href)
+			-- → representative-id mapping ONCE in a subquery (canonical), then
+			-- JOIN every email row against it. Replaces a per-row correlated
+			-- subquery that was O(N²) — fast on small sets, but locks the app
+			-- for minutes on real addressbooks.
+			INSERT INTO contact_emails (record_id, email, send_count, name_overridden, is_primary)
+			SELECT
+				canonical.rec_id,
+				cc.email,
+				0,
+				0,
+				CASE WHEN cc.id = canonical.rec_id THEN 1 ELSE 0 END
+			FROM carddav_contacts cc
+			JOIN (
+				SELECT MIN(id) AS rec_id, addressbook_id, href
+				FROM carddav_contacts
+				WHERE href IS NOT NULL AND href != ''
+				GROUP BY addressbook_id, href
+			) AS canonical
+			  ON canonical.addressbook_id = cc.addressbook_id
+			 AND canonical.href = cc.href
+			WHERE cc.href IS NOT NULL AND cc.href != '';
+
+			-- Sidecar state: one row per consolidated record.
+			INSERT INTO carddav_record_state (record_id, addressbook_id, href, etag, synced_at)
+			SELECT
+				cr.id,
+				cr.source_ref,
+				cc.href,
+				cc.etag,
+				cc.synced_at
+			FROM contact_records cr
+			JOIN carddav_contacts cc ON cc.id = cr.id
+			WHERE cr.source = 'carddav';
+
+			-- Drop legacy tables — the unified schema is now authoritative.
+			DROP TABLE contacts;
+			DROP TABLE carddav_contacts;
+		`,
+	},
 }

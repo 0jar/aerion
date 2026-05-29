@@ -165,6 +165,16 @@ func (a *App) SetAddressbookEnabled(addressbookID string, enabled bool) error {
 	return a.carddavStore.SetAddressbookEnabled(addressbookID, enabled)
 }
 
+// SetContactSourceWritable flips the writable flag for a CardDAV source.
+// Phase 2b.2.a UI surface — backs the "Enable write access" checkbox in the
+// per-source settings dialog. CardDAV uses the source's existing basic-auth
+// credentials, so this is a pure flag flip (no consent flow needed). OAuth-
+// based sources (Google/Microsoft) get their toggle in 2b.3 alongside
+// incremental consent.
+func (a *App) SetContactSourceWritable(sourceID string, writable bool) error {
+	return a.carddavStore.SetSourceWritable(sourceID, writable)
+}
+
 // SyncContactSource manually triggers a sync for a source
 func (a *App) SyncContactSource(id string) error {
 	return a.carddavSyncer.SyncSource(id)

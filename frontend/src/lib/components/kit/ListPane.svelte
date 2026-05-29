@@ -45,6 +45,26 @@
     onToggleCheck?: (id: string) => void
     /** Fired on Ctrl+A — optional bulk-select hook. */
     onSelectAll?: () => void
+    /** Fired on Shift+J / Shift+ArrowDown to extend a multi-select range DOWN.
+     *  Called with (fromId, toId) — the IDs that should be added to the
+     *  consumer's checked set. Matches mail's `selectNextWithCheck` semantics
+     *  (`MessageList.svelte:1095–1116`): cursor advances one row, both the
+     *  previous and new rows get checked. ListPane swallows the key whether or
+     *  not this handler is provided, so the event doesn't bubble to mail's
+     *  window handler. */
+    onRangeNext?: (fromId: string, toId: string) => void
+    /** Fired on Shift+K / Shift+ArrowUp to extend a multi-select range UP.
+     *  Mirror of onRangeNext (mail's `selectPreviousWithCheck`,
+     *  `MessageList.svelte:1071–1092`). */
+    onRangePrev?: (fromId: string, toId: string) => void
+    /** Fired on Delete/Backspace with the currently-selected id. When provided,
+     *  ListPane intercepts the key, calls preventDefault + stopPropagation, and
+     *  invokes the handler. The stopPropagation matters: without it the event
+     *  bubbles to mail's global window-level handler which deletes the focused
+     *  message in the background. Even when onDelete is NOT provided, ListPane
+     *  still swallows Delete/Backspace when focused so the mail handler stays
+     *  off our turf. */
+    onDelete?: (id: string) => void
     /** Fired when the user invokes the focus-search global shortcut (Ctrl+S).
      *  The consumer (e.g., ContactList) typically focuses its own search input. */
     onFocusSearch?: () => void
@@ -64,16 +84,38 @@
     onActivate,
     onToggleCheck,
     onSelectAll,
+    onRangeNext,
+    onRangePrev,
+    onDelete,
     onFocusSearch,
   }: Props = $props()
 
   let containerRef = $state<HTMLDivElement | null>(null)
+  // Inner scrollable region — referenced so keyboard navigation can scroll the
+  // newly-selected row into view (matches MessageList's pattern).
+  let scrollRegionRef = $state<HTMLDivElement | null>(null)
 
   // Take DOM focus when this slot becomes the focused pane.
   $effect(() => {
     if (getFocusedPane() === focusSlot && containerRef && document.activeElement !== containerRef) {
       containerRef.focus()
     }
+  })
+
+  // When selectedId changes (keyboard nav or programmatic select), scroll the
+  // matching row into view. ListRow sets aria-selected="true" on the active
+  // row — query for that. queueMicrotask defers the lookup so the DOM has
+  // settled with the new aria-selected state by the time we read it.
+  // block:'nearest' is a no-op when the row is already in view (mouse clicks),
+  // so this only kicks in when the user navigates with j/k or arrow keys.
+  $effect(() => {
+    const _ = selectedId  // dep-tracked
+    if (!scrollRegionRef || selectedId == null) return
+    queueMicrotask(() => {
+      if (!scrollRegionRef) return
+      const row = scrollRegionRef.querySelector('[aria-selected="true"]') as HTMLElement | null
+      row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    })
   })
 
   function indexOf(id: string | null): number {
@@ -91,6 +133,37 @@
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    // Range-extend (Shift+J / Shift+ArrowDown / Shift+K / Shift+ArrowUp) —
+    // checked before LIST_NEXT/PREV because those predicates require !shiftKey.
+    // Match mail's selectNextWithCheck / selectPreviousWithCheck pattern: cursor
+    // moves one step, BOTH the leaving row and the arriving row are extended
+    // into the consumer's check set. Always swallow the key (preventDefault +
+    // stopPropagation) so it doesn't bubble to mail's global handler, even
+    // when no callback is wired — same defensive shape as onDelete.
+    if (KEY.LIST_NEXT_CHECK(e)) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (items.length === 0) return
+      const idx = indexOf(selectedId)
+      if (idx < 0 || idx >= items.length - 1) return
+      const fromId = items[idx].id
+      const toId = items[idx + 1].id
+      onSelect(toId)
+      if (onRangeNext) onRangeNext(fromId, toId)
+      return
+    }
+    if (KEY.LIST_PREV_CHECK(e)) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (items.length === 0) return
+      const idx = indexOf(selectedId)
+      if (idx <= 0) return
+      const fromId = items[idx].id
+      const toId = items[idx - 1].id
+      onSelect(toId)
+      if (onRangePrev) onRangePrev(fromId, toId)
+      return
+    }
     if (KEY.LIST_NEXT(e)) {
       e.preventDefault()
       e.stopPropagation()
@@ -123,6 +196,18 @@
       e.preventDefault()
       e.stopPropagation()
       onSelectAll()
+      return
+    }
+    if (KEY.LIST_DELETE(e)) {
+      // Always swallow Delete/Backspace when focused — even if no onDelete is
+      // wired — so the event doesn't bubble to mail's window-level handler
+      // and delete a message in a different pane. If onDelete IS provided,
+      // invoke it with the current selection.
+      e.preventDefault()
+      e.stopPropagation()
+      if (onDelete && selectedId) {
+        onDelete(selectedId)
+      }
       return
     }
   }
@@ -164,12 +249,12 @@
   role="listbox"
   aria-label={label ?? 'List'}
   tabindex="0"
-  class="flex-1 min-w-0 flex flex-col outline-none {flashing ? 'pane-focus-flash' : ''}"
+  class="flex-1 min-w-0 min-h-0 flex flex-col outline-none {flashing ? 'pane-focus-flash' : ''}"
   onkeydown={handleKeyDown}
   onfocus={handleFocus}
   onmousedown={handleMouseDown}
 >
-  <div class="flex-1 overflow-y-auto" aria-busy={loading}>
+  <div bind:this={scrollRegionRef} class="flex-1 min-h-0 overflow-y-auto" aria-busy={loading}>
     {#if loading}
       {#if loadingSnippet}
         {@render loadingSnippet()}

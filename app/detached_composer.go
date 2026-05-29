@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/hkdb/aerion/internal/account"
-	"github.com/hkdb/aerion/internal/carddav"
 	"github.com/hkdb/aerion/internal/certificate"
 	"github.com/hkdb/aerion/internal/contact"
 	"github.com/hkdb/aerion/internal/credentials"
@@ -168,23 +167,9 @@ func (c *ComposerApp) Startup(ctx context.Context) {
 		}
 	}()
 
-	// Initialize CardDAV search for contact autocomplete (reads from shared DB)
-	carddavStore := carddav.NewStore(db.DB)
-	c.contactStore.SetCardDAVSearchFunc(func(query string, limit int) ([]*contact.Contact, error) {
-		contacts, err := carddavStore.SearchContacts(query, limit)
-		if err != nil {
-			return nil, err
-		}
-		result := make([]*contact.Contact, len(contacts))
-		for i, cdContact := range contacts {
-			result[i] = &contact.Contact{
-				Email:       cdContact.Email,
-				DisplayName: cdContact.DisplayName,
-				Source:      "carddav",
-			}
-		}
-		return result, nil
-	})
+	// Removed in 2b.2.a: contactStore.Search now natively walks both local and
+	// carddav contacts via the unified contact_records schema. The carddav
+	// store and search-bridge wiring is no longer needed here.
 
 	c.draftStore = draft.NewStore(db)
 	c.settingsStore = settings.NewStore(db)

@@ -20,11 +20,14 @@
 
   const { selected = false, density = 'standard', onclick, children }: Props = $props()
 
+  // Padding + gap values come straight from mail's ConversationRow.densityClasses.row
+  // (frontend/src/lib/components/list/ConversationRow.svelte:73–78). Keep them
+  // 1-for-1 with mail so a future mail-adopts-kit refactor is invisible.
   const PADDING: Record<Density, string> = {
-    micro:    'px-3 py-1',
-    compact:  'px-3 py-1.5',
-    standard: 'px-3 py-2',
-    large:    'px-3 py-3',
+    micro:    'px-3 py-2 gap-2',
+    compact:  'px-4 py-3 gap-3',
+    standard: 'px-5 py-4 gap-4',
+    large:    'px-6 py-5 gap-5',
   }
 
   function handleClick(e: MouseEvent) {
@@ -37,9 +40,9 @@
 <div
   role="option"
   aria-selected={selected}
-  class="flex items-center gap-3 w-full {PADDING[density]} border-l-[3px] text-left transition-colors cursor-pointer select-none {selected
-    ? 'border-l-primary bg-accent/40'
-    : 'border-l-transparent hover:bg-accent/30'}"
+  class="flex items-center w-full {PADDING[density]} border-b border-border text-left transition-colors cursor-pointer select-none {selected
+    ? 'bg-primary/20'
+    : 'hover:bg-muted/50'}"
   onclick={handleClick}
 >
   {@render children()}

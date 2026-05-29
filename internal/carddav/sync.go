@@ -362,25 +362,15 @@ func (s *Syncer) syncAddressbookIncremental(client *Client, ab *Addressbook) err
 		}
 	}
 
-	// Process updated/new contacts
+	// Process updated/new records (multi-field).
 	if len(result.Updated) > 0 {
-		s.log.Debug().Int("count", len(result.Updated)).Msg("Processing updated contacts")
-		contacts := make([]*Contact, 0, len(result.Updated))
-		for _, pc := range result.Updated {
-			contacts = append(contacts, &Contact{
-				AddressbookID: ab.ID,
-				Email:         pc.Email,
-				DisplayName:   pc.DisplayName,
-				Href:          pc.Href,
-				ETag:          pc.ETag,
-			})
-		}
-
+		s.log.Debug().Int("count", len(result.Updated)).Msg("Processing updated records")
+		entries := buildRecordSyncEntries(ab.ID, result.Updated)
 		upsertErr := retryDBOperation(func() error {
-			return s.store.UpsertContactsBatch(contacts)
+			return s.store.UpsertRecordsBatch(entries)
 		}, 5, 100*time.Millisecond, s.log)
 		if upsertErr != nil {
-			return fmt.Errorf("failed to upsert contacts: %w", upsertErr)
+			return fmt.Errorf("failed to upsert records: %w", upsertErr)
 		}
 	}
 
@@ -394,6 +384,75 @@ func (s *Syncer) syncAddressbookIncremental(client *Client, ab *Addressbook) err
 		Msg("Incremental sync completed")
 
 	return nil
+}
+
+// buildRecordSyncEntries converts a slice of ParsedRecord (the parser output)
+// into RecordSyncEntry payloads suitable for Store.UpsertRecordsBatch. Each
+// entry carries a *contact.Record (mapped via parsedRecordToContactRecord)
+// plus the addressbook_id + href + etag triplet for carddav_record_state.
+func buildRecordSyncEntries(addressbookID string, parsed []*ParsedRecord) []RecordSyncEntry {
+	entries := make([]RecordSyncEntry, 0, len(parsed))
+	for _, pr := range parsed {
+		if pr == nil {
+			continue
+		}
+		entries = append(entries, RecordSyncEntry{
+			Record:        parsedRecordToContactRecord(pr),
+			AddressbookID: addressbookID,
+			Href:          pr.Href,
+			ETag:          pr.ETag,
+		})
+	}
+	return entries
+}
+
+// parsedRecordToContactRecord maps the carddav-specific ParsedRecord shape
+// into the generic contact.Record + sub-tables used by UpsertRecordTx.
+func parsedRecordToContactRecord(pr *ParsedRecord) *contact.Record {
+	rec := &contact.Record{
+		Source:   "carddav",
+		Fn:       pr.FN,
+		NGiven:   pr.NGiven,
+		NFamily:  pr.NFamily,
+		Org:      pr.Org,
+		Title:    pr.Title,
+		Note:     pr.Note,
+		Bday:     pr.Bday,
+		Nickname: pr.Nickname,
+		VCardRaw: pr.VCardRaw,
+	}
+	for _, e := range pr.Emails {
+		rec.Emails = append(rec.Emails, contact.RecordEmail{
+			Email:     e.Value,
+			EmailType: e.Type,
+			IsPrimary: e.IsPrimary,
+		})
+	}
+	for _, p := range pr.Phones {
+		rec.Phones = append(rec.Phones, contact.RecordPhone{
+			Number:    p.Value,
+			PhoneType: p.Type,
+			IsPrimary: p.IsPrimary,
+		})
+	}
+	for _, a := range pr.Addresses {
+		rec.Addresses = append(rec.Addresses, contact.RecordAddress{
+			AddrType: a.Type,
+			Street:   a.Street,
+			City:     a.City,
+			Region:   a.Region,
+			Postcode: a.Postcode,
+			Country:  a.Country,
+		})
+	}
+	for _, u := range pr.URLs {
+		rec.URLs = append(rec.URLs, contact.RecordURL{URL: u.Value, URLType: u.Type})
+	}
+	for _, i := range pr.IMPPs {
+		rec.IMPPs = append(rec.IMPPs, contact.RecordIMPP{Handle: i.Handle, IMPPType: i.Type})
+	}
+	rec.Categories = append(rec.Categories, pr.Categories...)
+	return rec
 }
 
 // syncAddressbookFull performs a full sync (used for first sync or when incremental fails)
@@ -416,31 +475,21 @@ func (s *Syncer) syncAddressbookFull(client *Client, ab *Addressbook) error {
 		s.log.Warn().Err(deleteErr).Msg("Failed to delete existing contacts after retries")
 	}
 
-	// Insert all contacts
+	// Insert all records (multi-field).
 	if len(result.Updated) > 0 {
-		contacts := make([]*Contact, 0, len(result.Updated))
-		for _, pc := range result.Updated {
-			contacts = append(contacts, &Contact{
-				AddressbookID: ab.ID,
-				Email:         pc.Email,
-				DisplayName:   pc.DisplayName,
-				Href:          pc.Href,
-				ETag:          pc.ETag,
-			})
-		}
-
+		entries := buildRecordSyncEntries(ab.ID, result.Updated)
 		upsertErr := retryDBOperation(func() error {
-			return s.store.UpsertContactsBatch(contacts)
+			return s.store.UpsertRecordsBatch(entries)
 		}, 5, 100*time.Millisecond, s.log)
 		if upsertErr != nil {
-			s.log.Warn().Err(upsertErr).Msg("Failed to batch upsert contacts after retries")
+			s.log.Warn().Err(upsertErr).Msg("Failed to batch upsert records after retries")
 		}
 	}
 
 	// Store the sync token for future incremental syncs
 	s.store.UpdateAddressbookSyncToken(ab.ID, result.SyncToken)
 
-	s.log.Info().Str("addressbook", ab.Name).Int("contacts", len(result.Updated)).Msg("Full sync completed")
+	s.log.Info().Str("addressbook", ab.Name).Int("records", len(result.Updated)).Msg("Full sync completed")
 	return nil
 }
 
@@ -464,30 +513,21 @@ func (s *Syncer) syncAddressbookLegacy(client *Client, ab *Addressbook) error {
 		s.log.Warn().Err(deleteErr).Msg("Failed to delete existing contacts after retries")
 	}
 
-	// Convert to Contact structs for batch insert
-	contacts := make([]*Contact, 0, len(parsedContacts))
-	for _, pc := range parsedContacts {
-		contacts = append(contacts, &Contact{
-			AddressbookID: ab.ID,
-			Email:         pc.Email,
-			DisplayName:   pc.DisplayName,
-			Href:          pc.Href,
-			ETag:          pc.ETag,
-		})
-	}
+	// Convert to RecordSyncEntry for the multi-field upsert.
+	entries := buildRecordSyncEntries(ab.ID, parsedContacts)
 
-	// Batch insert all contacts
+	// Batch insert all records.
 	upsertErr := retryDBOperation(func() error {
-		return s.store.UpsertContactsBatch(contacts)
+		return s.store.UpsertRecordsBatch(entries)
 	}, 5, 100*time.Millisecond, s.log)
 	if upsertErr != nil {
-		s.log.Warn().Err(upsertErr).Msg("Failed to batch upsert contacts after retries")
+		s.log.Warn().Err(upsertErr).Msg("Failed to batch upsert records after retries")
 	}
 
 	// No sync token available with legacy method
 	s.store.UpdateAddressbookSyncToken(ab.ID, "")
 
-	s.log.Info().Str("addressbook", ab.Name).Int("contacts", len(contacts)).Msg("Legacy sync completed")
+	s.log.Info().Str("addressbook", ab.Name).Int("records", len(entries)).Msg("Legacy sync completed")
 	return nil
 }
 

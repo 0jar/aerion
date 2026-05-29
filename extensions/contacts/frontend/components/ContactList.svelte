@@ -17,9 +17,17 @@
   import ListPane from '$lib/components/kit/ListPane.svelte'
   import ListRow from '$lib/components/kit/ListRow.svelte'
   import Avatar from '$lib/components/kit/Avatar.svelte'
-  import { contactsView, reloadContacts, selectContact, setSearchQuery } from '$extensions/contacts/frontend/stores/contactsView.svelte'
+  import ConfirmDialog from '$lib/components/kit/ConfirmDialog.svelte'
+  import { contactsView, reloadContacts, selectContact, setSearchQuery, deleteLocalContact } from '$extensions/contacts/frontend/stores/contactsView.svelte'
+  import { toasts } from '$lib/stores/toast'
   // @ts-ignore - wailsjs bindings
   import type { v1 } from '$wailsjs/go/models'
+
+  interface Props {
+    onAdd?: () => void
+  }
+
+  let { onAdd }: Props = $props()
 
   type SortOrder = 'name-asc' | 'name-desc'
 
@@ -32,6 +40,38 @@
   // svelte-ignore non_reactive_update
   let searchInputEl: HTMLInputElement | null = null
   let sortOrder = $state<SortOrder>('name-asc')
+
+  // Delete-confirmation state for keyboard-triggered deletes. ContactDetail
+  // has its own button-triggered confirm dialog; this one fires when the user
+  // has the LIST focused and hits Delete/Backspace on the highlighted row.
+  // Local-only — CardDAV/OAuth writes land in 2b.2.b/c.
+  let showDeleteConfirm = $state(false)
+  let pendingDelete = $state<v1.Contact | null>(null)
+  let deleting = $state(false)
+
+  function requestDelete(id: string) {
+    const found = contactsView.contacts.find(c => c.id === id)
+    if (!found) return
+    // Match the writability gate ContactDetail uses for its Delete button.
+    if (found.sourceId !== 'aerion') return
+    pendingDelete = found
+    showDeleteConfirm = true
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return
+    deleting = true
+    try {
+      await deleteLocalContact(pendingDelete.id)
+      toasts.success('Contact deleted')
+    } catch (err) {
+      console.error('Failed to delete contact:', err)
+      toasts.error(`Failed to delete: ${(err as Error)?.message ?? err}`)
+    } finally {
+      deleting = false
+      pendingDelete = null
+    }
+  }
 
   let debounce: ReturnType<typeof setTimeout> | null = null
   function onSearchInput(e: Event) {
@@ -114,7 +154,7 @@
   })
 </script>
 
-<div class="flex-1 min-w-0 flex flex-col border-r border-border bg-background">
+<div class="flex-1 min-w-0 min-h-0 flex flex-col border-r border-border bg-background">
   <!-- Header / toolbar -->
   <div class="flex items-center justify-between px-4 py-3 border-b border-border">
     <div class="flex items-center gap-2 flex-1 min-w-0">
@@ -168,6 +208,16 @@
           class="w-5 h-5 text-muted-foreground"
         />
       </button>
+      {#if onAdd}
+        <button
+          class="p-2 rounded-md hover:bg-muted transition-colors"
+          title="Add contact"
+          onclick={onAdd}
+          type="button"
+        >
+          <Icon icon="mdi:plus" class="w-5 h-5 text-muted-foreground" />
+        </button>
+      {/if}
     </div>
   </div>
 
@@ -178,6 +228,7 @@
     label="Contacts"
     loading={contactsView.loading}
     onSelect={(id) => selectContact(id)}
+    onDelete={requestDelete}
     onFocusSearch={toggleSearchFocus}
   >
     {#snippet row(c: v1.Contact, { selected })}
@@ -199,3 +250,16 @@
     {/snippet}
   </ListPane>
 </div>
+
+<ConfirmDialog
+  bind:open={showDeleteConfirm}
+  title="Delete this contact?"
+  description={pendingDelete
+    ? `${pendingDelete.name || (pendingDelete.emails && pendingDelete.emails[0]) || '(unnamed)'} will be removed from your local contacts. Mail you've already sent to this address is not affected.`
+    : ''}
+  confirmLabel="Delete"
+  cancelLabel="Cancel"
+  variant="destructive"
+  loading={deleting}
+  onConfirm={confirmDelete}
+/>
