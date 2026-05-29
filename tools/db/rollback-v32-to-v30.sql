@@ -1,9 +1,17 @@
--- Aerion: rollback migration v31 (unified contact-record schema → legacy shape).
+-- Aerion: rollback the v0.3.0 schema (migrations 31 + 32) back to v0.2.5 (v30).
 --
 -- This script reconstructs the v30 schema (`contacts` + `carddav_contacts` tables)
--- from the v31 unified schema (`contact_records` + `contact_emails` + sidecars)
+-- from the v32 unified schema (`contact_records` + `contact_emails` + sidecars)
 -- via JOINs. No external backup file is needed — the unified schema IS the data;
 -- the old shape is just a denormalized projection of it.
+--
+-- Aerion versions and the schemas they ship with:
+--   - v0.2.5 (last released) → schema v30 (separate `contacts`, `carddav_contacts`)
+--   - v0.3.0 (upcoming)      → schema v32 (unified `contact_records` + UUID identity)
+--
+-- v31 was an intermediate development schema that never shipped — no real-world
+-- DB will ever be at v31 alone. The only rollback path that matters is v32 → v30
+-- (the released-to-released transition).
 --
 -- Inherent data loss on rollback:
 --   - Multi-field data (phones, addresses, URLs, IMPPs, org, title, note, bday,
@@ -13,6 +21,9 @@
 --     row again, with synthetic IDs of the form `<record_id>:<email>`. Older
 --     Aerion identifies contacts during sync by `href` (via GetContactByHref),
 --     not by ID, so this works correctly — only the IDs differ.
+--   - Local-record UUIDs are reduced back to email-keyed rows. Since v30's
+--     `contacts` table was already keyed by email, this is the natural form
+--     — the UUIDs were a v32-only concept.
 --
 -- USAGE
 --   1. Quit Aerion completely.
@@ -21,9 +32,9 @@
 --      (or whatever your DB path is — `~/Library/Application Support/Aerion/`
 --       on macOS, `%LOCALAPPDATA%\aerion\` on Windows).
 --   3. Run this script against your DB:
---        sqlite3 ~/.local/share/aerion/aerion.db < rollback-v31.sql
---   4. Launch the older Aerion (0.2.5 or earlier). It should start normally
---      and your contacts autocomplete should work.
+--        sqlite3 ~/.local/share/aerion/aerion.db < rollback-v32-to-v30.sql
+--   4. Launch the older Aerion (v0.2.5). It should start normally and your
+--      contacts autocomplete should work.
 --
 -- If anything goes wrong, restore from the backup you made in step 2.
 
@@ -45,7 +56,9 @@ CREATE INDEX idx_contacts_last_used ON contacts(last_used DESC);
 
 -- 2. Restore local-contact rows. One row per (record, email) pair where the
 --    record is sourced locally. Lossless: email/name/send_count/last_used/
---    name_overridden/kind all round-trip.
+--    name_overridden/kind all round-trip. The v32 record-id format (UUID) is
+--    discarded — v30 keys by email, which is the natural identity for the
+--    legacy schema.
 INSERT INTO contacts (email, display_name, send_count, last_used, created_at, name_overridden, kind)
 SELECT
     ce.email,
@@ -102,9 +115,10 @@ DROP TABLE contact_phones;
 DROP TABLE contact_emails;
 DROP TABLE contact_records;
 
--- 6. Roll back the migration tracker so older Aerion doesn't think v31 has
+-- 6. Roll back the migration tracker so older Aerion doesn't think v31/v32 have
 --    been applied. After this, older Aerion sees schema_version=30 and starts
---    normally.
+--    normally. The `>= 31` bound catches both v31 and v32 records — and any
+--    future intermediate schemas, if one slipped in.
 DELETE FROM migrations WHERE version >= 31;
 
 COMMIT;

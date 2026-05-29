@@ -2,7 +2,7 @@
 
 This guide walks you through rolling back Aerion's database schema after an upgrade. Schema migrations in Aerion are **forward-only by design** — the running application doesn't downgrade automatically. If you upgrade Aerion to a new version that ran a migration and then want to go back to an older version, you need to manually reshape the database so the older version can read it.
 
-Each section below covers one migration that introduced a schema change with a documented rollback path. Find the section that matches the migration you want to undo.
+Each section below covers a single released-to-released schema transition with a documented rollback path. Intermediate development schemas (e.g., the v31 that existed mid-cycle but never shipped) don't get their own section — there's no real-world DB at that state to roll back from. Find the section that matches your release-to-release transition.
 
 ## When you might need this
 
@@ -24,17 +24,23 @@ Each rollback section lists the **data lost on rollback** for that migration. Th
 
 ---
 
-## Rollback: v31 → v30 (Phase 2b.2.a)
+## Rollback: v32 → v30 (Aerion 0.3.0 → 0.2.5)
 
-**Introduced in**: Aerion 0.3.0 (migration 31).
+**Introduced in**: Aerion 0.3.0 (cumulative effect of migrations 31 + 32 — see notes below).
 
-**What v31 added**: Unified `contact_records` schema for both local and CardDAV contacts, with multi-field support (phones, addresses, URLs, IMPPs, organization, title, notes, birthday, nickname, categories). Replaced the legacy denormalized `contacts` (autocomplete-by-email) and `carddav_contacts` (per-email fan-out) tables.
+**What 0.3.0 changed since 0.2.5**:
+
+- **Migration 31** (Phase 2b.2.a): Replaced the legacy denormalized `contacts` (autocomplete-by-email) and `carddav_contacts` (per-email fan-out) tables with a unified `contact_records` schema covering both local and CardDAV contacts. Added multi-field support (phones, addresses, URLs, IMPPs, organization, title, notes, birthday, nickname, categories) and the `vcard_raw` round-trip column.
+- **Migration 32**: Switched local-record IDs from the synthetic `"local-<email>"` shape (a leftover from the v30 email-as-PK schema) to UUIDs. Brings local records in line with CardDAV's vCard-UID identity semantics — emails become fully editable sub-rows in `contact_emails` rather than encoded into the record id.
+
+Migrations 31 and 32 ship together in 0.3.0 — no real-world DB will ever stop between them. The rollback script below handles the cumulative v32 state, which is what your DB will be in after upgrading from 0.2.5.
 
 **Data lost on rollback to v30**:
 
 - All multi-field contact data — phone numbers, addresses, URLs, instant-messaging handles, organization, job title, notes, birthday, nickname, categories. The v30 schema has no columns for these, so they're dropped.
 - The `vcard_raw` round-trip preservation column. Means that the next time CardDAV sync runs under the older Aerion, it will re-fetch and re-parse vCards from the server — only the fields the older parser knows about (email + display name) survive.
 - CardDAV contacts' synthetic local IDs are reshaped. Older Aerion identifies CardDAV contacts during sync by `href` (server-side URL path), not by local ID, so this doesn't affect sync correctness — only the row IDs change.
+- Local-record UUIDs are dropped — v30 keys local contacts by email, which is the natural identity for the legacy schema.
 
 **What round-trips losslessly**:
 
@@ -56,18 +62,18 @@ Each rollback section lists the **data lost on rollback** for that migration. Th
 
    (Adjust the path for your OS — see "What you need" above.)
 
-3. **Download the rollback script** from the Aerion repo. On the branch where migration 31 lives (0.3.0 or later):
+3. **Download the rollback script** from the Aerion repo. On the branch where the 0.3.0 schema lives (0.3.0 or later):
 
    ```bash
-   curl -O https://raw.githubusercontent.com/hkdb/aerion/main/tools/db/rollback-v31.sql
+   curl -O https://raw.githubusercontent.com/hkdb/aerion/main/tools/db/rollback-v32-to-v30.sql
    ```
 
-   (Or download via your browser from `https://github.com/hkdb/aerion/blob/main/tools/db/rollback-v31.sql`.)
+   (Or download via your browser from `https://github.com/hkdb/aerion/blob/main/tools/db/rollback-v32-to-v30.sql`.)
 
 4. **Run the script against your DB**:
 
    ```bash
-   sqlite3 ~/.local/share/aerion/aerion.db < rollback-v31.sql
+   sqlite3 ~/.local/share/aerion/aerion.db < rollback-v32-to-v30.sql
    ```
 
    The script runs in a single transaction. If anything fails, no changes are committed and your DB is unchanged.
@@ -91,7 +97,7 @@ Restore the backup you made in step 2:
 cp ~/.local/share/aerion/aerion.db.before-rollback ~/.local/share/aerion/aerion.db
 ```
 
-You're back to the v31 state and can run the newer Aerion again.
+You're back to the v32 state and can run Aerion 0.3.0 again.
 
 If the issue persists, open a GitHub issue with the SQL error output and the version you were rolling back from / to.
 

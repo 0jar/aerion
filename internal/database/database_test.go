@@ -139,6 +139,79 @@ func TestMigrationV29_OAuthCompositeKey(t *testing.T) {
 	}
 }
 
+// TestMigrationV32_LocalRecordIDsRewrittenToUUIDs verifies that migration 32
+// transforms "local-<email>" record IDs into canonical UUIDv4s while keeping
+// the contact_emails references intact. Simulates the upgrade path for a user
+// who applied migration 31 (id format was "local-X@Y") and is now upgrading
+// to the schema that uses UUIDs.
+func TestMigrationV32_LocalRecordIDsRewrittenToUUIDs(t *testing.T) {
+	db := openTestDB(t)
+
+	// Seed legacy v31-shape data: a local record with the "local-<email>"
+	// synthetic id. Delete the migration 32 marker so it re-applies and
+	// rewrites this row.
+	if _, err := db.Exec(`
+		INSERT INTO contact_records (id, source, kind, fn)
+		VALUES ('local-alice@example.com', 'local', 'collected', 'Alice')
+	`); err != nil {
+		t.Fatalf("seed contact_records: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO contact_emails (record_id, email, send_count, is_primary)
+		VALUES ('local-alice@example.com', 'alice@example.com', 5, 1)
+	`); err != nil {
+		t.Fatalf("seed contact_emails: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM migrations WHERE version = 32`); err != nil {
+		t.Fatalf("clear migration 32 marker: %v", err)
+	}
+
+	// Re-run migrations — migration 32 should rewrite the seeded local- id.
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+
+	// Record id should now be a UUID (length 36, 4 dashes, hex elsewhere).
+	var id string
+	if err := db.QueryRow(`SELECT id FROM contact_records WHERE source = 'local'`).Scan(&id); err != nil {
+		t.Fatalf("query rewritten id: %v", err)
+	}
+	if len(id) != 36 {
+		t.Errorf("id length = %d, want 36 (UUID)", len(id))
+	}
+	if id == "local-alice@example.com" {
+		t.Errorf("id still has the legacy 'local-' shape: %q", id)
+	}
+
+	// contact_emails reference should point at the NEW id, not the old one.
+	var refCount, emailCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM contact_emails WHERE record_id = ?`, id).Scan(&refCount); err != nil {
+		t.Fatalf("count refs to new id: %v", err)
+	}
+	if refCount != 1 {
+		t.Errorf("contact_emails row pointing at new id: got %d, want 1", refCount)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM contact_emails WHERE record_id = 'local-alice@example.com'`).Scan(&emailCount); err != nil {
+		t.Fatalf("count orphan refs: %v", err)
+	}
+	if emailCount != 0 {
+		t.Errorf("contact_emails still references old id: got %d orphan refs", emailCount)
+	}
+
+	// Email content + autocomplete metadata are unchanged.
+	var email string
+	var sendCount int
+	if err := db.QueryRow(`SELECT email, send_count FROM contact_emails WHERE record_id = ?`, id).Scan(&email, &sendCount); err != nil {
+		t.Fatalf("query preserved fields: %v", err)
+	}
+	if email != "alice@example.com" {
+		t.Errorf("email = %q, want alice@example.com", email)
+	}
+	if sendCount != 5 {
+		t.Errorf("send_count = %d, want 5 (preserved through migration)", sendCount)
+	}
+}
+
 func TestPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	db, err := Open(path)

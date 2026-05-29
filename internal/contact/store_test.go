@@ -3,6 +3,7 @@ package contact
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hkdb/aerion/internal/database"
@@ -307,5 +308,95 @@ func TestListByKind(t *testing.T) {
 	}
 	if len(all) != 4 {
 		t.Errorf("unfiltered: got %d, want 4", len(all))
+	}
+}
+
+// isUUID returns true for canonical 8-4-4-4-12 hex with dashes.
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, r := range s {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if r != '-' {
+				return false
+			}
+			continue
+		}
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// TestAddOrUpdate_GeneratesUUID — migration 32 invariant: new local records
+// get a UUID identity, NOT the legacy "local-<email>" synthetic id.
+func TestAddOrUpdate_GeneratesUUID(t *testing.T) {
+	db := openTestDB(t)
+	store := NewStore(db.DB)
+
+	if err := store.AddOrUpdate("alice@example.com", "Alice"); err != nil {
+		t.Fatalf("AddOrUpdate: %v", err)
+	}
+
+	var id string
+	if err := db.QueryRow(`SELECT id FROM contact_records WHERE source='local' LIMIT 1`).Scan(&id); err != nil {
+		t.Fatalf("query record id: %v", err)
+	}
+	if !isUUID(id) {
+		t.Errorf("expected UUID record id, got %q", id)
+	}
+	if strings.HasPrefix(id, "local-") {
+		t.Errorf("record id still has the legacy 'local-' prefix: %q", id)
+	}
+}
+
+// TestAddOrUpdate_FindsExistingByEmail — idempotency: two calls with the same
+// email produce ONE record (lookup happens via contact_emails, not via the
+// synthetic id). send_count bumps to 2.
+func TestAddOrUpdate_FindsExistingByEmail(t *testing.T) {
+	db := openTestDB(t)
+	store := NewStore(db.DB)
+
+	if err := store.AddOrUpdate("bob@example.com", "Bob"); err != nil {
+		t.Fatalf("first AddOrUpdate: %v", err)
+	}
+	if err := store.AddOrUpdate("bob@example.com", "Bob"); err != nil {
+		t.Fatalf("second AddOrUpdate: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM contact_records WHERE source='local'`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 record after idempotent AddOrUpdate, got %d", count)
+	}
+
+	got, err := store.Get("bob@example.com")
+	if err != nil || got == nil {
+		t.Fatalf("Get: c=%v err=%v", got, err)
+	}
+	if got.SendCount != 2 {
+		t.Errorf("send_count = %d, want 2", got.SendCount)
+	}
+}
+
+// TestCreate_GeneratesUUID — Create (manual Add Contact path) also uses UUIDs.
+func TestCreate_GeneratesUUID(t *testing.T) {
+	db := openTestDB(t)
+	store := NewStore(db.DB)
+
+	if err := store.Create("carol@example.com", "Carol"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var id string
+	if err := db.QueryRow(`SELECT id FROM contact_records WHERE source='local' LIMIT 1`).Scan(&id); err != nil {
+		t.Fatalf("query record id: %v", err)
+	}
+	if !isUUID(id) {
+		t.Errorf("expected UUID record id, got %q", id)
 	}
 }

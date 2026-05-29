@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hkdb/aerion/internal/logging"
 	"github.com/rs/zerolog"
 )
@@ -182,7 +183,11 @@ func (s *Store) AddOrUpdate(email, displayName string) error {
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Brand new email — create a local-collected record + email pair.
-		recordID = "local-" + email
+		// Record id is a UUID (matches CardDAV — vCard UID semantics), NOT
+		// derived from email. The email lives in contact_emails as a fully-
+		// editable sub-row so future Edit UI can rename it without losing
+		// autocomplete metadata.
+		recordID = uuid.New().String()
 		if _, err := s.db.Exec(`
 			INSERT INTO contact_records (id, source, kind, fn, created_at, updated_at)
 			VALUES (?, 'local', 'collected', ?, ?, ?)
@@ -285,7 +290,10 @@ func (s *Store) Create(email, displayName string) error {
 	}
 
 	now := time.Now()
-	recordID := "local-" + email
+	// Record id is a UUID, NOT derived from email (matches CardDAV — vCard
+	// UID semantics). The email goes in contact_emails as a fully-editable
+	// sub-row.
+	recordID := uuid.New().String()
 	if _, err := s.db.Exec(`
 		INSERT INTO contact_records (id, source, kind, fn, created_at, updated_at)
 		VALUES (?, 'local', 'manual', ?, ?, ?)
@@ -310,8 +318,9 @@ func (s *Store) Create(email, displayName string) error {
 
 // DeleteRecord removes a contact record by ID. Cascades to contact_emails and
 // all sub-tables via FK ON DELETE CASCADE. Used by the extension API when the
-// caller has a record id (UUID for CardDAV, "local-<email>" for local). The
-// older Delete(email) method stays for back-compat with mail-side callers.
+// caller has a record id (UUID — both local and CardDAV records share the
+// vCard-UID identity shape as of migration 32). The older Delete(email)
+// method stays for back-compat with mail-side callers.
 func (s *Store) DeleteRecord(id string) error {
 	if id == "" {
 		return nil

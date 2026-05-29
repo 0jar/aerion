@@ -998,4 +998,86 @@ var migrations = []Migration{
 			DROP TABLE carddav_contacts;
 		`,
 	},
+	{
+		Version: 32,
+		SQL: `
+			-- Phase 2b.2 follow-up: rewrite local contact_records IDs from the
+			-- synthetic "local-<email>" form into real UUIDv4s.
+			--
+			-- Why: vCard/CardDAV identity is the UID (RFC 6350 §6.7.6) — one
+			-- UID, multiple EMAILs, EMAILs are fully editable. CardDAV records
+			-- already follow this (UUID + multi-email sub-rows). Local records
+			-- got the "local-<email>" shape in migration 31 as a leftover from
+			-- the legacy contacts(email PK) schema. That blocks email editing
+			-- and creates a record-per-email asymmetry between local and CardDAV.
+			--
+			-- This migration unifies the identity shape: every contact_records
+			-- row gets a UUID, and the EMAIL becomes a fully-editable sub-row in
+			-- contact_emails. The multi-field Edit/Create UIs landing in 2b.2.b
+			-- and 2b.2.c then design once for both sources.
+			--
+			-- Implementation: SQLite's randomblob() generates a fresh value per
+			-- call, so each row gets its own UUID. PRAGMA defer_foreign_keys
+			-- lets us update contact_records.id and the dependent
+			-- contact_emails.record_id (plus sub-tables) without intermediate
+			-- FK violations — the check is deferred to commit time.
+
+			PRAGMA defer_foreign_keys = ON;
+
+			-- Build the old-id → new-uuid mapping. One row per source='local'
+			-- record. The UUID format is canonical 8-4-4-4-12 hex with version
+			-- nibble 4 and variant nibble 8/9/a/b — matches RFC 4122 UUIDv4.
+			CREATE TEMPORARY TABLE _migration_32_idmap (
+				old_id TEXT PRIMARY KEY,
+				new_id TEXT NOT NULL UNIQUE
+			);
+
+			INSERT INTO _migration_32_idmap (old_id, new_id)
+			SELECT
+				id,
+				lower(
+					substr(hex(randomblob(4)), 1, 8) || '-' ||
+					substr(hex(randomblob(2)), 1, 4) || '-4' ||
+					substr(hex(randomblob(2)), 2, 3) || '-' ||
+					substr('89ab', 1 + (abs(random()) % 4), 1) ||
+					substr(hex(randomblob(2)), 2, 3) || '-' ||
+					substr(hex(randomblob(6)), 1, 12)
+				)
+			FROM contact_records
+			WHERE source = 'local';
+
+			-- Apply the new IDs to contact_records and every sub-table that
+			-- references record_id. carddav_record_state is excluded — its
+			-- record_id always points at source='carddav' records, never local.
+			UPDATE contact_records
+			SET id = (SELECT new_id FROM _migration_32_idmap WHERE old_id = contact_records.id)
+			WHERE id IN (SELECT old_id FROM _migration_32_idmap);
+
+			UPDATE contact_emails
+			SET record_id = (SELECT new_id FROM _migration_32_idmap WHERE old_id = contact_emails.record_id)
+			WHERE record_id IN (SELECT old_id FROM _migration_32_idmap);
+
+			UPDATE contact_phones
+			SET record_id = (SELECT new_id FROM _migration_32_idmap WHERE old_id = contact_phones.record_id)
+			WHERE record_id IN (SELECT old_id FROM _migration_32_idmap);
+
+			UPDATE contact_addresses
+			SET record_id = (SELECT new_id FROM _migration_32_idmap WHERE old_id = contact_addresses.record_id)
+			WHERE record_id IN (SELECT old_id FROM _migration_32_idmap);
+
+			UPDATE contact_urls
+			SET record_id = (SELECT new_id FROM _migration_32_idmap WHERE old_id = contact_urls.record_id)
+			WHERE record_id IN (SELECT old_id FROM _migration_32_idmap);
+
+			UPDATE contact_impps
+			SET record_id = (SELECT new_id FROM _migration_32_idmap WHERE old_id = contact_impps.record_id)
+			WHERE record_id IN (SELECT old_id FROM _migration_32_idmap);
+
+			UPDATE contact_categories
+			SET record_id = (SELECT new_id FROM _migration_32_idmap WHERE old_id = contact_categories.record_id)
+			WHERE record_id IN (SELECT old_id FROM _migration_32_idmap);
+
+			DROP TABLE _migration_32_idmap;
+		`,
+	},
 }
