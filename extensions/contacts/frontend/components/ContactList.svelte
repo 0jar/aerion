@@ -14,12 +14,17 @@
   // gains tags/groups in a later phase.
 
   import Icon from '@iconify/svelte'
+  import { _ } from 'svelte-i18n'
   import ListPane from '$lib/components/kit/ListPane.svelte'
   import ListRow from '$lib/components/kit/ListRow.svelte'
   import Avatar from '$lib/components/kit/Avatar.svelte'
   import ConfirmDialog from '$lib/components/kit/ConfirmDialog.svelte'
   import { contactsView, reloadContacts, selectContact, setSearchQuery, deleteLocalContact } from '$extensions/contacts/frontend/stores/contactsView.svelte'
+  import { contactSourcesStore } from '$extensions/contacts/frontend/stores/contactSources.svelte'
   import { toasts } from '$lib/stores/toast'
+  // Mobile-mode sidebar toggle. Kit primitive — renders itself only when
+  // narrow; no gating or icon choice needed in the extension.
+  import ResponsiveSidebarToggle from '$lib/components/kit/ResponsiveSidebarToggle.svelte'
   // @ts-ignore - wailsjs bindings
   import type { v1 } from '$wailsjs/go/models'
 
@@ -44,7 +49,8 @@
   // Delete-confirmation state for keyboard-triggered deletes. ContactDetail
   // has its own button-triggered confirm dialog; this one fires when the user
   // has the LIST focused and hits Delete/Backspace on the highlighted row.
-  // Local-only — CardDAV/OAuth writes land in 2b.2.b/c.
+  // Mirrors ContactDetail's writability gate: local always writable; CardDAV
+  // gated on the source's writable flag.
   let showDeleteConfirm = $state(false)
   let pendingDelete = $state<v1.Contact | null>(null)
   let deleting = $state(false)
@@ -52,8 +58,9 @@
   function requestDelete(id: string) {
     const found = contactsView.contacts.find(c => c.id === id)
     if (!found) return
-    // Match the writability gate ContactDetail uses for its Delete button.
-    if (found.sourceId !== 'aerion') return
+    const writable =
+      found.sourceId === 'aerion' || contactSourcesStore.isSourceWritable(found.sourceId)
+    if (!writable) return
     pendingDelete = found
     showDeleteConfirm = true
   }
@@ -63,10 +70,10 @@
     deleting = true
     try {
       await deleteLocalContact(pendingDelete.id)
-      toasts.success('Contact deleted')
+      toasts.success($_('contacts.toast.deleted'))
     } catch (err) {
       console.error('Failed to delete contact:', err)
-      toasts.error(`Failed to delete: ${(err as Error)?.message ?? err}`)
+      toasts.error($_('contacts.toast.failedDelete'))
     } finally {
       deleting = false
       pendingDelete = null
@@ -158,13 +165,14 @@
   <!-- Header / toolbar -->
   <div class="flex items-center justify-between px-4 py-3 border-b border-border">
     <div class="flex items-center gap-2 flex-1 min-w-0">
+      <ResponsiveSidebarToggle />
       {#if showSearch}
         <div class="flex items-center gap-1 bg-muted rounded-md px-2 flex-1 min-w-0">
           <Icon icon="mdi:magnify" class="w-4 h-4 text-muted-foreground flex-shrink-0" />
           <input
             bind:this={searchInputEl}
             type="text"
-            placeholder="Search contacts..."
+            placeholder={$_('contacts.list.searchPlaceholder')}
             class="bg-transparent border-none outline-none text-sm py-1.5 w-full min-w-[200px] text-foreground"
             value={searchInput}
             oninput={onSearchInput}
@@ -174,7 +182,7 @@
             <button
               onclick={clearSearch}
               class="p-0.5 hover:bg-muted-foreground/20 rounded"
-              title="Clear search"
+              title={$_('contacts.list.searchClear')}
               type="button"
             >
               <Icon icon="mdi:close" class="w-4 h-4 text-muted-foreground" />
@@ -182,7 +190,7 @@
           {/if}
         </div>
       {:else}
-        <h2 class="font-semibold text-foreground truncate">Contacts</h2>
+        <h2 class="font-semibold text-foreground truncate">{$_('contacts.list.header')}</h2>
         <span class="text-sm text-muted-foreground flex-shrink-0">
           {contactsView.contacts.length}
         </span>
@@ -191,7 +199,7 @@
     <div class="flex items-center gap-1 flex-shrink-0">
       <button
         class="p-2 rounded-md hover:bg-muted transition-colors {showSearch ? 'bg-muted' : ''}"
-        title={showSearch ? 'Close search' : 'Search'}
+        title={showSearch ? $_('contacts.list.searchClose') : $_('contacts.list.searchOpen')}
         onclick={toggleSearchFocus}
         type="button"
       >
@@ -199,7 +207,7 @@
       </button>
       <button
         class="p-2 rounded-md hover:bg-muted transition-colors"
-        title={sortOrder === 'name-asc' ? 'Sort: A → Z' : 'Sort: Z → A'}
+        title={sortOrder === 'name-asc' ? $_('contacts.list.sortAsc') : $_('contacts.list.sortDesc')}
         onclick={toggleSort}
         type="button"
       >
@@ -211,7 +219,7 @@
       {#if onAdd}
         <button
           class="p-2 rounded-md hover:bg-muted transition-colors"
-          title="Add contact"
+          title={$_('contacts.list.addTooltip')}
           onclick={onAdd}
           type="button"
         >
@@ -225,7 +233,7 @@
     items={sortedContacts}
     selectedId={contactsView.selectedContactId}
     focusSlot="messageList"
-    label="Contacts"
+    label={$_('contacts.list.label')}
     loading={contactsView.loading}
     onSelect={(id) => selectContact(id)}
     onDelete={requestDelete}
@@ -235,7 +243,7 @@
       <ListRow {selected} onclick={() => selectContact(c.id)}>
         <Avatar email={primaryEmail(c)} name={c.name} density="standard" />
         <span class="flex flex-col min-w-0 flex-1">
-          <span class="font-medium truncate text-foreground">{c.name || primaryEmail(c) || '(unnamed)'}</span>
+          <span class="font-medium truncate text-foreground">{c.name || primaryEmail(c) || $_('contacts.common.unnamed')}</span>
           {#if primaryEmail(c) && primaryEmail(c) !== c.name}
             <span class="text-xs text-muted-foreground truncate">{primaryEmail(c)}</span>
           {/if}
@@ -245,7 +253,7 @@
 
     {#snippet empty()}
       <p class="m-4 text-sm text-muted-foreground">
-        {searchInput ? 'No contacts match your search.' : 'No contacts.'}
+        {searchInput ? $_('contacts.list.emptySearch') : $_('contacts.list.empty')}
       </p>
     {/snippet}
   </ListPane>
@@ -253,12 +261,21 @@
 
 <ConfirmDialog
   bind:open={showDeleteConfirm}
-  title="Delete this contact?"
+  title={$_('contacts.delete.title')}
   description={pendingDelete
-    ? `${pendingDelete.name || (pendingDelete.emails && pendingDelete.emails[0]) || '(unnamed)'} will be removed from your local contacts. Mail you've already sent to this address is not affected.`
+    ? $_(
+        pendingDelete.sourceId === 'aerion'
+          ? 'contacts.delete.descriptionLocal'
+          : 'contacts.delete.descriptionCardDAV',
+        {
+          values: {
+            name: pendingDelete.name || (pendingDelete.emails && pendingDelete.emails[0]) || $_('contacts.common.unnamed'),
+          },
+        },
+      )
     : ''}
-  confirmLabel="Delete"
-  cancelLabel="Cancel"
+  confirmLabel={$_('contacts.common.delete')}
+  cancelLabel={$_('contacts.common.cancel')}
   variant="destructive"
   loading={deleting}
   onConfirm={confirmDelete}

@@ -622,6 +622,7 @@ func (s *Store) GetRecord(id string) (*Record, error) {
 		       COALESCE(fn, ''), COALESCE(n_given, ''), COALESCE(n_family, ''),
 		       COALESCE(org, ''), COALESCE(title, ''), COALESCE(note, ''),
 		       COALESCE(bday, ''), COALESCE(nickname, ''),
+		       COALESCE(photo_data, ''), COALESCE(photo_media_type, ''), COALESCE(photo_url, ''),
 		       COALESCE(vcard_raw, ''), created_at, updated_at
 		FROM contact_records
 		WHERE id = ?
@@ -634,6 +635,7 @@ func (s *Store) GetRecord(id string) (*Record, error) {
 		&rec.Fn, &rec.NGiven, &rec.NFamily,
 		&rec.Org, &rec.Title, &rec.Note,
 		&rec.Bday, &rec.Nickname,
+		&rec.PhotoData, &rec.PhotoMediaType, &rec.PhotoURL,
 		&rec.VCardRaw, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -905,8 +907,9 @@ func UpsertRecordTx(tx DBOrTx, rec *Record) error {
 	// Upsert the record row.
 	if _, err := tx.Exec(`
 		INSERT INTO contact_records
-			(id, source, kind, source_ref, fn, n_given, n_family, org, title, note, bday, nickname, vcard_raw, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, source, kind, source_ref, fn, n_given, n_family, org, title, note, bday, nickname,
+			 photo_data, photo_media_type, photo_url, vcard_raw, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			source = excluded.source,
 			kind = excluded.kind,
@@ -919,11 +922,15 @@ func UpsertRecordTx(tx DBOrTx, rec *Record) error {
 			note = excluded.note,
 			bday = excluded.bday,
 			nickname = excluded.nickname,
+			photo_data = excluded.photo_data,
+			photo_media_type = excluded.photo_media_type,
+			photo_url = excluded.photo_url,
 			vcard_raw = excluded.vcard_raw,
 			updated_at = excluded.updated_at
 	`,
 		rec.ID, rec.Source, nullableString(rec.Kind), nullableString(rec.SourceRef),
 		rec.Fn, rec.NGiven, rec.NFamily, rec.Org, rec.Title, rec.Note, rec.Bday, rec.Nickname,
+		nullableString(rec.PhotoData), nullableString(rec.PhotoMediaType), nullableString(rec.PhotoURL),
 		nullableString(rec.VCardRaw),
 		rec.CreatedAt, rec.UpdatedAt,
 	); err != nil {

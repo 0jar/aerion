@@ -14,7 +14,8 @@
       "$wailsjs/*": ["wailsjs/*"],
       "@iconify/*": ["node_modules/@iconify/*"],
       "svelte": ["node_modules/svelte/src/runtime/index"],
-      "svelte/*": ["node_modules/svelte/*"]
+      "svelte/*": ["node_modules/svelte/*"],
+      "svelte-i18n": ["node_modules/svelte-i18n"]
     },
     "allowJs": true,
     "checkJs": true,

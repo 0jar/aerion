@@ -2,7 +2,7 @@
 
 Developer reference for building first-party extensions on top of Aerion's core.
 
-> **Status (v0.3.x):** First-party extensions only — extensions ship compiled into the binary and are individually toggleable in Settings. A community-extension runtime (dynamic loading, sandboxing, manifest verification) is deferred to v0.4+; see [§ Not yet implemented](#not-yet-implemented).
+> **Status (today):** First-party extensions only — extensions ship compiled into the binary and are individually toggleable in Settings. The bridge architecture documented here is **designed so the project can accept third-party extensions via PR if community-extension demand emerges**, but no third-party-PR intake is open today and there's no commitment to open one. A full community-extension runtime (dynamic loading, sandboxing, manifest verification) is a separate, later possibility contingent on the same demand signal; see [§ Not yet implemented](#not-yet-implemented).
 
 This doc is the contract every Aerion extension uses to interact with the host and with other extensions. Every claim is backed by a file path you can read directly — no second source of truth.
 
@@ -26,8 +26,9 @@ This doc is the contract every Aerion extension uses to interact with the host a
 14. [Frontend conventions](#frontend-conventions)
 15. [Extension UI Kit](#extension-ui-kit)
 16. [Write capability](#write-capability)
-17. [Distribution model](#distribution-model)
-18. [Not yet implemented](#not-yet-implemented)
+17. [Contributing a new extension](#contributing-a-new-extension)
+18. [Distribution model](#distribution-model)
+19. [Not yet implemented](#not-yet-implemented)
 
 ---
 
@@ -39,7 +40,7 @@ Aerion's extension system lets first-party extensions (Calendar, Contacts, Notes
 2. **Per-extension SQLite isolation.** Each extension owns its own database file under `<dataDir>/extensions/<name>/data.db`. Extensions never query each other's tables — cross-extension data access goes through Go interfaces in `internal/core/api/v1`.
 3. **Shared infrastructure stays shared.** One Wails process, one OAuth manager, one credential store, one IPC bus, one notification system. The extension system adds an additional **Auth Broker** layer so extensions never see access tokens or refresh tokens.
 4. **Inline + detach pattern.** Every extension works inside the main window. Workflows can optionally pop out to a separate window via IPC (identical to the existing detached composer; not yet exercised by any extension in v0.3.x).
-5. **Zero overhead when disabled.** An extension's DB file exists (migrations applied) but no sync, no background work, no UI rendering. The only cost is binary size.
+5. **Strict zero overhead when disabled.** Each extension contributes ONE `Bridge` struct allocation (~80 bytes) at App construction. The Bridge's per-extension SQLite, stores, and API wrapper are **lazy-initialized via `sync.Once` on the first enabled method call** — disabled extensions never open their database file, never construct stores, never allocate beyond the bridge stub. The only baseline cost is binary size + 80 bytes per bridge.
 
 Full architectural rationale lives in [`context/EXTENSION_ARCHITECTURE.md`](../context/EXTENSION_ARCHITECTURE.md). This doc is the **developer reference**; that doc is the **design rationale**.
 
@@ -85,17 +86,20 @@ Full architectural rationale lives in [`context/EXTENSION_ARCHITECTURE.md`](../c
 
 | New code is... | Goes in |
 |---|---|
-| Extension's Go backend (logic, API impl, register hook) | `extensions/<name>/backend/` |
+| Extension's Go backend (logic, API impl, lifecycle hooks) | `extensions/<name>/backend/` |
+| **Extension's Wails-bound surface (Bridge struct + all bound methods)** | `extensions/<name>/backend/bridge.go` |
 | Extension's manifest metadata | `extensions/<name>/manifest.json` + `manifest.go` (root, embeds JSON) |
 | Extension's Svelte components | `extensions/<name>/frontend/components/` |
 | Extension's Svelte stores | `extensions/<name>/frontend/stores/` |
 | Extension's account-setup hook panel | `extensions/<name>/frontend/hooks/` |
-| Extension's Wails-bound surface (App methods) | `app/extension_<name>.go` — see below |
+| Extension's host-side wiring (one embed field + one constructor call) | `app/extension_<name>.go` — see below |
 | A type or interface ALL extensions might consume | `internal/core/api/v1/` |
 | Shared host-side scaffolding (registry, broker, wrappers) | `internal/extensions/` |
 | Host-owned UI used by the rail/dialog (not extension-specific) | `frontend/src/lib/components/rail/`, etc. |
 
-**The `app/` exception:** Wails v2 binds methods on the `App` struct's receiver. Go doesn't allow methods on a type from another package. So `app/extension_<name>.go` stays in `app/` even though it conceptually belongs to the extension. The files are thin adapters that delegate to the extension's `backend/` package. When adding a new extension, add its Wails surface here in a new `extension_<name>.go` file.
+**The Bridge pattern + the `app/` minimum**: Wails v2 binds methods on structs in the `Bind` list at `wails.Run` time, generating frontend bindings via Go reflection. Because Go's reflection enumerates methods on **embedded** types via standard method promotion, the host (App) can embed a `*Bridge` struct from each extension's package; the Bridge's methods then appear in the generated `App.d.ts` as if they were on App. The actual method definitions live in `extensions/<name>/backend/bridge.go`. The only host-side file (`app/extension_<name>.go`) is reduced to about 10 lines: importing the extension's package, declaring the embedded field on App, and one constructor call that wires the bridge's host-provided dependencies during Startup.
+
+**Method naming — the `<Extension>_` prefix rule (HARD):** every Wails-bound bridge method MUST be named `<ExtensionName>_<MethodName>` (e.g., `Contacts_UpdateContact`, `Calendar_CreateEvent`). Embedded-method promotion happens in a single flat namespace on App; without the prefix, two extensions that both define `UpdateRecord()` would collide silently. The prefix is enforced by code review when accepting 3rd-party extension PRs — see [§ Contributing a new extension](#contributing-a-new-extension).
 
 Extensions DO NOT import from other extensions' Go packages. They go through `coreapi.Core.Extension(id)` (see [§ Core interface](#core-interface)).
 
@@ -105,7 +109,7 @@ Extensions DO NOT import from other extensions' Go packages. They go through `co
 
 Every first-party extension carries a `manifest.json` at its repo root and exposes a single Go object implementing `coreapi.Extension`. The host reads the manifest to build the Settings UI listing and calls `Register()` at startup to wire the extension's UI surfaces.
 
-This shape is **subprocess-ready**: when community extensions land in v0.4+ (see [§ Distribution model](#distribution-model)), the same manifest fields and the same Register handshake will move across the IPC boundary unchanged. Nothing in the manifest references Go-specific concepts (no module paths, no compiled-type names).
+This shape is **subprocess-ready**: if community-extension demand emerges and a subprocess runtime is built (see [§ Distribution model](#distribution-model)), the same manifest fields and the same Register handshake move across the IPC boundary unchanged. Nothing in the manifest references Go-specific concepts (no module paths, no compiled-type names).
 
 ### Manifest schema
 
@@ -182,25 +186,20 @@ The returned `Unregister` removes everything Register wired. Called by the host 
 
 ### Example: Contacts extension
 
-[`extensions/contacts/backend/register.go`](../extensions/contacts/backend/register.go):
+The Contacts extension splits into TWO Go types in `extensions/contacts/backend/`:
+
+**1. `Extension` — lifecycle handle ([`extensions/contacts/backend/register.go`](../extensions/contacts/backend/register.go))**. Tiny on purpose: manifest + the `Register` handshake. No stores. No API. Allocating one costs a manifest copy.
 
 ```go
 type Extension struct {
-    api      *API
-    store    *Store
     manifest coreapi.Manifest
 }
 
-func New(localStore *contact.Store, carddavStore *carddav.Store, store *Store) *Extension {
-    return &Extension{
-        api:      NewAPI(localStore, carddavStore),
-        store:    store,
-        manifest: contacts.Manifest(),
-    }
+func NewExtension() *Extension {
+    return &Extension{manifest: contacts.Manifest()}
 }
 
 func (e *Extension) Manifest() coreapi.Manifest { return e.manifest }
-func (e *Extension) API() *API { return e.api }
 
 func (e *Extension) Register(core coreapi.Core) (coreapi.Unregister, error) {
     unregRail, err := core.UI().RegisterRailTab(coreapi.RailTabRequest{
@@ -219,26 +218,93 @@ func (e *Extension) Register(core coreapi.Core) (coreapi.Unregister, error) {
 }
 ```
 
-### Host-side startup
-
-App.Startup iterates `a.knownExtensions []coreapi.Extension` and calls `Register` on each:
+**2. `Bridge` — the Wails-bound surface ([`extensions/contacts/backend/bridge.go`](../extensions/contacts/backend/bridge.go))**. Holds host dependencies, all `Contacts_`-prefixed Wails methods, and a `sync.Once`-gated lazy initializer for the extension's `*Store` + `*API`:
 
 ```go
-a.contactsExt = extcontactsbe.New(a.contactStore, a.carddavStore, a.extContactsStore)
-a.knownExtensions = []coreapi.Extension{a.contactsExt}
+type BridgeDeps struct {
+    SettingsStore SettingsStore        // for the enabled-flag gate
+    Paths         *platform.Paths      // for the extension's SQLite dir
+    DB            *database.DB         // shared writable DB handle for local contacts
+    Emitter       EventEmitter         // for runtime.EventsEmit (kept generic — no Wails import in extensions/)
+    GetCardDAVPassword CardDAVPasswordFunc // closure for per-source basic-auth lookup — replaces direct internal/credentials import
+    Core          coreapi.Core         // host coreapi handle — bridge calls Core.Contacts().ListSources()/LinkAccountSource() for source management
+}
 
-core := newCore(a)
-for _, ext := range a.knownExtensions {
-    unreg, err := ext.Register(core)
-    if err != nil {
-        log.Warn().Err(err).Str("extension", ext.Manifest().ID).Msg("Failed to register extension")
-        continue
-    }
-    a.extensionUnregs = append(a.extensionUnregs, unreg)
+type Bridge struct {
+    deps     BridgeDeps
+    initOnce sync.Once
+    initErr  error
+    api      *API
+}
+
+func NewBridge(deps BridgeDeps) *Bridge { return &Bridge{deps: deps} }
+
+// Gate every bound method. Disabled = empty results, never errors.
+func (b *Bridge) gateEnabled() bool {
+    on, _ := b.deps.SettingsStore.IsExtensionEnabled("contacts")
+    return on
+}
+
+// sync.Once — first enabled call opens the SQLite file, applies migrations,
+// constructs Store + API. Subsequent calls hit the live API directly.
+func (b *Bridge) ensureInit() error {
+    b.initOnce.Do(func() { /* open store, build API, capture initErr */ })
+    return b.initErr
+}
+
+// All bound methods follow the same shape.
+// Contacts_ prefix is mandatory — embedded promotion shares one App namespace.
+func (b *Bridge) Contacts_ListContactsForBrowse(query, sourceID string, limit, offset int) ([]coreapi.Contact, error) {
+    if !b.gateEnabled() { return nil, nil }
+    if err := b.ensureInit(); err != nil { return nil, err }
+    return b.api.ListContacts(query, sourceID, limit, offset)
+}
+// ... Contacts_GetContactDetail, Contacts_CreateContact, Contacts_UpdateContact,
+//     Contacts_DeleteLocalContact, Contacts_ResizeContactPhoto,
+//     Contacts_ListAddressbooks, Contacts_ListSources, Contacts_LinkAccountSource ...
+```
+
+### Host-side startup
+
+`app/app.go` embeds the bridge **directly on the App struct**. Go's standard embedded-field method promotion exposes every `Contacts_*` method as if it were on App, so Wails reflection picks them up at `wails.Run` time and emits them into `frontend/wailsjs/go/app/App.{js,d.ts}`. No `Bind` list edit required, no per-method adapter.
+
+```go
+// app/app.go
+type App struct {
+    *extcontactsbe.Bridge   // embedded — promotes Contacts_* methods to App
+    // ... existing App fields ...
+}
+
+// app/app.go Startup:
+a.initContactsExtension()  // wires bridge dependencies
+a.contactsExt = extcontactsbe.NewExtension()
+a.knownExtensions = []coreapi.Extension{a.contactsExt}
+// ... iterate and call Register on each, as before ...
+```
+
+The wiring file ([`app/extension_contacts.go`](../app/extension_contacts.go), ~28 LOC total) is the entire host-side cost of the Contacts extension:
+
+```go
+package app
+
+import (
+    extcontactsbe "github.com/hkdb/aerion/extensions/contacts/backend"
+    wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+func (a *App) initContactsExtension() {
+    a.Bridge = extcontactsbe.NewBridge(extcontactsbe.BridgeDeps{
+        SettingsStore: a.settingsStore,
+        Paths:         a.paths,
+        DB:            a.db,
+        Emitter: func(eventName string, payload any) {
+            wailsRuntime.EventsEmit(a.ctx, eventName, payload)
+        },
+    })
 }
 ```
 
-When you add a new first-party extension, build its `Extension` struct and append to `a.knownExtensions`. Everything else (Settings UI listing, rail rendering, hook discovery) reads through this slice.
+When you add a new first-party extension, the host side is similarly thin: embed the extension's `*Bridge` on App, add an `init<Name>Extension()` helper, append the lifecycle `Extension` to `a.knownExtensions`. Everything else (Settings UI listing, rail rendering, hook discovery, Wails bindings generation) flows automatically.
 
 ---
 
@@ -247,6 +313,26 @@ When you add a new first-party extension, build its `Extension` struct and appen
 Package: `github.com/hkdb/aerion/internal/core/api/v1` (12 files; entirely interface + type declarations, no logic).
 
 The full surface is defined in [`internal/core/api/v1/`](../internal/core/api/v1). Every extension method receives a `coreapi.Core` (see [§ Core interface](#core-interface)) at initialization. From there it grabs the surfaces it needs.
+
+This is the complete list of APIs your extension is allowed to consume. Anything not on this list is off-limits — see [§ The two hard rules for any new extension](#the-two-hard-rules-for-any-new-extension). If a surface you need isn't here (or is here but returns `ErrUnimplemented`), open a Feature Request issue — see [§ Requesting a new extension API](#requesting-a-new-extension-api).
+
+### Status at a glance
+
+✅ usable today  ·  ⚠️ partial (some methods return `ErrUnimplemented`)  ·  🚧 interface only (every method returns `ErrUnimplemented`)
+
+| Surface | Status | What works today | Notes |
+|---|---|---|---|
+| `core.Mail()` | ⚠️ | `ListMessages`, `GetMessage`, `ListFolders`, `GetSpecialFolder` | Mutators (`MoveMessage`, `Archive`, `Trash`, `SetFlags`, `AppendMessage`) and `SubscribeToMailEvents` return `ErrUnimplemented`. |
+| `core.Composer()` | ⚠️ | `OpenComposer` (mailto URL form) | `Attachments` and `ReplyTo` in `ComposeRequest` return `ErrUnimplemented`. |
+| `core.Contacts()` | ⚠️ | `ListSources`, `LinkAccountSource`, `ListAddressbooks` | Source-management surface used by the Contacts extension itself (and available to future cross-extension consumers like Calendar). Contact CRUD methods (`Search`/`Get`/`List`/`Create`/`Update`/`Delete`) still return `ErrUnimplemented` at this surface — they're owned by the Contacts extension's Bridge and routing them through coreImpl would force the extension to initialize even when disabled. |
+| `core.Auth()` | ⚠️ | `HTTPClient(accountID, scopes)` — bearer + transparent refresh | `IMAPClient` and `SMTPClient` return `ErrUnimplemented`. |
+| `core.UI()` | ⚠️ | `RegisterRailTab`, `RegisterAccountSetupHook` | `RegisterSettingsTab`, `RegisterContextMenuItem`, `RegisterInboxView` accept registrations but no consumer reads them yet. |
+| `core.Storage()` | ✅ | `KV(extensionID)` backed by per-extension `ext_kv` table | Per-extension SQLite (your own `*sql.DB`) is the parallel persistence path — see [§ Per-extension storage](#per-extension-storage). |
+| `core.Notifications()` | 🚧 | — | `Show` interface only; no consumer wired. |
+| `core.Events()` | 🚧 | — | `Publish` / `Subscribe` interface only; no event bus wired. |
+| `core.Extension(id)` | 🚧 | Returns `(nil, false)` always | Typed cross-extension handles not wired yet. |
+
+Each subsection below documents the interface signatures + behavior in detail.
 
 ### Stability promise
 
@@ -688,29 +774,35 @@ The dispatch in `AccountDialog.svelte` is a static `{#if hook.component === '...
 
 ### What runs at `App.Startup` regardless of enable state
 
-Per [`context/EXTENSION_ARCHITECTURE.md`](../context/EXTENSION_ARCHITECTURE.md), every extension's data store opens eagerly so its schema stays valid across enable/disable cycles:
+Three things, **and nothing else**, run unconditionally per extension at startup:
+
+1. **Bridge struct allocation** — `app/extension_<name>.go` calls `extbe.NewBridge(...)`. This is a zero-cost struct literal with host-dependency fields only; no SQLite, no migrations, no stores.
+2. **Extension lifecycle struct allocation** — `extbe.NewExtension()` returns a manifest holder. Manifest copy only.
+3. **`Extension.Register(core)`** — wires descriptive UI registrations (rail tab, account-setup hook) into the host's registries so the Settings UI and account-setup dialog can always list them. The frontend filters at render time on enabled state.
 
 ```go
 // In app/app.go Startup:
-a.extContactsStore = extcontacts.NewStore(a.paths.Data)  // applies migrations
-a.authBroker      = extauth.NewBroker(a.credStore, a.oauth2Manager)
+a.initContactsExtension()                          // 1: bridge alloc
+a.contactsExt = extcontactsbe.NewExtension()       // 2: lifecycle alloc
+a.knownExtensions = []coreapi.Extension{a.contactsExt}
+
+core := newCoreForExtension(a, a.contactsExt)
+unreg, err := a.contactsExt.Register(core)         // 3: UI registrations
 // ...
 ```
 
-`NewStore` opens the file (creating it if needed) and applies any pending migrations. The first launch after installing a new Aerion build performs the migrations transparently.
+**Crucially, the per-extension SQLite file is NOT opened at startup.** Migrations are deferred — they fire the first time the user enables the extension *and* the bridge's first Wails method runs (which calls `ensureInit()` under a `sync.Once`). A user who never enables an extension never pays for its database. This is a deliberate departure from earlier drafts of `context/EXTENSION_ARCHITECTURE.md` that opened the file eagerly; the lightweight-by-default invariant trumped the cross-cycle migration durability concern, since SQLite migrations run idempotently from current schema version anyway.
 
 ### What runs only when enabled
 
-Background services (sync schedulers, IDLE managers, event publishers) start only when the extension is enabled. The architecture doc shows the pattern:
+Two things gate on the enabled flag:
 
-```go
-if a.isExtensionEnabled("calendar") {
-    a.calendarScheduler = calendar.NewScheduler(a.calendarStore, a.coreAPI)
-    a.calendarScheduler.Start()
-}
-```
+1. **`Bridge.gateEnabled()` short-circuits Wails-bound methods.** Disabled = the method returns `nil`/empty (no error) before `ensureInit()` is ever called. Frontend code never needs to check enabled state.
+2. **Lazy init fires once.** The first enabled call invokes `ensureInit()`, which opens SQLite, applies migrations, and constructs `Store + API`. Subsequent calls reuse the live API.
 
-Wails-bound methods on disabled extensions return EMPTY results (no error). The frontend can always call methods without checking enabled state; nothing happens if the extension is off.
+Background services (sync schedulers, IDLE managers, event publishers) follow the same lazy pattern — start them inside `ensureInit()` rather than at `Startup`, so a disabled extension contributes no goroutines, no timers, and no file handles. The Bridge struct itself is the only thing in memory.
+
+**Implication for the user:** enabling an extension after Aerion is launched works — the first method call performs the migrations + initialization transparently. Disabling an extension stops new Wails calls from reaching its API; the already-allocated Store + API stay in memory until the next app restart. Users who want to **fully reclaim memory** after disabling must restart — the project deliberately accepts this trade-off because (a) disable→memory-free without restart would require a coordinated shutdown of the extension's goroutines that isn't worth designing yet, and (b) Aerion is a long-running desktop app where restart is cheap.
 
 ### Enable / disable
 
@@ -742,7 +834,9 @@ When you ship a new extension, add its key constant alongside the existing two. 
 
 ## Wails-bound surface
 
-The frontend calls these via the generated Wails bindings at `frontend/wailsjs/go/app/App.{js,d.ts}`. After modifying any Wails-bound method on `*App`, run `make generate` to regenerate the bindings.
+The frontend calls these via the generated Wails bindings at `frontend/wailsjs/go/app/App.{js,d.ts}`. After modifying any Wails-bound method on `*App` OR on an embedded `*Bridge`, run `make generate` to regenerate the bindings.
+
+### Host methods (`App` package, no prefix)
 
 | Method | Purpose |
 |---|---|
@@ -753,8 +847,34 @@ The frontend calls these via the generated Wails bindings at `frontend/wailsjs/g
 | `App.ListExtensionRailTabs() ([]v1.RailTabRequest, error)` | Rail tabs for currently-enabled extensions only. Source: [`app/extension_ui.go`](../app/extension_ui.go). |
 | `App.ListAccountSetupHooksForProvider(provider string) ([]v1.AccountSetupHookRequest, error)` | Hooks matching a provider, returned regardless of enable state (hooks are the discovery surface that enables an extension). Called by `AccountDialog.svelte` after a new account is created. |
 | `App.ListExtensions() ([]app.ExtensionInfo, error)` | Full extension listing for Settings → Extensions tab. Returns manifest fields + current `enabled` state per extension. Iterates `a.knownExtensions`. Source: [`app/extension_ui.go`](../app/extension_ui.go). |
-| `App.ListContactsForBrowse(query, sourceID string, limit, offset int) ([]v1.Contact, error)` | Contacts extension browse — wraps `extcontacts.API.ListContacts`. Returns `nil` when Contacts is disabled. Source: [`app/extension_contacts.go`](../app/extension_contacts.go). |
-| `App.GetContactDetail(emailOrID string) (*v1.Contact, error)` | Contacts extension single-contact lookup — wraps `extcontacts.API.GetContact`. Returns `nil` when Contacts is disabled. |
+
+### Extension bridge methods (`<Extension>_` prefix, defined on the embedded `*Bridge`)
+
+These methods live in `extensions/<name>/backend/bridge.go` and surface on `App` via embedded-struct method promotion. The `<Extension>_` prefix is **mandatory** — embedded promotion shares one App namespace across all extensions, so unprefixed names would collide silently. The frontend imports them with aliases for ergonomics:
+
+```ts
+// extensions/contacts/frontend/stores/contactsView.svelte.ts
+import {
+  Contacts_ListContactsForBrowse as ListContactsForBrowse,
+  Contacts_GetContactDetail     as GetContactDetail,
+  Contacts_UpdateContact        as UpdateContact,
+  // ...
+} from '$wailsjs/go/app/App'
+```
+
+Currently bound by the Contacts extension's bridge (all gate on `extension_contacts_enabled`; all lazy-init on first enabled call):
+
+| Method | Purpose |
+|---|---|
+| `App.Contacts_ListContactsForBrowse(query, sourceID string, limit, offset int) ([]v1.Contact, error)` | Browse listing — wraps `extcontacts.API.ListContacts`. Returns `nil` when Contacts is disabled. |
+| `App.Contacts_GetContactDetail(emailOrID string) (*v1.Contact, error)` | Single-contact detail load. |
+| `App.Contacts_CreateContact(input v1.ContactCreateInput) (string, error)` | Create new contact. Dispatches by `input.SourceID`: `local:manual` → local store; CardDAV UUID → server PUT to the source's addressbook. Track B (2b.2.c). |
+| `App.Contacts_UpdateContact(id string, patch v1.ContactPatch) error` | Multi-field patch update (local or CardDAV; backend dispatches by source). |
+| `App.Contacts_DeleteLocalContact(email string) error` | Delete contact (local cascade or CardDAV server DELETE). |
+| `App.Contacts_ResizeContactPhoto(b64 string, maxSide int) (string, error)` | Backend image resize for the Edit dialog's photo picker (decodes base64 → CatmullRom rescale → JPEG re-encode). |
+| `App.Contacts_ListAddressbooks(sourceID string) ([]v1.Addressbook, error)` | Enabled addressbooks for a CardDAV source. Backs the Add Contact dialog's addressbook sub-picker. Track B. |
+| `App.Contacts_ListSources() ([]v1.ContactSource, error)` | All configured contact sources. Routes through `coreapi.Contacts.ListSources` (host-owned, not bridge-API). Track D. |
+| `App.Contacts_LinkAccountSource(accountID, name string, syncInterval int) (string, error)` | Creates a CardDAV-like source backed by an existing OAuth account. Routes through `coreapi.Contacts.LinkAccountSource`. Used by `AccountContactsHookPanel`. Track D. |
 
 ### Frontend logger
 
@@ -810,7 +930,8 @@ Aerion's testing style is integration-flavored: a real SQLite at `t.TempDir()` i
 | Contacts extension components | [`extensions/contacts/frontend/components/`](../extensions/contacts/frontend/components) |
 | Contacts extension stores | [`extensions/contacts/frontend/stores/`](../extensions/contacts/frontend/stores) |
 | Contacts account-setup hook panel | [`extensions/contacts/frontend/hooks/`](../extensions/contacts/frontend/hooks) |
-| New extensions | `extensions/<name>/frontend/{components,stores,hooks}/` |
+| Contacts extension i18n | [`extensions/contacts/frontend/i18n/`](../extensions/contacts/frontend/i18n) |
+| New extensions | `extensions/<name>/frontend/{components,stores,hooks,i18n}/` |
 
 Extension-specific UI lives under `extensions/<name>/frontend/`, NOT under `frontend/src/lib/components/`. Only host-owned UI (rail, settings dialog wiring) stays in `frontend/src/`. Keep new files under ~300 LOC.
 
@@ -835,6 +956,60 @@ import type { v1 } from '$wailsjs/go/models'
 ```
 
 The `@ts-ignore` lines stay mandatory in both locations — the generated `.d.ts` files don't carry TS-friendly path aliases.
+
+### Extension i18n
+
+Each extension owns its translation files, parallel to (and never mixed into) core's. Storage:
+
+```
+extensions/<name>/frontend/i18n/
+  index.ts                       # exports registerExtensionI18n()
+  locales/
+    en.json                      # mandatory — English source of truth
+    zh-HK.json                   # other locales — added by translators in follow-up PRs
+    ...
+```
+
+The extension's `index.ts` is a one-liner per locale file using the same `svelte-i18n` `register()` API the core uses:
+
+```ts
+// extensions/<name>/frontend/i18n/index.ts
+import { register } from 'svelte-i18n'
+
+export function registerExtensionI18n() {
+  register('en', () => import('./locales/en.json'))
+  register('zh-HK', () => import('./locales/zh-HK.json'))
+  // ... add a line per locale that ships ...
+}
+```
+
+**Auto-discovery — no host edits per extension.** The core's `initI18n()` uses [Vite's `import.meta.glob`](https://vite.dev/guide/features.html#glob-import) to find every extension's `i18n/index.ts` at build time and call its `registerExtensionI18n()` automatically:
+
+```ts
+// frontend/src/lib/i18n/index.ts
+const extensionRegistrars = import.meta.glob<{
+  registerExtensionI18n: () => void
+}>('../../../../extensions/*/frontend/i18n/index.ts', { eager: true })
+
+export async function initI18n(savedLocale?: string): Promise<void> {
+  for (const mod of Object.values(extensionRegistrars)) {
+    mod.registerExtensionI18n?.()
+  }
+
+  init({ fallbackLocale: 'en', initialLocale: savedLocale || detectSystemLocale() })
+  await waitLocale()
+}
+```
+
+Adding a new extension's i18n is purely a file drop under `extensions/<name>/frontend/i18n/` — no edit to `frontend/src/lib/i18n/index.ts` required. Vite resolves the glob at build time, so the registration calls are statically baked into the bundle (no runtime filesystem reads).
+
+**Why `register()` allows merging:** `svelte-i18n` accepts multiple loaders per locale code. When a locale activates, all registered loaders for that code resolve in parallel and their dictionaries merge into one namespace. Core ships `common.*`, `viewer.*`, `composer.*`; an extension ships `contacts.*` (or whatever its own namespace is) — no key collision possible as long as namespaces are distinct.
+
+**Key namespace convention:** use the extension id as the top-level namespace (`contacts.edit.save`, `calendar.event.create`). Don't reuse core's `common.*` — duplicate translations of `Save`/`Cancel` are cheap and prevent accidental coupling.
+
+**Translator workflow:** translators follow [`docs/LANGUAGE.md`](LANGUAGE.md), which lists the extension locale files as additional bullets in the checklist. A translator who finishes the core file but skips an extension still produces a usable PR — the extension's UI falls back to English via svelte-i18n's `fallbackLocale: 'en'` setting until someone fills in the gap.
+
+**Lightweight invariant:** every extension's `registerExtensionI18n()` runs at startup regardless of enabled state, but `register()` only queues a lazy loader — the JSON isn't fetched until the locale activates and the extension's component first calls `$_()`. Disabled extensions whose UI never renders never load their dictionaries.
 
 ### Stores
 
@@ -1244,7 +1419,7 @@ When an extension calls `core.Auth().HTTPClient(accountID, scopes)`, the Auth Br
 
 Mixed-scope calls (some routing to core, some to extension) are REJECTED — the extension must split into two HTTPClient calls.
 
-**THE GATE**: `first_party_uses_core_for_scopes` is honored ONLY for first-party extensions. Community extensions (v0.4+) declaring this field will fail manifest validation upstream. Handing community extensions the user's mail OAuth tokens would be a privilege-escalation vector — capped at the manifest boundary.
+**THE GATE**: `first_party_uses_core_for_scopes` is honored ONLY for first-party extensions. If a community-extension intake ever opens, community extensions declaring this field will fail manifest validation upstream. Handing community extensions the user's mail OAuth tokens would be a privilege-escalation vector — capped at the manifest boundary.
 
 ### User-supplied OAuth credentials (override UI)
 
@@ -1284,19 +1459,19 @@ Phase 2b.1 SCAFFOLDS this flow but the Connect button doesn't yet kick a real OA
 
 ### Local-contact edit/delete
 
-For sent-recipient (local) contacts, the Contacts extension supports inline rename + delete via [`ContactEditDialog.svelte`](../extensions/contacts/frontend/components/ContactEditDialog.svelte).
+For sent-recipient (local) contacts and CardDAV contacts alike, the Contacts extension supports multi-field edit (name, emails, phones, addresses, org, title, URLs, IMPPs, categories, birthday, note, photo) and delete via [`ContactEditDialog.svelte`](../extensions/contacts/frontend/components/ContactEditDialog.svelte).
 
 **Flow** (read the table top-to-bottom — same SDK pattern future extensions follow):
 
 | Layer | Responsibility |
 |---|---|
-| Frontend (`ContactEditDialog.svelte`) | Collects new name; calls `contactsView.updateLocalContact(email, name)` |
-| Frontend store ([`contactsView.svelte.ts`](../extensions/contacts/frontend/stores/contactsView.svelte.ts)) | Calls Wails-bound `App.UpdateLocalContact(email, name)` |
-| Wails-bound host method ([`app/extension_contacts.go`](../app/extension_contacts.go)) | Guards on `IsExtensionEnabled("contacts")`. Routes through `a.contactsAPI.UpdateContact(email, coreapi.ContactPatch{Name: &name})` — **does NOT call the core store directly**. |
-| Extension API ([`extensions/contacts/backend/api.go`](../extensions/contacts/backend/api.go)) | `UpdateContact` source-dispatches by id: `@` → local (calls `contact.Store.UpdateName`); UUID → returns `ErrUnimplemented` (filled in by 2b.2/2b.3) |
-| Core store ([`internal/contact/store.go`](../internal/contact/store.go)) | `UpdateName` sets `display_name` + flips `name_overridden=1`. `AddOrUpdate` (called on sent mail) honors the flag so auto-collection never clobbers a user edit. |
+| Frontend (`ContactEditDialog.svelte`) | Collects multi-field form state; calls `contactsView.updateContact(id, patch)` |
+| Frontend store ([`contactsView.svelte.ts`](../extensions/contacts/frontend/stores/contactsView.svelte.ts)) | Calls Wails-bound `App.Contacts_UpdateContact(id, patch)` (imported with alias `UpdateContact`) |
+| Bridge method ([`extensions/contacts/backend/bridge.go`](../extensions/contacts/backend/bridge.go)) | `Contacts_UpdateContact` gates on `gateEnabled()`, calls `ensureInit()`, then delegates to the lazy-initialized `b.api.UpdateContact(id, patch)` |
+| Extension API ([`extensions/contacts/backend/api.go`](../extensions/contacts/backend/api.go)) | `UpdateContact` calls `applyContactPatchToRecord(rec, patch)` to apply every non-nil patch field, then source-dispatches by id: local id → `contact.Store.UpsertRecord(rec)`; CardDAV UUID → `writeCardDAVRecord(rec)` (PUT the full vCard); Google/MS UUID → `ErrUnimplemented` (filled in by 2b.3) |
+| Core store ([`internal/contact/store.go`](../internal/contact/store.go)) | `UpsertRecord` / `UpsertRecordTx` writes the record + all sub-tables (emails, phones, addresses, urls, impps, categories, photo). Sets `name_overridden=1` on every email when the Name field is patched, so auto-collection never clobbers a user edit. |
 
-**Why route through the extension API instead of calling the core store directly:** writes follow the same SDK pattern as reads. When 2b.2 (CardDAV write) and 2b.3 (Google/MS write) land, they fill in the source-branches inside `extcontactsbe.API.UpdateContact`/`DeleteContact` — NO new Wails methods, NO new direct-store call sites. Future extensions (Calendar) declare their CRUD on their own `coreapi` interface and follow the same pattern.
+**Why route through the extension API instead of calling the core store directly:** writes follow the same SDK pattern as reads. The 2b.2 (CardDAV write) and 2b.3 (Google/MS write) phases fill in source-branches inside `extcontactsbe.API.UpdateContact`/`DeleteContact` — NO new Wails methods, NO new direct-store call sites. Future extensions (Calendar) declare their CRUD on their own `coreapi` interface and follow the same pattern.
 
 CardDAV / Google / Microsoft contact edits land in Phase 2b.2 (CardDAV write) and 2b.3 (provider OAuth write paths). Same Wails methods, same extension API methods — only the now-`ErrUnimplemented` branches inside the API impl get filled in.
 
@@ -1342,19 +1517,141 @@ When Calendar lands, its `coreapi.Calendar` interface gains `CreateEvent`/`Updat
 
 ---
 
+## Contributing a new extension
+
+> **Read first:** today's intake policy is **first-party only**. The shape described here is what a third-party extension contribution would look like *if* a community intake ever opens (see [§ Distribution model](#distribution-model)). It is documented now so the architecture stays consistent with that potential future; it does not imply that PRs from outside contributors are being accepted today.
+
+When a new extension does land (first-party today, or third-party later if intake opens), the contract below applies. The bridge architecture exists precisely to make this contract small enough to review by hand.
+
+### The two hard rules for any new extension
+
+These are non-negotiable and apply equally to first-party and (hypothetical) third-party extensions:
+
+**1. Consume `coreapi` only. Never reach into Aerion internals.**
+
+Extensions interact with Aerion exclusively through the `coreapi.Core` surfaces listed in [§ `coreapi` reference](#coreapi-reference). They:
+
+- DO NOT import any package from `internal/` outside `internal/extensions/` (and only the store/kv helpers there) and `internal/core/api/v1/`.
+- DO NOT call functions in `app/`, `internal/account/`, `internal/folder/`, `internal/message/`, `internal/draft/`, `internal/contact/`, `internal/carddav/`, `internal/imap/`, `internal/smtp/`, `internal/oauth2/`, `internal/credentials/`, etc., directly.
+- DO NOT query, read, or write any table in Aerion's main database (`aerion.db`). The accounts/folders/messages/contacts/drafts tables are core-owned and off-limits.
+- DO NOT shell out, monkey-patch, or use `reflect`/build-tag tricks to do any of the above indirectly.
+
+The Contacts extension *is allowed* to receive a `*database.DB` handle to Aerion's main DB because it's a first-party special case: it grew out of code that already lived in Aerion core, owns the lifecycle of the `contact_records` + `contact_sources` + related tables, and is explicitly the canonical owner of that data. **This special case is not extended to new extensions.** A new extension never gets a handle to `aerion.db`.
+
+**2. If the extension needs persistence, it brings its own database.**
+
+Per-extension SQLite is the only persistence path. Use [`internal/extensions.OpenStore`](../internal/extensions/store.go) (see [§ Per-extension storage](#per-extension-storage)). That opens `<dataDir>/extensions/<name>/data.db`, applies the extension's own migrations, and gives back a `*sql.DB` scoped to that file only. Tiny config (sync tokens, view prefs) can go in the auto-created `ext_kv` table via `coreapi.Storage.KV`.
+
+If the extension wants to read or write data Aerion itself owns (e.g., list messages, insert a contact, move a message), the only legitimate path is calling the relevant `coreapi` interface method — and only if that method already exists and is implemented. If it doesn't exist or returns `ErrUnimplemented`, see [§ Requesting a new extension API](#requesting-a-new-extension-api) below.
+
+### Requesting a new extension API
+
+**Extension contributions do NOT add new methods to `internal/core/api/v1/`.** API surface evolution is a separate, deliberate process owned by the project maintainer:
+
+- If your extension needs a `coreapi` surface that doesn't exist today (e.g., `Mail.AppendMessage` is wired but returns `ErrUnimplemented`, or there's no `Calendar` interface at all), **open a Feature Request issue describing the use case** before writing extension code that depends on it.
+- The maintainer evaluates whether the requested surface fits the API's stability promise (see [§ Stability promise](#stability-promise)), what shape it should take, and which release it would land in.
+- Only after the API ships does the extension PR depending on it become reviewable.
+
+Bundling an `internal/core/api/v1/` change into an extension PR is rejected on sight, even for first-party work. The reason: every `coreapi` method becomes a backwards-compatibility commitment, and that commitment is owned by the project, not by individual extensions.
+
+### Lightweight-by-default invariant (the load-bearing principle)
+
+Every extension MUST cost approximately zero when disabled. The reason this is non-negotiable: Aerion's core promise to its users is that it stays a lightweight email client. Each extension that breaks this invariant erodes that promise for the *entire user base*, not just the ones who'd use that extension.
+
+Concretely, "approximately zero when disabled" means:
+
+- **At process startup:** one `*Bridge` struct allocation (a few host-dependency fields) + one `*Extension` allocation (a manifest copy) + descriptive UI registrations (rail tab metadata, account-setup hook metadata). No SQLite open. No goroutines. No file handles. No HTTP clients.
+- **At first enabled Wails call:** `ensureInit()` fires under `sync.Once`. THIS is where the SQLite file opens, migrations run, stores construct, and background goroutines spin up.
+- **When the user disables a previously enabled extension:** new Wails calls return empty (`gateEnabled() == false`). Already-allocated state stays in memory until the next process restart. Users who want to fully reclaim memory restart Aerion — this is an explicit trade-off the project accepts (see [§ Lifecycle](#lifecycle)).
+
+Any extension that opens its database at startup, spawns goroutines unconditionally, or registers HTTP clients eagerly is non-conforming. **All such work happens inside `ensureInit()`, gated by the enabled flag.**
+
+### Required layout
+
+```
+extensions/<name>/
+  manifest.json                  # extension metadata (ID, name, providers, capabilities)
+  manifest.go                    # embeds manifest.json via //go:embed, exposes Manifest()
+  backend/
+    register.go                  # Extension struct + NewExtension() + Register()
+    bridge.go                    # Bridge struct + BridgeDeps + NewBridge() + all <Name>_-prefixed methods
+    api.go                       # internal API the bridge methods delegate to
+    store.go                     # per-extension SQLite via extensions.OpenStore (opened by ensureInit, not eagerly)
+    # ... whatever else the extension needs ...
+  frontend/
+    components/                  # Svelte components rendered into RailTab / settings slots
+    stores/                      # Svelte runes stores scoped to this extension's UI
+    hooks/                       # account-setup hook panel components (optional)
+    i18n/
+      index.ts                   # exports registerExtensionI18n() — calls svelte-i18n register() per locale
+      locales/
+        en.json                  # English source of truth (mandatory)
+        <code>.json              # other locales (added by translators, optional per locale)
+app/
+  extension_<name>.go            # ~28 LOC host wiring: BridgeDeps construction + EventEmitter closure
+```
+
+The host-side delta in `app/app.go` is:
+1. One embedded `*<Name>Bridge` field on the App struct.
+2. One `a.init<Name>Extension()` call inside `Startup`.
+3. One `a.<Name>Ext = extbe.NewExtension()` + append to `a.knownExtensions`.
+
+Go can't auto-discover packages, so the backend side has to be wired explicitly — that's why `app/extension_<name>.go` exists. Frontend i18n is auto-discovered via Vite glob (see [§ Extension i18n](#extension-i18n)), so no host edit is needed there.
+
+That's it. **No other host file should change.** If you find yourself editing files outside the points above and `extensions/<name>/`, you're either (a) reaching into Aerion internals (forbidden — see hard rule #1), or (b) trying to add a `coreapi` method (forbidden — file a Feature Request first).
+
+### The `<Extension>_` method-name prefix (hard rule)
+
+Every Wails-bound method on the Bridge MUST be named `<Extension>_<Method>` (e.g., `Contacts_UpdateContact`, `Calendar_CreateEvent`). Reasoning:
+
+1. Embedded-method promotion shares one App namespace. Two extensions both defining `UpdateRecord()` would silently override each other.
+2. The prefix makes ownership obvious in the generated `App.d.ts` — anyone reading the frontend bindings can tell which extension owns a method without grep.
+3. The frontend conventionally re-imports with an alias (`Contacts_UpdateContact as UpdateContact`) inside the extension's own store file, so the prefix only appears at the import boundary.
+
+### Review checklist
+
+Whether the extension is first-party or third-party (if an intake opens), the review covers:
+
+1. **The two hard rules above hold.** No imports from `internal/` outside the small allowed surface. No queries against `aerion.db`. Own SQLite via `extensions.OpenStore` if persistence is needed.
+2. **No `internal/core/api/v1/` changes in this PR.** If the extension needed a new API method, that landed in a separate, prior PR (gated by a Feature Request issue).
+3. **Lightweight invariant intact.** Trace every line that runs at startup (`NewBridge`, `NewExtension`, `Register`, `registerExtensionI18n`). None of it can open SQLite, spawn goroutines, or do network I/O. `ensureInit()` is the ONLY place those happen.
+4. **All Wails-bound methods are gated.** Every method on `*Bridge` calls `b.gateEnabled()` and short-circuits if false. Disabled state returns `nil`/empty, never an error.
+5. **Prefix correctness.** Every bridge method is `<Name>_<Method>`. No exceptions.
+6. **No mail-code edits.** The mail UI components and the mail backend (`internal/imap/`, `internal/smtp/`, `internal/message/`, `frontend/src/lib/components/{list,viewer,composer,sidebar}/`, etc.) are off-limits to direct edits. The extension may **call into mail via `coreapi.Mail` / `coreapi.Composer` surfaces** — that's the whole point of those interfaces. What's forbidden is editing mail's own files. If you need a mail behavior that those interfaces don't expose today, see [§ Requesting a new extension API](#requesting-a-new-extension-api).
+7. **Per-extension SQLite isolation.** Extensions never read or write each other's tables; cross-extension data goes through `coreapi.Core.Extension(id)` typed handles. If your extension's bridge takes another extension's `*Store` as a dependency, it's wrong.
+8. **OAuth credentials are scoped per extension.** If the extension needs OAuth, it owns its own credential slot (`<provider>-<extension-id>`) and uses the Auth Broker; it doesn't reuse Aerion core's mail slot unless the manifest declares `first_party_uses_core_for_scopes` (see [§ OAuth client configurations](#oauth-client-configurations)) — and that field is honored only for first-party extensions.
+9. **Frontend is independent.** No refactors to existing mail components to "share" code with the extension. Extension components stay self-contained under `extensions/<name>/frontend/`. The kit (`frontend/src/lib/components/kit/`) holds neutral primitives extensions can consume, but anything mail-specific stays mail-specific.
+10. **Extension owns its i18n.** New strings live under `extensions/<name>/frontend/i18n/locales/<code>.json` (own files, not mixed into core's `frontend/src/lib/i18n/locales/<code>.json`). At minimum `en.json` ships with the PR. Other locales are added later by translators in separate PRs; absence falls back to English at runtime. See [§ Extension i18n](#extension-i18n).
+11. **Documentation updated.** `docs/EXTENSIONS.md` § Wails-bound surface gains a row per new bridge method.
+
+The bridge architecture is what makes this checklist enforceable as a code review rather than a multi-week audit.
+
+---
+
 ## Distribution model
 
-### Today (v0.3.x): static linking
+### Today: static linking, first-party only
 
-All first-party extensions compile into the single Aerion binary. Extensions live as Go packages under `extensions/<name>/backend/` and Svelte components under `extensions/<name>/frontend/`. The host imports each extension's `Extension` struct directly and calls `Register()` at startup.
+All extensions compile into the single Aerion binary. Extensions live as Go packages under `extensions/<name>/backend/` and Svelte components under `extensions/<name>/frontend/`. The host embeds each extension's `*Bridge` on App (one wiring file at `app/extension_<name>.go`, ~28 LOC) and iterates `a.knownExtensions` to call `Register()` at startup.
 
-This is the simplest model — no IPC, no version coupling — but it means community extensions are impossible without recompiling Aerion. Acceptable for first-party only.
+Today this is **first-party only**. No third-party-PR intake is open and no extension installer exists. Everything past this point is a description of what the architecture *enables* the project to do if demand for it shows up — not a roadmap.
 
-### Future (v0.4+): subprocess + IPC
+### If community-extension demand emerges: PR contribution path
 
-Aerion is committed to a **pre-compiled subprocess + IPC** model for community extensions. Each community extension will ship as its own Go binary (cross-compiled per platform) launched as a subprocess at startup, communicating with the main app via Unix socket / named pipe (Aerion already does this for the detached composer — same proven path).
+The bridge architecture is intentionally shaped so that, **if community-extension demand emerges**, the simplest first step is to open the door to third-party extensions as PRs to the Aerion repo. Once merged, they'd become first-party (shipped in the binary, opt-in via Settings → Extensions, default-disabled). The reviewer would read three things instead of auditing a sprawling diff:
 
-Why subprocess and not other options:
+1. The extension's own `extensions/<name>/` directory (manifest, backend, frontend).
+2. The `app/extension_<name>.go` wiring file (one embed + one constructor call + dependency wiring).
+3. The added App field + `init<Name>Extension()` call site in `app/app.go` Startup.
+
+See [§ Contributing a new extension](#contributing-a-new-extension) for what the contribution shape would look like and what reviewers would check. This is documented now so the architecture stays consistent with that future use; it does not imply the intake is open.
+
+### If demand exceeds what PRs can handle: subprocess + IPC
+
+If third-party-PR intake opens and demand grows past what individual code reviews can sustain, the next step the architecture allows is a **pre-compiled subprocess + IPC** model for community extensions. Each community extension would ship as its own Go binary (cross-compiled per platform), launched as a subprocess at startup, communicating with the main app via Unix socket / named pipe — the same path Aerion already uses for the detached composer.
+
+Why subprocess and not other options (in case it ever needs to happen):
+
 - **Go `plugin` package (.so loading)**: requires exact same Go version + same dependency tree as host; Linux/macOS only; no way to unload. Brittle in practice; almost no one ships this way.
 - **WASM**: Go-backend WASM (wazero) is still research-grade for this use case. Promising but immature.
 - **Embedded scripting (Lua, JS via goja)**: would force re-implementing CalDAV/CardDAV/heavy sync libs. Aerion extensions do real work and need the real Go ecosystem.
@@ -1368,17 +1665,19 @@ The current API design is already subprocess-compatible. Nothing in `coreapi v1`
 - `RailTabRequest.Component: "ContactsPane"` → already a descriptive string, not a compiled type reference
 - `Extension.Register(core)` → works as function call (static) AND as subprocess spawn + IPC handshake
 
-What stays in the host even with community extensions: **the Svelte components**. Even Obsidian doesn't let plugins ship React/Svelte components — Obsidian plugins manipulate the DOM directly via its workspace API. Community extensions will register against pre-built UI slots (rail tab, settings tab, a "generic extension pane" that renders state declared over IPC).
+What stays in the host even if community extensions arrive: **the Svelte components**. Even Obsidian doesn't let plugins ship React/Svelte components — Obsidian plugins manipulate the DOM directly via its workspace API. Community extensions would register against pre-built UI slots (rail tab, settings tab, a "generic extension pane" that renders state declared over IPC).
 
-### Migration path
+### What "if" actually buys
 
-Phase 2a (now) writes everything as if subprocess is coming. When v0.4 starts:
+Today's static-linking + first-party model is **sufficient on its own**. Aerion ships first-party extensions (Contacts today, others over time) and users get them as part of the binary. Nothing further needs to happen for the product to work.
 
-1. First-party extensions migrate from in-process function calls to subprocess + IPC. Same `manifest.json`. Same `Register` shape, just via IPC handshake.
-2. Once first-party migration is stable, the community-extension installer lands (download tarball → verify manifest + signature → extract to user dir → launch as subprocess).
-3. Settings UI grows a "Community extensions" section beneath "Core extensions".
+The optionality described above costs nothing right now — the bridge pattern, the `coreapi v1` shape, the per-extension SQLite isolation, the Auth Broker, the `<Extension>_` prefix rule are all things the project does anyway to keep first-party extensions tidy. They happen to also be what's required to extend the model later. So:
 
-No API rework needed for the v0.4 migration — only the transport changes.
+1. **No demand**: current model stays as-is, indefinitely. That's the default.
+2. **Modest demand (a handful of motivated contributors)**: open PR intake, vet by hand, merge becomes first-party.
+3. **Demand exceeding PR throughput**: invest in the subprocess runtime.
+
+Each step is contingent on the previous one materializing, not pre-committed.
 
 ---
 
@@ -1407,8 +1706,8 @@ Things extensions CANNOT do in v0.3.0. Items marked with a phase have a planned 
 
 ### System
 
-- Community-extension runtime (dynamic loading, manifest verification, capability consent UI) — deferred to v0.4+ once first-party use has stabilized the API surface
-- Per-extension capability gating — Phase 1 grants first-party extensions everything; explicit capability checks land when community extensions arrive
+- Community-extension runtime (dynamic loading, manifest verification, capability consent UI) — contingent on demand; see [§ Distribution model](#distribution-model)
+- Per-extension capability gating — Phase 1 grants first-party extensions everything; explicit capability checks would land alongside any community-extension intake
 
 ---
 

@@ -28,10 +28,16 @@ import (
 // The standard field set this builder writes:
 //
 //	FN, N, NICKNAME, BDAY, ORG, TITLE, NOTE, CATEGORIES, EMAIL+TYPE, TEL+TYPE,
-//	ADR+TYPE (structured), URL+TYPE, IMPP+TYPE.
+//	ADR+TYPE (structured), URL+TYPE, IMPP+TYPE, PHOTO.
 //
-// PHOTO and other binary-laden fields are NOT in the standard set we mutate;
-// they pass through unchanged when present in originalRaw.
+// PHOTO is emitted inline (vCard 3.0 dialect: `PHOTO;ENCODING=b;TYPE=...:<base64>`)
+// when rec.PhotoData is set. When both PhotoData and PhotoURL are empty, the
+// PHOTO field is deleted from the underlying card (so a previous photo is
+// removed on round-trip). URL-ref output is deliberately unsupported — write
+// path always emits inline.
+//
+// Other binary-laden fields (KEY, SOUND, LOGO) are NOT in the standard set we
+// mutate; they pass through unchanged when present in originalRaw.
 func BuildVCard(rec *contact.Record, originalRaw string) ([]byte, error) {
 	if rec == nil {
 		return nil, fmt.Errorf("BuildVCard: nil record")
@@ -42,8 +48,10 @@ func BuildVCard(rec *contact.Record, originalRaw string) ([]byte, error) {
 		return nil, fmt.Errorf("BuildVCard: parse original: %w", err)
 	}
 
-	// Wipe the standard fields the Record owns; unknown fields (X-*, PHOTO,
-	// CATEGORIES dialect, etc.) stay because we only touch known keys.
+	// Wipe the standard fields the Record owns; unknown fields (X-*, KEY,
+	// SOUND, CATEGORIES dialect, etc.) stay because we only touch known keys.
+	// PHOTO is now in the owned set — wiped + re-emitted below (or stays
+	// deleted when the record has no photo, naturally removing it on save).
 	for _, k := range []string{
 		vcard.FieldFormattedName,
 		vcard.FieldName,
@@ -58,6 +66,7 @@ func BuildVCard(rec *contact.Record, originalRaw string) ([]byte, error) {
 		vcard.FieldAddress,
 		vcard.FieldURL,
 		vcard.FieldIMPP,
+		vcard.FieldPhoto,
 	} {
 		delete(card, k)
 	}
@@ -91,6 +100,28 @@ func BuildVCard(rec *contact.Record, originalRaw string) ([]byte, error) {
 	}
 	if len(rec.Categories) > 0 {
 		card.SetCategories(rec.Categories)
+	}
+
+	// PHOTO — emit inline base64 in vCard 3.0 dialect when PhotoData is set.
+	// Empty PhotoData = no PHOTO field emitted (effectively removes a previous
+	// photo because we wiped FieldPhoto above). URL-ref output is deliberately
+	// unsupported.
+	if data := strings.TrimSpace(rec.PhotoData); data != "" {
+		mediaType := strings.TrimSpace(rec.PhotoMediaType)
+		// Derive vCard 3.0 TYPE param from media type ("image/jpeg" → "JPEG").
+		typeSuffix := "JPEG" // safe default; most servers accept it
+		if mediaType != "" {
+			if i := strings.LastIndex(mediaType, "/"); i >= 0 {
+				typeSuffix = strings.ToUpper(mediaType[i+1:])
+			}
+		}
+		card.Add(vcard.FieldPhoto, &vcard.Field{
+			Value: data,
+			Params: vcard.Params{
+				"ENCODING": []string{"b"},
+				"TYPE":     []string{typeSuffix},
+			},
+		})
 	}
 
 	for _, e := range rec.Emails {

@@ -43,13 +43,13 @@ func (s *Store) CreateSource(config *SourceConfig) (*Source, error) {
 	}
 
 	query := `
-		INSERT INTO contact_sources (id, name, type, url, username, account_id, enabled, sync_interval, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO contact_sources (id, name, type, url, username, account_id, enabled, writable, sync_interval, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := s.db.Exec(query,
 		id, config.Name, config.Type, config.URL, config.Username, accountID,
-		config.Enabled, config.SyncInterval, now)
+		config.Enabled, config.Writable, config.SyncInterval, now)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create source: %w", err)
 	}
@@ -62,6 +62,7 @@ func (s *Store) CreateSource(config *SourceConfig) (*Source, error) {
 		Username:     config.Username,
 		AccountID:    accountID,
 		Enabled:      config.Enabled,
+		Writable:     config.Writable,
 		SyncInterval: config.SyncInterval,
 		CreatedAt:    now,
 	}
@@ -397,6 +398,35 @@ func (s *Store) GetAddressbook(id string) (*Addressbook, error) {
 	}
 
 	return &ab, nil
+}
+
+// GetSourceIDForRecord returns the CardDAV source UUID that owns the given
+// contact_records.id, by joining carddav_record_state → contact_source_addressbooks.
+// Returns "" (no error) when the record doesn't belong to any CardDAV source
+// (e.g., a local-only record). Used by the API layer to enrich
+// coreapi.Contact.SourceID with the actual sidebar source UUID rather than
+// the literal "carddav" string that fromRecord defaults to — see the comment
+// on fromRecord in extensions/contacts/backend/convert.go for context.
+func (s *Store) GetSourceIDForRecord(recordID string) (string, error) {
+	if recordID == "" {
+		return "", nil
+	}
+	query := `
+		SELECT sa.source_id
+		FROM carddav_record_state crs
+		JOIN contact_source_addressbooks sa ON sa.id = crs.addressbook_id
+		WHERE crs.record_id = ?
+		LIMIT 1
+	`
+	var sourceID string
+	err := s.db.QueryRow(query, recordID).Scan(&sourceID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get source for record: %w", err)
+	}
+	return sourceID, nil
 }
 
 // ListAddressbooks returns all addressbooks for a source
@@ -844,7 +874,7 @@ func (s *Store) UpdateRecord(rec *contact.Record, client *Client) error {
 		return fmt.Errorf("UpdateRecord: build vcard: %w", err)
 	}
 
-	newETag, err := client.PutContact(addressbookPath, href, etag, card)
+	newETag, err := client.PutContact(addressbookPath, href, etag, false, card)
 	if err != nil {
 		// Includes *ErrPreconditionFailed unchanged for the caller to type-check.
 		return err
@@ -873,6 +903,91 @@ func (s *Store) UpdateRecord(rec *contact.Record, client *Client) error {
 	}
 	s.log.Info().Str("id", rec.ID).Str("href", href).Msg("CardDAV record updated")
 	return nil
+}
+
+// CreateRecord PUTs a new vCard to the given addressbook (If-None-Match: *) and
+// inserts both the contact_records row and the carddav_record_state row on
+// success. Mirrors the tail of UpdateRecord, but with INSERT semantics:
+//   - href is synthesized as "<addressbookPath><uuid>.vcf"
+//   - record id is rec.ID if pre-set, otherwise a fresh UUID
+//   - rec.Source is forced to "carddav" and rec.SourceRef to the addressbook id
+//   - server-side 412 means the resource already exists at that href (extremely
+//     unlikely with a freshly-generated UUID; surfaced as *ErrPreconditionFailed
+//     for the caller to handle).
+//
+// Returns the assigned record id on success.
+func (s *Store) CreateRecord(addressbookID string, rec *contact.Record, client *Client) (string, error) {
+	if rec == nil {
+		return "", fmt.Errorf("CreateRecord: nil record")
+	}
+	if addressbookID == "" {
+		return "", fmt.Errorf("CreateRecord: addressbook id is required")
+	}
+	if client == nil {
+		return "", fmt.Errorf("CreateRecord: nil client")
+	}
+
+	ab, err := s.GetAddressbook(addressbookID)
+	if err != nil {
+		return "", fmt.Errorf("CreateRecord: lookup addressbook: %w", err)
+	}
+	if ab == nil {
+		return "", fmt.Errorf("CreateRecord: addressbook %s not found", addressbookID)
+	}
+
+	if rec.ID == "" {
+		rec.ID = uuid.New().String()
+	}
+	rec.Source = "carddav"
+	rec.SourceRef = addressbookID
+
+	// Synthesize the href under the addressbook's path. The CardDAV server
+	// accepts arbitrary <uuid>.vcf names within an addressbook collection.
+	addressbookPath := ab.Path
+	if !strings.HasSuffix(addressbookPath, "/") {
+		addressbookPath += "/"
+	}
+	href := addressbookPath + rec.ID + ".vcf"
+
+	// Empty originalRaw — BuildVCard synthesizes a minimal vCard 3.0 from
+	// the record's fields. PHOTO and unknown-property preservation don't
+	// apply to brand-new records.
+	card, err := BuildVCard(rec, "")
+	if err != nil {
+		return "", fmt.Errorf("CreateRecord: build vcard: %w", err)
+	}
+
+	newETag, err := client.PutContact(addressbookPath, href, "", true, card)
+	if err != nil {
+		// Includes *ErrPreconditionFailed unchanged. On create that signals
+		// the resource already exists at href — rare with a fresh UUID but
+		// the caller can surface it cleanly.
+		return "", err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("CreateRecord: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := contact.UpsertRecordTx(tx, rec); err != nil {
+		return "", fmt.Errorf("CreateRecord: upsert local record: %w", err)
+	}
+
+	now := time.Now()
+	if _, err := tx.Exec(`
+		INSERT INTO carddav_record_state (record_id, addressbook_id, href, etag, synced_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, rec.ID, addressbookID, href, newETag, now); err != nil {
+		return "", fmt.Errorf("CreateRecord: insert state: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("CreateRecord: commit: %w", err)
+	}
+	s.log.Info().Str("id", rec.ID).Str("href", href).Str("addressbook", addressbookID).Msg("CardDAV record created")
+	return rec.ID, nil
 }
 
 // DeleteRecord DELETEs the given record from its CardDAV server via the
@@ -983,6 +1098,9 @@ func ParsedRecordToContactRecord(p *ParsedRecord, recordID, addressbookID string
 		Note:      p.Note,
 		Bday:      p.Bday,
 		Nickname:  p.Nickname,
+		PhotoData:      p.PhotoData,
+		PhotoMediaType: p.PhotoMediaType,
+		PhotoURL:       p.PhotoURL,
 		VCardRaw:  p.VCardRaw,
 		Categories: p.Categories,
 	}

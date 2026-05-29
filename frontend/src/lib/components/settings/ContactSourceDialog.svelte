@@ -6,6 +6,7 @@
   import { Label } from '$lib/components/ui/label'
   import { Input } from '$lib/components/ui/input'
   import { Button } from '$lib/components/ui/button'
+  import Switch from '$lib/components/ui/switch/Switch.svelte'
   import { addToast } from '$lib/stores/toast'
   import { _ } from '$lib/i18n'
   import { contactSourcesStore, type LinkedAccountInfo } from '$lib/stores/contactSources.svelte'
@@ -44,10 +45,12 @@
   let username = $state('')
   let password = $state('')
   let syncInterval = $state(60)
-  // Phase 2b.2.a — opt-in write access. CardDAV uses the source's existing
-  // basic-auth creds, so this is a pure flag. OAuth sources gain their toggle
-  // in 2b.3 alongside incremental consent.
-  let writable = $state(false)
+  // CardDAV uses the source's existing basic-auth creds, so writable is a pure
+  // flag. Defaults to true for new CardDAV sources — adding a source signals
+  // intent to use it, and forcing users to dig into a hidden toggle was a
+  // pre-2b.2.b.2 discoverability bug. OAuth sources stay false until 2b.3
+  // ships incremental consent for write scope.
+  let writable = $state(true)
 
   // Discovery state
   let discovering = $state(false)
@@ -128,13 +131,14 @@
         loadExistingAddressbooks()
       }
     } else if (open && !editSource) {
-      // Reset for new source
+      // Reset for new source. CardDAV is the default tab so writable defaults
+      // to true; handleTabChange flips it when the user switches tabs.
       name = ''
       url = ''
       username = ''
       password = ''
       syncInterval = 60
-      writable = false
+      writable = true
       hasDiscovered = false
       discoveredAddressbooks = []
       selectedAddressbooks = new Set()
@@ -396,6 +400,9 @@
     selectedAccountId = ''
     oauthEmail = ''
     oauthInProgress = false
+    // CardDAV: default writable=true (the dialog's writable Switch can flip it).
+    // OAuth: default writable=false — incremental consent (2b.3) sets it later.
+    writable = sourceType === 'carddav'
   }
 
   // Check if save is enabled
@@ -439,7 +446,10 @@
       </Tabs.Root>
     {/if}
 
-    <div class="space-y-4 py-4">
+    <!-- Body scroll wrapper. Without max-h + overflow, mobile viewports can't
+         reach the footer Save/Cancel. Footer stays outside this div so it
+         stays pinned at the bottom regardless of body scroll position. -->
+    <div class="space-y-4 py-4 max-h-[70vh] overflow-y-auto pr-1">
       {#if sourceType === 'carddav'}
         <!-- CardDAV Form -->
         <div class="space-y-2">
@@ -547,24 +557,18 @@
             </Select.Root>
           </div>
 
-          <!-- Phase 2b.2.a writable toggle. Edit/Create/Delete on contacts
-               in this source unlock when this is enabled. The actual edit
-               write paths land in 2b.2.b. -->
-          <label class="flex items-start gap-2 pt-2 cursor-pointer">
-            <input
-              type="checkbox"
-              bind:checked={writable}
-              class="mt-1 h-4 w-4 rounded border-border accent-primary cursor-pointer"
-            />
-            <span class="flex flex-col text-sm">
-              <span class="font-medium text-foreground">Enable write access to this source</span>
-              <span class="text-xs text-muted-foreground">
-                Allow editing, creating, and deleting contacts on this CardDAV
-                server. Uses the credentials above. Write features land
-                progressively across the 0.3.0 release cycle.
+          <!-- Writable toggle. Edit/Create/Delete on contacts in this source
+               unlock when this is enabled. Defaults to on for new CardDAV
+               sources; user can opt out before saving. -->
+          <div class="flex items-start gap-3 pt-2">
+            <Switch id="contact-source-writable" bind:checked={writable} class="mt-0.5" />
+            <Label for="contact-source-writable" class="flex flex-col text-sm cursor-pointer">
+              <span class="font-medium text-foreground">{$_('contactSource.enableWriteAccess')}</span>
+              <span class="text-xs text-muted-foreground font-normal">
+                {$_('contactSource.enableWriteAccessDescription')}
               </span>
-            </span>
-          </label>
+            </Label>
+          </div>
         {/if}
 
       {:else}

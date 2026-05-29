@@ -3,11 +3,12 @@
 import {certificate} from '../models';
 import {account} from '../models';
 import {carddav} from '../models';
+import {v1} from '../models';
+import {backend} from '../models';
 import {message} from '../models';
 import {folder} from '../models';
 import {app} from '../models';
 import {contact} from '../models';
-import {v1} from '../models';
 import {context} from '../models';
 import {smtp} from '../models';
 import {imap} from '../models';
@@ -62,13 +63,29 @@ export function CompleteContactSourceOAuthSetup(arg1:string,arg2:number):Promise
 
 export function CompleteOAuthAccountSetup(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<account.Account>;
 
+export function Contacts_CreateContact(arg1:v1.ContactCreateInput):Promise<string>;
+
+export function Contacts_DeleteLocalContact(arg1:string):Promise<void>;
+
+export function Contacts_GetContactDetail(arg1:string):Promise<v1.Contact>;
+
+export function Contacts_LinkAccountSource(arg1:string,arg2:string,arg3:number):Promise<string>;
+
+export function Contacts_ListAddressbooks(arg1:string):Promise<Array<v1.Addressbook>>;
+
+export function Contacts_ListContactsForBrowse(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<v1.Contact>>;
+
+export function Contacts_ListSources():Promise<Array<v1.ContactSource>>;
+
+export function Contacts_ResizeContactPhoto(arg1:string):Promise<backend.ResizedContactPhoto>;
+
+export function Contacts_UpdateContact(arg1:string,arg2:v1.ContactPatch):Promise<void>;
+
 export function CopyOAuthCreds(arg1:string,arg2:string):Promise<void>;
 
 export function CopyToFolder(arg1:Array<string>,arg2:string):Promise<void>;
 
 export function CreateIdentity(arg1:string,arg2:account.IdentityConfig):Promise<account.Identity>;
-
-export function CreateLocalContact(arg1:string,arg2:string):Promise<string>;
 
 export function DeleteContact(arg1:string):Promise<void>;
 
@@ -77,8 +94,6 @@ export function DeleteContactSource(arg1:string):Promise<void>;
 export function DeleteDraft(arg1:string):Promise<void>;
 
 export function DeleteIdentity(arg1:string):Promise<void>;
-
-export function DeleteLocalContact(arg1:string):Promise<void>;
 
 export function DeleteLocalMessages(arg1:Array<string>):Promise<void>;
 
@@ -139,8 +154,6 @@ export function GetConfiguredOAuthProviders():Promise<Array<string>>;
 export function GetConnectedComposers():Promise<number>;
 
 export function GetContact(arg1:string):Promise<contact.Contact>;
-
-export function GetContactDetail(arg1:string):Promise<v1.Contact>;
 
 export function GetContactSource(arg1:string):Promise<carddav.Source>;
 
@@ -305,8 +318,6 @@ export function LinkAccountContactSource(arg1:string,arg2:string,arg3:number):Pr
 export function ListAccountSetupHooksForProvider(arg1:string):Promise<Array<v1.AccountSetupHookRequest>>;
 
 export function ListContacts(arg1:number):Promise<Array<contact.Contact>>;
-
-export function ListContactsForBrowse(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<v1.Contact>>;
 
 export function ListDrafts(arg1:string):Promise<Array<draft.Draft>>;
 
@@ -537,7 +548,5 @@ export function UpdateAccount(arg1:string,arg2:account.AccountConfig):Promise<ac
 export function UpdateContactSource(arg1:string,arg2:carddav.SourceConfig):Promise<void>;
 
 export function UpdateIdentity(arg1:string,arg2:account.IdentityConfig):Promise<account.Identity>;
-
-export function UpdateLocalContact(arg1:string,arg2:string):Promise<void>;
 
 export function UpdateLocalFlags(arg1:Array<string>,arg2:any,arg3:any):Promise<void>;

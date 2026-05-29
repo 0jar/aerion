@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -168,6 +169,14 @@ func TestMigrationV32_LocalRecordIDsRewrittenToUUIDs(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM migrations WHERE version >= 32`); err != nil {
 		t.Fatalf("clear migration 32+ markers: %v", err)
 	}
+	// Drop v34's photo columns so its re-application's ADD COLUMNs don't
+	// collide. SQLite supports DROP COLUMN since 3.35; modernc.org/sqlite
+	// is well past that.
+	for _, col := range []string{"photo_data", "photo_media_type", "photo_url"} {
+		if _, err := db.Exec(`ALTER TABLE contact_records DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s for re-migrate: %v", col, err)
+		}
+	}
 
 	// Re-run migrations — migration 32 should rewrite the seeded local- id.
 	if err := db.Migrate(); err != nil {
@@ -293,10 +302,16 @@ func TestMigrationV33_CleansExistingOrphans(t *testing.T) {
 		);
 		CREATE INDEX idx_carddav_record_state_addressbook
 			ON carddav_record_state(addressbook_id);
-		DELETE FROM migrations WHERE version = 33;
+		DELETE FROM migrations WHERE version >= 33;
 		PRAGMA foreign_keys = ON;
 	`); err != nil {
 		t.Fatalf("rewind to v32 schema: %v", err)
+	}
+	// Drop v34's photo columns so re-application's ADD COLUMNs don't collide.
+	for _, col := range []string{"photo_data", "photo_media_type", "photo_url"} {
+		if _, err := db.Exec(`ALTER TABLE contact_records DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop %s for re-migrate: %v", col, err)
+		}
 	}
 
 	// Seed: orphan state row whose addressbook doesn't exist. Pre-migration,
@@ -369,5 +384,56 @@ func TestPath(t *testing.T) {
 
 	if got := db.Path(); got != path {
 		t.Errorf("Path() = %q, want %q", got, path)
+	}
+}
+
+// TestMigrationV34_AddsPhotoColumns verifies migration 34 adds the three
+// PHOTO columns to contact_records and that existing rows survive with NULL
+// values for the new fields.
+func TestMigrationV34_AddsPhotoColumns(t *testing.T) {
+	db := openTestDB(t)
+
+	// Seed a record before migration 34 (well — migration 34 already ran via
+	// openTestDB, but we check that the columns exist + are queryable).
+	if _, err := db.Exec(`
+		INSERT INTO contact_records (id, source, fn, photo_data, photo_media_type, photo_url)
+		VALUES ('rec-1', 'local', 'Alice', 'BASE64DATA', 'image/jpeg', NULL)
+	`); err != nil {
+		t.Fatalf("insert record with photo: %v", err)
+	}
+
+	var photoData, mediaType, photoURL sql.NullString
+	if err := db.QueryRow(`
+		SELECT photo_data, photo_media_type, photo_url
+		FROM contact_records WHERE id = 'rec-1'
+	`).Scan(&photoData, &mediaType, &photoURL); err != nil {
+		t.Fatalf("read photo columns: %v", err)
+	}
+	if photoData.String != "BASE64DATA" {
+		t.Errorf("photo_data = %q, want BASE64DATA", photoData.String)
+	}
+	if mediaType.String != "image/jpeg" {
+		t.Errorf("photo_media_type = %q, want image/jpeg", mediaType.String)
+	}
+	if photoURL.Valid {
+		t.Errorf("photo_url should be NULL, got %q", photoURL.String)
+	}
+
+	// Record with no photo: all three columns NULL.
+	if _, err := db.Exec(`
+		INSERT INTO contact_records (id, source, fn)
+		VALUES ('rec-2', 'local', 'Bob')
+	`); err != nil {
+		t.Fatalf("insert record without photo: %v", err)
+	}
+	var dataNull, typeNull, urlNull sql.NullString
+	if err := db.QueryRow(`
+		SELECT photo_data, photo_media_type, photo_url
+		FROM contact_records WHERE id = 'rec-2'
+	`).Scan(&dataNull, &typeNull, &urlNull); err != nil {
+		t.Fatalf("read NULL photo columns: %v", err)
+	}
+	if dataNull.Valid || typeNull.Valid || urlNull.Valid {
+		t.Errorf("expected all NULL, got %v/%v/%v", dataNull, typeNull, urlNull)
 	}
 }

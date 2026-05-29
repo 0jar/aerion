@@ -28,6 +28,7 @@ export default defineConfig({
       // Shared deps used by extensions — must resolve to the host's node_modules
       // because extension files live outside the frontend/ root.
       '@iconify/svelte': path.resolve(NODE_MODULES_DIR, '@iconify/svelte'),
+      'svelte-i18n': path.resolve(NODE_MODULES_DIR, 'svelte-i18n'),
     },
   },
   optimizeDeps: {

@@ -4,43 +4,30 @@ import (
 	"fmt"
 
 	"github.com/hkdb/aerion/extensions/contacts"
-	"github.com/hkdb/aerion/internal/carddav"
-	"github.com/hkdb/aerion/internal/contact"
-	"github.com/hkdb/aerion/internal/credentials"
 	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 )
 
-// Extension is the Contacts extension's Go-side handle. It owns the coreapi.Contacts
-// implementation (the API wrapper) and exposes the manifest + lifecycle hooks
-// that the host calls during App.Startup.
+// Extension is the Contacts extension's lifecycle handle. It's intentionally
+// tiny — just the manifest plus the Register handshake. The Wails-bound
+// surface lives on Bridge (bridge.go), and the actual Contacts logic
+// (stores, API, sync) is owned by the API constructed inside Bridge's
+// lazy-init path.
+//
+// This separation is what makes the lightweight-by-default invariant hold:
+// the host always calls Register on every known extension at startup (the
+// architecture-doc rule for descriptive UI registrations), but doing so
+// allocates only a manifest copy + this struct. No stores, no SQLite, no
+// API — those are deferred to the first enabled Bridge method call.
 type Extension struct {
-	api      *API
-	store    *Store
 	manifest coreapi.Manifest
 }
 
-// New constructs the Contacts extension. localStore and carddavStore are the
-// host's existing core stores; the Contacts API wraps them for the
-// coreapi.Contacts read surface. credStore is needed for CardDAV write
-// dispatch (per-source basic-auth password lookup, Phase 2b.2.b.1). store is
-// the per-extension SQLite (already opened by the host so its migrations
-// apply regardless of enabled state).
-func New(localStore *contact.Store, carddavStore *carddav.Store, credStore *credentials.Store, store *Store) *Extension {
-	return &Extension{
-		api:      NewAPI(localStore, carddavStore, credStore),
-		store:    store,
-		manifest: contacts.Manifest(),
-	}
+// NewExtension constructs the Extension lifecycle handle. Takes no
+// arguments because nothing in Register depends on host state beyond
+// the Core handle passed in at registration time.
+func NewExtension() *Extension {
+	return &Extension{manifest: contacts.Manifest()}
 }
-
-// API returns the typed coreapi.Contacts implementation. The host can hold a
-// reference to call from its Wails-bound surface; other extensions that need
-// to query contacts would receive it via Core.Extension("contacts").
-func (e *Extension) API() *API { return e.api }
-
-// Store returns the per-extension SQLite wrapper for code that needs direct
-// access (none in Phase 2a — the API wraps everything).
-func (e *Extension) Store() *Store { return e.store }
 
 // Manifest returns the parsed manifest embedded at build time.
 func (e *Extension) Manifest() coreapi.Manifest { return e.manifest }
@@ -48,10 +35,8 @@ func (e *Extension) Manifest() coreapi.Manifest { return e.manifest }
 // Register wires the Contacts extension's UI surfaces (rail tab + account-setup
 // hook). Runs once per Aerion process lifetime, at App.Startup, regardless of
 // whether the extension is currently enabled — descriptive registrations
-// persist across enable/disable cycles. The frontend's rail rendering and
-// hook-discovery filtering live elsewhere (App.ListExtensionRailTabs filters
-// by enabled state; account-setup hooks are returned regardless so they
-// remain a discovery surface for disabled extensions).
+// persist across enable/disable cycles. The frontend filters by enabled
+// state at render time.
 //
 // Returns an Unregister func that tears all registrations down. Called by
 // the host on process shutdown.

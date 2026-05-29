@@ -1151,4 +1151,27 @@ var migrations = []Migration{
 				ON carddav_record_state(addressbook_id);
 		`,
 	},
+	{
+		Version: 34,
+		SQL: `
+			-- Phase 2b.2.b.2: first-class PHOTO field support on contact_records.
+			--
+			-- Before this migration, PHOTO data round-tripped through the
+			-- vcard_raw preservation mechanism (added in 2b.2.b.1) but was
+			-- never extracted, never displayed, never editable. Avatar always
+			-- showed initials. This migration adds three columns so the parser
+			-- can land photos natively and the builder can emit them under
+			-- explicit control.
+			--
+			-- Invariant: at most one of {photo_data + photo_media_type} OR
+			-- photo_url is populated per row. NULL across all three = no photo.
+			-- Inline (base64) is the common CardDAV shape (Nextcloud, iCloud,
+			-- Apple). URL refs are rarer; we parse + store them but don't
+			-- fetch in this phase. Write path always emits inline.
+
+			ALTER TABLE contact_records ADD COLUMN photo_data TEXT;
+			ALTER TABLE contact_records ADD COLUMN photo_media_type TEXT;
+			ALTER TABLE contact_records ADD COLUMN photo_url TEXT;
+		`,
+	},
 }

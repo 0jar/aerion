@@ -11,6 +11,7 @@
   //
   // Both entry paths share this single dialog component.
 
+  import { _ } from 'svelte-i18n'
   import * as Dialog from '$lib/components/ui/dialog'
   import { Button } from '$lib/components/ui/button'
   import OAuthCredsSlotEditor from '$lib/components/kit/OAuthCredsSlotEditor.svelte'
@@ -33,52 +34,47 @@
   // verified project's creds for contacts write too" — the user pastes the
   // same Client ID + Secret into google-contacts. Copy-from shortcut handles
   // it server-side without exposing values.
-  const COPY_FROM = [
-    { configID: 'google-mail', label: 'Google Mail' },
-    { configID: 'microsoft-mail', label: 'Microsoft Mail' },
-  ]
+  const copyFromOptions = $derived([
+    { configID: 'google-mail', label: $_('contacts.settings.copyFromGoogle') },
+    { configID: 'microsoft-mail', label: $_('contacts.settings.copyFromMicrosoft') },
+  ])
 </script>
 
 <Dialog.Root bind:open onOpenChange={(v) => { if (!v) handleClose() }}>
   <Dialog.Content class="max-w-2xl">
     <Dialog.Header>
-      <Dialog.Title>Contacts settings</Dialog.Title>
+      <Dialog.Title>{$_('contacts.settings.title')}</Dialog.Title>
       <Dialog.Description>
-        Configure OAuth credentials for the Contacts extension. Read access
-        rides on your mail account's existing permission; these creds power
-        WRITE operations (edit / create / delete) against Google or Microsoft
-        sources.
+        {$_('contacts.settings.description')}
       </Dialog.Description>
     </Dialog.Header>
 
     <div class="space-y-4 mt-2 max-h-[60vh] overflow-y-auto pr-1">
       <section>
-        <h3 class="text-sm font-semibold text-foreground mb-2">OAuth Credentials</h3>
+        <h3 class="text-sm font-semibold text-foreground mb-2">{$_('contacts.settings.oauthHeading')}</h3>
         <p class="text-xs text-muted-foreground mb-3">
-          Aerion ships verified credentials when available. Override with your
-          own project's credentials, or copy from Aerion's Mail slot if your
-          mail project already covers the Contacts.ReadWrite scope.
+          {$_('contacts.settings.oauthDescription')}
         </p>
 
         <div class="space-y-3">
           <OAuthCredsSlotEditor
             configID="google-contacts"
-            label="Google Contacts"
+            label={$_('contacts.settings.googleLabel')}
             secretRequired={true}
-            copyFromOptions={COPY_FROM}
+            {copyFromOptions}
           />
           <OAuthCredsSlotEditor
             configID="microsoft-contacts"
-            label="Microsoft Contacts"
+            label={$_('contacts.settings.microsoftLabel')}
             secretRequired={false}
-            copyFromOptions={COPY_FROM}
+            {copyFromOptions}
           />
         </div>
       </section>
     </div>
 
     <div class="flex items-center justify-end gap-2 pt-4 border-t border-border mt-4">
-      <Button variant="ghost" onclick={handleClose}>Close</Button>
+      <Button variant="ghost" onclick={handleClose}>{$_('contacts.settings.close')}</Button>
     </div>
   </Dialog.Content>
 </Dialog.Root>

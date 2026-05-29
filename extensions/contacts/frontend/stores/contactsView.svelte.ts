@@ -3,9 +3,24 @@
 // these need to survive across app launches.
 
 // @ts-ignore - wailsjs bindings
-import { ListContactsForBrowse, GetContactDetail, UpdateLocalContact, DeleteLocalContact, CreateLocalContact } from '$wailsjs/go/app/App'
+import {
+  Contacts_ListContactsForBrowse as ListContactsForBrowse,
+  Contacts_GetContactDetail as GetContactDetail,
+  Contacts_UpdateContact as UpdateContact,
+  Contacts_DeleteLocalContact as DeleteLocalContact,
+  Contacts_CreateContact as CreateContact,
+  Contacts_ListAddressbooks as ListAddressbooks,
+} from '$wailsjs/go/app/App'
 // @ts-ignore - wailsjs bindings
 import type { v1 } from '$wailsjs/go/models'
+// Responsive (mobile) integration — match mail's pattern of firing
+// showViewer/hideSidebar from the consumer's select actions. Layout-store
+// calls are self-gating: showViewer is a no-op when not responsive,
+// hideSidebar is a no-op when not narrow. Kit primitives (PaneLayout,
+// SourceSidebar, DetailPane) handle overlay class application + back
+// buttons + scrim; this store handles the "which view do we want to be
+// in next" decisions on user actions.
+import { isResponsive, showViewer, hideSidebar } from '$lib/stores/layout.svelte'
 
 // Source ID values the sidebar can dispatch:
 //   ""                  → merged listing across all sources
@@ -45,6 +60,9 @@ export function selectSource(sourceId: string): void {
   selectedSourceId = sourceId
   selectedContactId = null
   detail = null
+  // Dismiss the sidebar overlay on narrow viewports. Self-gating store
+  // call — no-op on full/medium.
+  hideSidebar()
   // Caller (ContactsPane) decides when to call reloadContacts().
 }
 
@@ -70,6 +88,9 @@ export async function selectContact(id: string | null): Promise<void> {
     detail = null
     return
   }
+  // On responsive viewports, reveal the detail pane overlay. Self-gating
+  // store call — no-op on full layout.
+  if (isResponsive()) showViewer()
   try {
     detail = await GetContactDetail(id)
   } catch (err) {
@@ -78,15 +99,17 @@ export async function selectContact(id: string | null): Promise<void> {
   }
 }
 
-// Rename a local (sent-recipient) contact. Email stays the primary key;
-// only the display name is editable for local contacts. Marks the contact
-// as user-overridden so auto-collection on future sends preserves the edit.
-export async function updateLocalContact(email: string, name: string): Promise<void> {
-  await UpdateLocalContact(email, name)
+// Update a contact (local or CardDAV) with a multi-field patch. The backend
+// dispatches by source — local writes via UpsertRecord, CardDAV PUTs to the
+// server. On 412 conflict the backend emits "contacts:conflict" via the
+// event listener wired in ContactsPane; this method's caller doesn't see the
+// conflict directly.
+export async function updateContact(id: string, patch: v1.ContactPatch): Promise<void> {
+  await UpdateContact(id, patch)
   // Refresh the list + detail view so changes are visible immediately.
   await reloadContacts()
-  if (selectedContactId === email) {
-    await selectContact(email)
+  if (selectedContactId === id) {
+    await selectContact(id)
   }
 }
 
@@ -101,13 +124,30 @@ export async function deleteLocalContact(email: string): Promise<void> {
   await reloadContacts()
 }
 
-// Create a manual local contact (kind='manual'). Returns the new contact's
-// id (the normalized email). Throws on conflict — caller (AddContactDialog)
-// translates ErrContactExists into a field-level "already exists" message.
+// Create a contact. Source dispatch happens in the backend (input.SourceID):
+//   - "local:manual" → local manual entry; returns the normalized email
+//   - <CardDAV UUID> → server-side PUT to input.AddressbookID (or the
+//     source's first enabled addressbook when empty); returns the record UUID
+// Throws on conflict — caller (AddContactDialog) translates "already exists"
+// strings into a field-level error.
 //
-// Note: this does NOT reload contacts or change the selected source — the
-// caller (ContactsPane.handleCreated) controls the post-create UX so the
-// dialog can close before the source switch.
-export async function createLocalContact(email: string, name: string): Promise<string> {
-  return await CreateLocalContact(email, name)
+// Does NOT reload contacts or change the selected source — the caller
+// (ContactsPane.handleCreated) controls the post-create UX so the dialog can
+// close before the source switch.
+export async function createContact(input: v1.ContactCreateInput): Promise<string> {
+  return await CreateContact(input)
+}
+
+// Lists the enabled addressbooks for a CardDAV source. Used by the Add
+// Contact dialog's addressbook sub-picker. Returns [] for empty / unknown /
+// non-CardDAV source IDs (the backend returns nil which the bindings turn
+// into undefined; this helper normalizes to []).
+export async function listAddressbooks(sourceId: string): Promise<v1.Addressbook[]> {
+  if (!sourceId) return []
+  try {
+    return (await ListAddressbooks(sourceId)) || []
+  } catch (err) {
+    console.error('Failed to list addressbooks:', err)
+    return []
+  }
 }

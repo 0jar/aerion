@@ -38,7 +38,13 @@ func setupAPIWithCreds(t *testing.T) (*API, *contact.Store, *carddav.Store, *cre
 	if err != nil {
 		t.Fatalf("credentials.NewStore: %v", err)
 	}
-	return NewAPI(localStore, carddavStore, credStore), localStore, carddavStore, credStore
+	// API takes a closure, not a *credentials.Store directly (D1 refactor).
+	// The closure here points at the real test credStore so the CardDAV
+	// write path can resolve real passwords end-to-end. The internal/
+	// credentials import is fine in test code — the rule against
+	// internal-package imports applies to production extension runtime
+	// code only.
+	return NewAPI(localStore, carddavStore, credStore.GetCardDAVPassword), localStore, carddavStore, credStore
 }
 
 func setupAPI(t *testing.T) (*API, *contact.Store, *carddav.Store) {
@@ -599,14 +605,21 @@ func TestAPI_CreateContact_Conflict(t *testing.T) {
 	}
 }
 
-func TestAPI_CreateContact_UnknownSourceUnimplemented(t *testing.T) {
+func TestAPI_CreateContact_UnknownSourceErrors(t *testing.T) {
+	// Post-Track-B: unknown CardDAV-shaped source UUIDs surface a "not found"
+	// error rather than ErrUnimplemented. ErrUnimplemented is reserved for
+	// known sources of types Aerion hasn't wired write paths for (Google /
+	// Microsoft); see TestAPI_CreateContact_OAuthSourceUnimplemented.
 	api, _, _ := setupAPI(t)
 	_, err := api.CreateContact(coreapi.ContactCreateInput{
 		SourceID: "some-carddav-uuid",
 		Email:    "x@y.com",
 	})
-	if err != coreapi.ErrUnimplemented {
-		t.Fatalf("expected ErrUnimplemented for non-local source, got %v", err)
+	if err == nil {
+		t.Fatal("expected error for unknown source, got nil")
+	}
+	if err == coreapi.ErrUnimplemented {
+		t.Fatalf("expected a real error for unknown source, got ErrUnimplemented")
 	}
 }
 
@@ -841,4 +854,150 @@ func readAll(t *testing.T, r *http.Request) []byte {
 // asConflict is a thin wrapper around errors.As to keep test sites readable.
 func asConflict(err error, target **coreapi.ErrConflict) bool {
 	return errors.As(err, target)
+}
+
+// ============================================================================
+// Multi-field patch dispatch — Phase 2b.2.b.2
+// ============================================================================
+
+func TestAPI_UpdateContact_Local_MultiField(t *testing.T) {
+	api, local, _ := setupAPI(t)
+
+	if err := local.Create("multi@example.com", "Multi Field"); err != nil {
+		t.Fatalf("seed local: %v", err)
+	}
+	got, _ := api.GetContact("multi@example.com")
+	recID := got.ID
+
+	work := "work"
+	cell := "cell"
+	patch := coreapi.ContactPatch{
+		Org:   strPtr("Acme Corp"),
+		Title: strPtr("Engineer"),
+		Phones: &[]coreapi.ContactPhone{
+			{Number: "+1-555-0100", Type: cell, IsPrimary: true},
+		},
+		Categories: &[]string{"friend", "team"},
+		Emails: &[]coreapi.ContactEmail{
+			{Email: "multi@example.com", Type: work, IsPrimary: true},
+			{Email: "multi-secondary@example.com", Type: "home"},
+		},
+	}
+	if err := api.UpdateContact(recID, patch); err != nil {
+		t.Fatalf("UpdateContact: %v", err)
+	}
+
+	got, err := api.GetContact(recID)
+	if err != nil || got == nil {
+		t.Fatalf("GetContact: got=%v err=%v", got, err)
+	}
+	if got.Org != "Acme Corp" {
+		t.Errorf("Org = %q, want Acme Corp", got.Org)
+	}
+	if got.Title != "Engineer" {
+		t.Errorf("Title = %q, want Engineer", got.Title)
+	}
+	if len(got.Phones) != 1 || got.Phones[0].Number != "+1-555-0100" {
+		t.Errorf("Phones = %+v, want one row with +1-555-0100", got.Phones)
+	}
+	if len(got.Categories) != 2 || got.Categories[0] != "friend" || got.Categories[1] != "team" {
+		t.Errorf("Categories = %v, want [friend team]", got.Categories)
+	}
+	if len(got.Emails) != 2 {
+		t.Errorf("Emails = %v, want 2 entries", got.Emails)
+	}
+}
+
+func TestAPI_UpdateContact_Local_NilFieldsNoOp(t *testing.T) {
+	api, local, _ := setupAPI(t)
+
+	if err := local.Create("noop@example.com", "Original Name"); err != nil {
+		t.Fatalf("seed local: %v", err)
+	}
+	got, _ := api.GetContact("noop@example.com")
+	recID := got.ID
+
+	// Send a patch with all-nil fields — should be no-op.
+	if err := api.UpdateContact(recID, coreapi.ContactPatch{}); err != nil {
+		t.Fatalf("UpdateContact (nil patch): %v", err)
+	}
+
+	got, _ = api.GetContact(recID)
+	if got.Name != "Original Name" {
+		t.Errorf("Name was clobbered by nil patch: %q", got.Name)
+	}
+}
+
+func TestAPI_UpdateContact_Local_EmptySliceClears(t *testing.T) {
+	api, local, _ := setupAPI(t)
+
+	if err := local.Create("clear@example.com", "Has Many Phones"); err != nil {
+		t.Fatalf("seed local: %v", err)
+	}
+	got, _ := api.GetContact("clear@example.com")
+	recID := got.ID
+
+	// Add some phones first.
+	if err := api.UpdateContact(recID, coreapi.ContactPatch{
+		Phones: &[]coreapi.ContactPhone{
+			{Number: "+1-555-0100", Type: "cell"},
+			{Number: "+1-555-0101", Type: "home"},
+		},
+	}); err != nil {
+		t.Fatalf("seed phones: %v", err)
+	}
+	got, _ = api.GetContact(recID)
+	if len(got.Phones) != 2 {
+		t.Fatalf("phones not seeded: %+v", got.Phones)
+	}
+
+	// Now clear with pointer-to-empty-slice (the "set to empty" contract).
+	emptyPhones := []coreapi.ContactPhone{}
+	if err := api.UpdateContact(recID, coreapi.ContactPatch{
+		Phones: &emptyPhones,
+	}); err != nil {
+		t.Fatalf("clear phones: %v", err)
+	}
+	got, _ = api.GetContact(recID)
+	if len(got.Phones) != 0 {
+		t.Errorf("phones should be cleared, got %+v", got.Phones)
+	}
+}
+
+func TestAPI_UpdateContact_Local_Photo(t *testing.T) {
+	api, local, _ := setupAPI(t)
+
+	if err := local.Create("photo@example.com", "Photo Person"); err != nil {
+		t.Fatalf("seed local: %v", err)
+	}
+	got, _ := api.GetContact("photo@example.com")
+	recID := got.ID
+
+	// Set a photo.
+	if err := api.UpdateContact(recID, coreapi.ContactPatch{
+		Photo: &coreapi.ContactPhoto{
+			Data:      "VEVTVERBVEE=",
+			MediaType: "image/jpeg",
+		},
+	}); err != nil {
+		t.Fatalf("set photo: %v", err)
+	}
+	got, _ = api.GetContact(recID)
+	if got.PhotoData != "VEVTVERBVEE=" {
+		t.Errorf("PhotoData = %q, want VEVTVERBVEE=", got.PhotoData)
+	}
+	if got.PhotoMediaType != "image/jpeg" {
+		t.Errorf("PhotoMediaType = %q, want image/jpeg", got.PhotoMediaType)
+	}
+
+	// Remove with empty struct.
+	if err := api.UpdateContact(recID, coreapi.ContactPatch{
+		Photo: &coreapi.ContactPhoto{},
+	}); err != nil {
+		t.Fatalf("clear photo: %v", err)
+	}
+	got, _ = api.GetContact(recID)
+	if got.PhotoData != "" || got.PhotoMediaType != "" || got.PhotoURL != "" {
+		t.Errorf("photo not cleared: data=%q media=%q url=%q", got.PhotoData, got.PhotoMediaType, got.PhotoURL)
+	}
 }

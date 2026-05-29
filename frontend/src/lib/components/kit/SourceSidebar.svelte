@@ -7,8 +7,16 @@
   // DOM focus when the slot matches so Alt+H/L cycling routes here.
 
   import { type Snippet, onMount } from 'svelte'
+  import Icon from '@iconify/svelte'
+  import { _ } from 'svelte-i18n'
   import { KEY } from '$lib/keyboard/shortcuts'
   import { setFocusedPane, getFocusedPane, isPaneFlashing, registerPaneNav, type FocusablePane } from '$lib/stores/keyboard.svelte'
+  // Responsive (mobile) behavior is self-managed: the sidebar reads the
+  // layout store directly so consumers never need to forward responsive
+  // props. Below 768px we apply the overlay classes (from app.css), inject
+  // a back button at the top, and auto-dismiss the sidebar after a source
+  // is picked — mirroring mail's narrow-mode behavior 1-for-1.
+  import { getLayoutMode, getResponsiveView, hideSidebar } from '$lib/stores/layout.svelte'
 
   type SourceSection<U extends { id: string }> = {
     heading?: string
@@ -42,6 +50,14 @@
   let containerRef = $state<HTMLElement | null>(null)
 
   const allItems = $derived(sections.flatMap(s => s.items))
+
+  // Responsive derived state — read directly from the layout store. No
+  // consumer-supplied props. Mouse clicks bypass this component's onSelect
+  // (rows wire their own onclick to the consumer's callback), so the auto-
+  // dismiss behavior on source-pick lives in the consumer's selectSource
+  // action, not here — same pattern mail uses with App.svelte's folder pick.
+  const narrow = $derived(getLayoutMode() === 'narrow')
+  const overlayVisible = $derived(narrow && getResponsiveView() === 'sidebar')
 
   $effect(() => {
     if (getFocusedPane() === focusSlot && containerRef && document.activeElement !== containerRef) {
@@ -114,11 +130,23 @@
   role="navigation"
   aria-label={label ?? title ?? 'Sources'}
   tabindex="0"
-  class="w-60 flex-shrink-0 flex flex-col py-3 border-r border-border bg-muted/30 overflow-y-auto outline-none {flashing ? 'pane-focus-flash' : ''}"
+  class="w-60 flex-shrink-0 flex flex-col py-3 border-r border-border overflow-y-auto outline-none {narrow ? 'bg-background' : 'bg-muted/30'} {flashing ? 'pane-focus-flash' : ''} {narrow ? 'responsive-sidebar-overlay' : ''} {overlayVisible ? 'responsive-sidebar-visible' : ''}"
   onkeydown={handleKeyDown}
   onfocus={handleFocus}
   onmousedown={handleMouseDown}
 >
+  {#if narrow}
+    <button
+      type="button"
+      class="flex items-center gap-2 px-4 py-2 mb-2 text-sm text-muted-foreground hover:text-foreground"
+      onclick={hideSidebar}
+      aria-label={$_('common.back')}
+    >
+      <Icon icon="mdi:arrow-left" class="w-4 h-4" />
+      <span>{$_('common.back')}</span>
+    </button>
+  {/if}
+
   {#if title}
     <h2 class="px-4 mb-3 text-lg font-semibold text-foreground">{title}</h2>
   {/if}

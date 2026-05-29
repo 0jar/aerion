@@ -68,6 +68,9 @@ func fromRecord(rec *contact.Record) coreapi.Contact {
 		Note:      rec.Note,
 		Bday:      rec.Bday,
 		Nickname:  rec.Nickname,
+		PhotoData:      rec.PhotoData,
+		PhotoMediaType: rec.PhotoMediaType,
+		PhotoURL:       rec.PhotoURL,
 		UpdatedAt: rec.UpdatedAt,
 	}
 

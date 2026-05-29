@@ -287,7 +287,7 @@ func TestPutContact_HappyPath(t *testing.T) {
 	defer fake.close()
 
 	c := newTestClient(t, fake.srv.URL)
-	etag, err := c.PutContact("/addressbook/", "/addressbook/contact.vcf", "etag-before", []byte("BEGIN:VCARD\r\nEND:VCARD\r\n"))
+	etag, err := c.PutContact("/addressbook/", "/addressbook/contact.vcf", "etag-before", false, []byte("BEGIN:VCARD\r\nEND:VCARD\r\n"))
 	if err != nil {
 		t.Fatalf("PutContact: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestPutContact_PreconditionFailed(t *testing.T) {
 	defer fake.close()
 
 	c := newTestClient(t, fake.srv.URL)
-	_, err := c.PutContact("/addressbook/", "/addressbook/contact.vcf", "stale-etag", []byte("dummy"))
+	_, err := c.PutContact("/addressbook/", "/addressbook/contact.vcf", "stale-etag", false, []byte("dummy"))
 	var pre *ErrPreconditionFailed
 	if !errors.As(err, &pre) {
 		t.Fatalf("expected *ErrPreconditionFailed, got %T: %v", err, err)
@@ -331,7 +331,7 @@ func TestPutContact_OtherStatusError(t *testing.T) {
 	defer fake.close()
 
 	c := newTestClient(t, fake.srv.URL)
-	_, err := c.PutContact("/addressbook/", "/addressbook/contact.vcf", "etag", []byte("dummy"))
+	_, err := c.PutContact("/addressbook/", "/addressbook/contact.vcf", "etag", false, []byte("dummy"))
 	if err == nil {
 		t.Fatal("expected error on 403")
 	}

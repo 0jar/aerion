@@ -418,6 +418,12 @@ type ParsedRecord struct {
 	Nickname string
 
 	Categories []string
+
+	// Photo fields (Phase 2b.2.b.2). Flat-scalar pattern matching Org/Title.
+	// At most one of {PhotoData + PhotoMediaType} OR PhotoURL is populated.
+	PhotoData      string // base64-encoded image bytes (inline embed)
+	PhotoMediaType string // e.g. "image/jpeg"
+	PhotoURL       string // vCard PHOTO URL-ref (not fetched in this phase)
 }
 
 // ParsedEmail is one EMAIL property on a vCard, with its first TYPE param.
@@ -558,6 +564,54 @@ func parseVCard(obj carddav.AddressObject) *ParsedRecord {
 	// CATEGORIES (multi).
 	rec.Categories = card.Categories()
 
+	// PHOTO — single-value field with two possible shapes:
+	//   - Inline base64: vCard 3.0 dialect is `PHOTO;ENCODING=b;TYPE=JPEG:<base64>`
+	//     (the encoding param can be "b", "B", or "base64"; the TYPE is the
+	//     image format). vCard 4.0 dialect is a data URI:
+	//     `PHOTO:data:image/jpeg;base64,<base64>`.
+	//   - URL ref: `PHOTO;VALUE=URI:http://...` (vCard 3) or
+	//     `PHOTO:http://...` (vCard 4).
+	// We populate PhotoData + PhotoMediaType for inline OR PhotoURL for refs.
+	// All-empty = no photo. URL-ref photos are parsed but not fetched in this
+	// phase — Avatar falls back to initials with a "(linked from server)" caption.
+	if pf := card.Get(vcard.FieldPhoto); pf != nil {
+		val := strings.TrimSpace(pf.Value)
+		if val != "" {
+			isBase64Encoding := false
+			if pf.Params != nil {
+				enc := strings.ToLower(strings.TrimSpace(pf.Params.Get("ENCODING")))
+				if enc == "b" || enc == "base64" {
+					isBase64Encoding = true
+				}
+				// vCard 4.0 uses MEDIATYPE or VALUE=URI rather than ENCODING=b.
+				if v := strings.ToLower(strings.TrimSpace(pf.Params.Get("VALUE"))); v == "uri" {
+					rec.PhotoURL = val
+				}
+			}
+			if rec.PhotoURL == "" {
+				switch {
+				case strings.HasPrefix(val, "data:") && strings.Contains(val, ";base64,"):
+					// vCard 4.0 data URI: data:image/jpeg;base64,<base64>
+					idx := strings.Index(val, ";base64,")
+					mediaType := strings.TrimPrefix(val[:idx], "data:")
+					rec.PhotoMediaType = strings.TrimSpace(mediaType)
+					rec.PhotoData = strings.TrimSpace(val[idx+len(";base64,"):])
+				case strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://"):
+					// Bare URL value (no VALUE=URI param needed).
+					rec.PhotoURL = val
+				case isBase64Encoding:
+					// vCard 3.0 inline: TYPE param carries the format suffix.
+					rec.PhotoData = val
+					if pf.Params != nil {
+						if t := strings.TrimSpace(pf.Params.Get("TYPE")); t != "" {
+							rec.PhotoMediaType = "image/" + strings.ToLower(t)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Re-encode the card for vcard_raw round-trip preservation.
 	var buf bytes.Buffer
 	if err := vcard.NewEncoder(&buf).Encode(card); err == nil {
@@ -607,7 +661,7 @@ func (e *ErrPreconditionFailed) Error() string {
 // Reuses the existing httpClient + basic-auth wrapping established at client
 // construction so xmlFixTransport normalization applies to any error-body
 // XML, and basic auth flows through automatically.
-func (c *Client) PutContact(addressbookPath, href, ifMatchETag string, card []byte) (string, error) {
+func (c *Client) PutContact(addressbookPath, href, ifMatchETag string, ifNoneMatchAny bool, card []byte) (string, error) {
 	fullURL := resolveURL(c.baseURL, href)
 	httpClient := webdav.HTTPClientWithBasicAuth(
 		newHTTPClient(60*time.Second),
@@ -619,8 +673,14 @@ func (c *Client) PutContact(addressbookPath, href, ifMatchETag string, card []by
 		return "", fmt.Errorf("build PUT request: %w", err)
 	}
 	req.Header.Set("Content-Type", "text/vcard; charset=utf-8")
+	// Create-not-update semantics (ifNoneMatchAny) and update-with-exact-etag
+	// semantics (ifMatchETag) are mutually exclusive — callers should pass one
+	// or neither, never both. If both are set, If-Match wins to match the
+	// historical update behavior.
 	if ifMatchETag != "" {
 		req.Header.Set("If-Match", quotedETag(ifMatchETag))
+	} else if ifNoneMatchAny {
+		req.Header.Set("If-None-Match", "*")
 	}
 
 	resp, err := httpClient.Do(req)

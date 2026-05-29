@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { _ } from 'svelte-i18n'
   import SourceSidebar from '$lib/components/kit/SourceSidebar.svelte'
   import SourceItem from '$lib/components/kit/SourceItem.svelte'
-  import { contactSourcesStore } from '$lib/stores/contactSources.svelte'
+  import { contactSourcesStore } from '$extensions/contacts/frontend/stores/contactSources.svelte'
   import { contactsView, selectSource } from '$extensions/contacts/frontend/stores/contactsView.svelte'
 
   interface Props {
@@ -27,14 +28,13 @@
     icon: string
   }
 
-  const sections = $derived(buildSections())
-
-  function buildSections() {
+  // Reactive — re-runs when locale changes because $_ is referenced inside.
+  const sections = $derived.by(() => {
     const builtins: SidebarItem[] = [
-      { id: '', label: 'All', icon: 'mdi:account-multiple' },
-      { id: 'local', label: 'Local - All', icon: 'mdi:folder-account-outline' },
-      { id: 'local:manual', label: 'Local - Contacts', icon: 'mdi:account-plus-outline' },
-      { id: 'local:collected', label: 'Local - Collected', icon: 'mdi:email-outline' },
+      { id: '', label: $_('contacts.sidebar.all'), icon: 'mdi:account-multiple' },
+      { id: 'local', label: $_('contacts.sidebar.localAll'), icon: 'mdi:folder-account-outline' },
+      { id: 'local:manual', label: $_('contacts.sidebar.localManual'), icon: 'mdi:account-plus-outline' },
+      { id: 'local:collected', label: $_('contacts.sidebar.localCollected'), icon: 'mdi:email-outline' },
     ]
     const carddavItems: SidebarItem[] = contactSourcesStore.sources.map(s => ({
       id: s.id,
@@ -43,9 +43,9 @@
     }))
     return [
       { items: builtins },
-      { heading: 'Sources', items: carddavItems },
+      { heading: $_('contacts.sidebar.sourcesHeading'), items: carddavItems },
     ]
-  }
+  })
 
   function pick(id: string) {
     selectSource(id)
@@ -54,7 +54,7 @@
 </script>
 
 <SourceSidebar
-  title="Contacts"
+  title={$_('contacts.sidebar.title')}
   {sections}
   selectedId={contactsView.selectedSourceId}
   onSelect={pick}
@@ -64,6 +64,6 @@
   {/snippet}
 
   {#snippet sectionEmpty(_section: { heading?: string; items: SidebarItem[] })}
-    <p class="mx-4 my-1 text-xs text-muted-foreground">No CardDAV sources configured.</p>
+    <p class="mx-4 my-1 text-xs text-muted-foreground">{$_('contacts.sidebar.noSources')}</p>
   {/snippet}
 </SourceSidebar>

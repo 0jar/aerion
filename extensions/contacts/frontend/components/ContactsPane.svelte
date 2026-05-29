@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { _ } from 'svelte-i18n'
   import ContactsSidebar from './ContactsSidebar.svelte'
   import ContactList from './ContactList.svelte'
   import ContactDetail from './ContactDetail.svelte'
   import AddContactDialog from './AddContactDialog.svelte'
   import ContactEditDialog from './ContactEditDialog.svelte'
+  import PaneLayout from '$lib/components/kit/PaneLayout.svelte'
   import { contactsView, reloadContacts, selectSource, selectContact } from '$extensions/contacts/frontend/stores/contactsView.svelte'
-  import { contactSourcesStore } from '$lib/stores/contactSources.svelte'
+  import { contactSourcesStore } from '$extensions/contacts/frontend/stores/contactSources.svelte'
   import { toasts } from '$lib/stores/toast'
   import { registerExtensionShortcut } from '$lib/stores/extensionShortcuts.svelte'
   import { KEY } from '$extensions/contacts/frontend/keyboard/shortcuts'
@@ -24,9 +26,7 @@
   onMount(() => {
     reloadContacts()
     unsubscribeConflict = EventsOn('contacts:conflict', async (payload: { contactId: string; message: string }) => {
-      toasts.error(
-        'This contact was changed elsewhere. Your edit was discarded — refreshed with the latest version.',
-      )
+      toasts.error($_('contacts.toast.conflict'))
       await reloadContacts()
       if (payload?.contactId && contactsView.selectedContactId === payload.contactId) {
         await selectContact(payload.contactId)
@@ -65,11 +65,13 @@
     showEdit = true
   }
 
-  async function handleCreated(id: string) {
-    // After a successful Add, switch the sidebar to the "Contacts" sub-source
-    // so the user sees the new entry next to other manual ones, then select
-    // the new row.
-    selectSource('local:manual')
+  async function handleCreated(id: string, sourceId: string) {
+    // After a successful Add, switch the sidebar to the source the contact
+    // landed in so the user sees it in context. Local lands in 'local:manual';
+    // CardDAV lands at the source UUID.
+    const isLocal = sourceId === 'local' || sourceId.startsWith('local:')
+    const target = isLocal ? 'local:manual' : sourceId
+    selectSource(target)
     await reloadContacts()
     await selectContact(id)
   }
@@ -84,11 +86,11 @@
   onDestroy(unregEdit)
 </script>
 
-<div class="flex flex-1 min-w-0 h-full">
+<PaneLayout>
   <ContactsSidebar onSelect={handleSourceSelected} />
   <ContactList onAdd={openAdd} />
   <ContactDetail onEdit={openEdit} />
-</div>
+</PaneLayout>
 
 <AddContactDialog bind:open={showAdd} onCreated={handleCreated} />
 <ContactEditDialog bind:open={showEdit} contact={editTarget} />

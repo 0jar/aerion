@@ -90,6 +90,42 @@ export function CompleteOAuthAccountSetup(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['app']['App']['CompleteOAuthAccountSetup'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function Contacts_CreateContact(arg1) {
+  return window['go']['app']['App']['Contacts_CreateContact'](arg1);
+}
+
+export function Contacts_DeleteLocalContact(arg1) {
+  return window['go']['app']['App']['Contacts_DeleteLocalContact'](arg1);
+}
+
+export function Contacts_GetContactDetail(arg1) {
+  return window['go']['app']['App']['Contacts_GetContactDetail'](arg1);
+}
+
+export function Contacts_LinkAccountSource(arg1, arg2, arg3) {
+  return window['go']['app']['App']['Contacts_LinkAccountSource'](arg1, arg2, arg3);
+}
+
+export function Contacts_ListAddressbooks(arg1) {
+  return window['go']['app']['App']['Contacts_ListAddressbooks'](arg1);
+}
+
+export function Contacts_ListContactsForBrowse(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['Contacts_ListContactsForBrowse'](arg1, arg2, arg3, arg4);
+}
+
+export function Contacts_ListSources() {
+  return window['go']['app']['App']['Contacts_ListSources']();
+}
+
+export function Contacts_ResizeContactPhoto(arg1) {
+  return window['go']['app']['App']['Contacts_ResizeContactPhoto'](arg1);
+}
+
+export function Contacts_UpdateContact(arg1, arg2) {
+  return window['go']['app']['App']['Contacts_UpdateContact'](arg1, arg2);
+}
+
 export function CopyOAuthCreds(arg1, arg2) {
   return window['go']['app']['App']['CopyOAuthCreds'](arg1, arg2);
 }
@@ -100,10 +136,6 @@ export function CopyToFolder(arg1, arg2) {
 
 export function CreateIdentity(arg1, arg2) {
   return window['go']['app']['App']['CreateIdentity'](arg1, arg2);
-}
-
-export function CreateLocalContact(arg1, arg2) {
-  return window['go']['app']['App']['CreateLocalContact'](arg1, arg2);
 }
 
 export function DeleteContact(arg1) {
@@ -120,10 +152,6 @@ export function DeleteDraft(arg1) {
 
 export function DeleteIdentity(arg1) {
   return window['go']['app']['App']['DeleteIdentity'](arg1);
-}
-
-export function DeleteLocalContact(arg1) {
-  return window['go']['app']['App']['DeleteLocalContact'](arg1);
 }
 
 export function DeleteLocalMessages(arg1) {
@@ -244,10 +272,6 @@ export function GetConnectedComposers() {
 
 export function GetContact(arg1) {
   return window['go']['app']['App']['GetContact'](arg1);
-}
-
-export function GetContactDetail(arg1) {
-  return window['go']['app']['App']['GetContactDetail'](arg1);
 }
 
 export function GetContactSource(arg1) {
@@ -576,10 +600,6 @@ export function ListAccountSetupHooksForProvider(arg1) {
 
 export function ListContacts(arg1) {
   return window['go']['app']['App']['ListContacts'](arg1);
-}
-
-export function ListContactsForBrowse(arg1, arg2, arg3, arg4) {
-  return window['go']['app']['App']['ListContactsForBrowse'](arg1, arg2, arg3, arg4);
 }
 
 export function ListDrafts(arg1) {
@@ -1040,10 +1060,6 @@ export function UpdateContactSource(arg1, arg2) {
 
 export function UpdateIdentity(arg1, arg2) {
   return window['go']['app']['App']['UpdateIdentity'](arg1, arg2);
-}
-
-export function UpdateLocalContact(arg1, arg2) {
-  return window['go']['app']['App']['UpdateLocalContact'](arg1, arg2);
 }
 
 export function UpdateLocalFlags(arg1, arg2, arg3) {

@@ -1,6 +1,7 @@
 import { register, init, waitLocale, locale, _ } from 'svelte-i18n'
 
-// Register locale files with lazy loading
+// Register CORE locale files with lazy loading. Extensions register their own
+// locales via Vite glob auto-discovery in initI18n() — see below.
 register('en', () => import('./locales/en.json'))
 register('cs', () => import('./locales/cs.json'))
 register('de', () => import('./locales/de.json'))
@@ -10,6 +11,15 @@ register('nb', () => import('./locales/nb.json'))
 register('zh-CN', () => import('./locales/zh-CN.json'))
 register('zh-HK', () => import('./locales/zh-HK.json'))
 register('zh-TW', () => import('./locales/zh-TW.json'))
+
+// Vite-discovered extension i18n modules. Each enabled extension that ships
+// translations exports a registerExtensionI18n() function from its
+// frontend/i18n/index.ts. Adding a new extension's i18n is purely a file
+// drop — no edit to this file needed. See docs/EXTENSIONS.md § Extension
+// i18n for the contract.
+const extensionI18nModules = import.meta.glob<{
+  registerExtensionI18n: () => void
+}>('../../../../extensions/*/frontend/i18n/index.ts', { eager: true })
 
 // Supported locales for the language picker
 export const supportedLocales = [
@@ -53,6 +63,12 @@ export function detectSystemLocale(): string {
  */
 export async function initI18n(savedLocale?: string): Promise<void> {
   const initialLocale = savedLocale || detectSystemLocale()
+
+  // Register every discovered extension's locale loaders before init() so
+  // their messages are merged into the active locale on first wait.
+  for (const mod of Object.values(extensionI18nModules)) {
+    mod.registerExtensionI18n?.()
+  }
 
   init({
     fallbackLocale: 'en',

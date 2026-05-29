@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { _ } from 'svelte-i18n'
   import Icon from '@iconify/svelte'
   import { Button } from '$lib/components/ui/button'
-  import { contactSourcesStore } from '$lib/stores/contactSources.svelte'
+  import { contactSourcesStore } from '$extensions/contacts/frontend/stores/contactSources.svelte'
   import { addToast } from '$lib/stores/toast'
   import { refreshExtensionRegistry } from '$lib/stores/extensionRegistry.svelte'
   // @ts-ignore - wailsjs bindings
@@ -39,7 +40,7 @@
       done = true
       addToast({
         type: 'success',
-        message: `Contacts sync set up for ${accountName}`,
+        message: $_('contacts.hook.successMessage', { values: { name: accountName } }),
       })
     } catch (err) {
       console.error('Failed to set up contacts for account:', err)
@@ -75,19 +76,19 @@
 
   {#if !done}
     <div class="flex justify-end gap-2">
-      <Button variant="ghost" onclick={skip} disabled={busy}>Skip</Button>
+      <Button variant="ghost" onclick={skip} disabled={busy}>{$_('contacts.hook.skip')}</Button>
       <Button onclick={setUp} disabled={busy}>
         {#if busy}
           <Icon icon="mdi:loading" class="w-4 h-4 mr-2 animate-spin" />
         {/if}
-        Set up
+        {$_('contacts.hook.setUp')}
       </Button>
     </div>
   {:else}
     <div class="flex items-center gap-2 text-primary">
       <Icon icon="mdi:check-circle" width="20" height="20" />
-      <span class="flex-1">Contacts sync is set up.</span>
-      <Button variant="ghost" onclick={close}>Done</Button>
+      <span class="flex-1">{$_('contacts.hook.completeMessage')}</span>
+      <Button variant="ghost" onclick={close}>{$_('contacts.hook.done')}</Button>
     </div>
   {/if}
 </section>

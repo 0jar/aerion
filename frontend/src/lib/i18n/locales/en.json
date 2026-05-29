@@ -756,7 +756,9 @@
     "update": "Update",
     "linked": "linked",
     "autoName": "{name} Contacts",
-    "minutesFallback": "{value} minutes"
+    "minutesFallback": "{value} minutes",
+    "enableWriteAccess": "Enable write access to this source",
+    "enableWriteAccessDescription": "Allow editing, creating, and deleting contacts on this CardDAV server. Uses the credentials above."
   },
   "certificate": {
     "title": "Untrusted Certificate",

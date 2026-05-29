@@ -17,32 +17,102 @@ type ContactEvent struct {
 
 // ContactPatch is the optional-fields shape passed to Contacts.UpdateContact.
 // Pointer fields distinguish "leave unchanged" (nil) from "set to empty"
-// (non-nil pointer to zero value). Phase 2b.1 only ships Name; richer fields
-// (Emails, Phone, Address, Notes) get added when 2b.2/2b.3 wire the
-// provider-side write paths that need them.
+// (non-nil pointer to zero value). Phase 2b.2.b.2 expanded this to the full
+// multi-field surface so the Edit dialog can patch any subset of a contact's
+// data in a single call.
+//
+// For multi-value fields (Emails, Phones, Addresses, etc.) the pointer-to-slice
+// preserves three states: nil = leave unchanged; non-nil empty slice = clear all
+// rows; non-nil populated slice = replace existing rows with the new set. The
+// backend writes the whole record via UpsertRecordTx, so partial-row updates
+// are NOT supported — callers send the full desired list.
+//
+// For Photo (single-value but structured), the same convention via
+// pointer-to-struct: nil = unchanged; non-nil with empty Data + URL = remove
+// the photo; non-nil with populated Data + MediaType = set inline.
 type ContactPatch struct {
-	Name *string `json:"name,omitempty"`
+	Name       *string           `json:"name,omitempty"`
+	Nickname   *string           `json:"nickname,omitempty"`
+	Org        *string           `json:"org,omitempty"`
+	Title      *string           `json:"title,omitempty"`
+	Note       *string           `json:"note,omitempty"`
+	Bday       *string           `json:"bday,omitempty"`
+	Emails     *[]ContactEmail   `json:"emails,omitempty"`
+	Phones     *[]ContactPhone   `json:"phones,omitempty"`
+	Addresses  *[]ContactAddress `json:"addresses,omitempty"`
+	URLs       *[]ContactURL     `json:"urls,omitempty"`
+	IMPPs      *[]ContactIMPP    `json:"impps,omitempty"`
+	Categories *[]string         `json:"categories,omitempty"`
+	Photo      *ContactPhoto     `json:"photo,omitempty"`
+}
+
+// ContactPhoto is the PATCH-side grouping for photo edits. Pointer-to-struct
+// on the patch matches the "nil = unchanged, non-nil = set" semantics that
+// *[]ContactEmail uses for collections. This grouping shows up ONLY here —
+// the read surface (Contact) keeps the existing flat-scalar pattern with
+// PhotoData / PhotoMediaType / PhotoURL fields.
+//
+// URL is read-only on patch: the backend sets it when the parser sees a
+// vCard URL-ref PHOTO. Write path always emits inline base64; callers that
+// want to remove a photo send Data + URL both empty.
+type ContactPhoto struct {
+	Data      string `json:"data,omitempty"`
+	MediaType string `json:"mediaType,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 // ContactCreateInput is the shape passed to Contacts.CreateContact.
 //
 // SourceID selects where the new contact lives:
 //   - "" or "local" or "local:manual" → local manual contact (Aerion's
-//     own SQLite store). Phase 2b.1 ships only this path.
-//   - "local:collected"               → REJECTED. The Collected sub-source is
-//     read-only by design: those entries are derived from sent-mail
-//     recipients, not user-typed.
-//   - <CardDAV source UUID>           → returns ErrUnimplemented in 2b.1;
-//     filled in by 2b.2 with the WebDAV PUT path.
+//     own SQLite store). The kind='manual' designation is set automatically.
+//   - "local:collected"               → REJECTED. The 'collected' kind is
+//     reserved for the sent-mail collection process to assign; users adding
+//     via the Add dialog get kind='manual' regardless of which local sub-view
+//     they came from.
+//   - <CardDAV source UUID>           → Phase 2b.2.c (Track B) creates a new
+//     vCard via WebDAV PUT to the addressbook identified by AddressbookID
+//     (or the source's first writable addressbook when AddressbookID is "").
 //   - Future provider routing         → returns ErrUnimplemented; filled in by
 //     2b.3 (Google People / MS Graph).
 //
-// Future fields (Emails []string, Phone, Address, Notes) get added when 2b.2
-// fills the CardDAV write path and the vCard builder reveals the shape.
+// AddressbookID applies only when SourceID is a CardDAV source UUID. Empty
+// AddressbookID means "the source's first writable addressbook." Future
+// fields (Emails []string, Phone, Address, Notes) get added when multi-field
+// Add lands.
 type ContactCreateInput struct {
-	SourceID string `json:"sourceId,omitempty"`
-	Email    string `json:"email"`
-	Name     string `json:"name,omitempty"`
+	SourceID      string `json:"sourceId,omitempty"`
+	AddressbookID string `json:"addressbookId,omitempty"`
+	Email         string `json:"email"`
+	Name          string `json:"name,omitempty"`
+}
+
+// Addressbook is the API-surface descriptor for a CardDAV addressbook hosted
+// by a contact source. Listed via Contacts.ListAddressbooks so the Add Contact
+// UI can pick a target addressbook when a source has more than one.
+type Addressbook struct {
+	ID       string `json:"id"`
+	SourceID string `json:"sourceId"`
+	Name     string `json:"name"`
+	Path     string `json:"path,omitempty"` // server-relative path; mainly diagnostic
+}
+
+// ContactSource is the API-surface descriptor for a configured contact source
+// (CardDAV server, or an OAuth-linked Google/Microsoft account). Listed via
+// Contacts.ListSources so the extension's UI can display sources, gate
+// edits/deletes on the per-source `Writable` flag, and route Add Contact
+// creates by source id.
+//
+// Intentionally narrower than the host's internal Source type: only fields
+// the extension UI actually consumes are exposed here. Last-sync timestamps,
+// error messages, and OAuth account linkage details remain internal — the
+// extension queries higher-level Wails methods (or surfaces ContactSource
+// rows in a list-only role) rather than reading those fields directly.
+type ContactSource struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"` // "carddav" | "google" | "microsoft"
+	Writable bool   `json:"writable"`
 }
 
 // Contacts is the read/write/subscribe surface for contacts.
@@ -56,6 +126,21 @@ type Contacts interface {
 	SearchContacts(query string, limit int) ([]Contact, error)
 	GetContact(emailOrID string) (*Contact, error)
 	ListContacts(filter ContactFilter) ([]Contact, error)
+	ListAddressbooks(sourceID string) ([]Addressbook, error)
+
+	// ListSources returns all configured contact sources (CardDAV servers
+	// and any OAuth-linked Google/Microsoft accounts). The extension's UI
+	// consumes this for the sidebar listing, the Add Contact source picker,
+	// and the per-source writable gate on Edit/Delete.
+	ListSources() ([]ContactSource, error)
+
+	// LinkAccountSource creates a new contact source backed by an existing
+	// email account's OAuth tokens (used by the AccountContactsHookPanel
+	// after a user adds a Google or Microsoft account). Returns the new
+	// source's id. syncInterval is in minutes; 60 is the conventional
+	// default. Errors with ErrAccountNotFound when the account doesn't exist.
+	LinkAccountSource(accountID, name string, syncInterval int) (string, error)
+
 	CreateContact(input ContactCreateInput) (id string, err error)
 	UpdateContact(id string, patch ContactPatch) error
 	DeleteContact(id string) error

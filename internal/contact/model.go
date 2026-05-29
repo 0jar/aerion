@@ -57,6 +57,16 @@ type Record struct {
 	Note       string    `json:"note,omitempty"`
 	Bday       string    `json:"bday,omitempty"`
 	Nickname   string    `json:"nickname,omitempty"`
+	// Photo fields (Phase 2b.2.b.2). Flat-scalar pattern matching Org/Title/Note.
+	// At most one of {PhotoData + PhotoMediaType} OR PhotoURL is populated:
+	//   - PhotoData (base64) + PhotoMediaType (e.g. "image/jpeg") = inline embed
+	//     (vCard PHOTO;ENCODING=b;TYPE=...). Common CardDAV shape.
+	//   - PhotoURL = vCard PHOTO URL-ref (PHOTO;VALUE=URI:...). Parsed but not
+	//     fetched in this phase; Avatar falls back to initials.
+	// All-empty = no photo.
+	PhotoData      string    `json:"photo_data,omitempty"`
+	PhotoMediaType string    `json:"photo_media_type,omitempty"`
+	PhotoURL       string    `json:"photo_url,omitempty"`
 	VCardRaw   string    `json:"-"` // preserved for round-trip; not exposed to JSON consumers
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`

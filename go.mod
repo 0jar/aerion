@@ -1,6 +1,6 @@
 module github.com/hkdb/aerion
 
-go 1.24.0
+go 1.25.0
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3
@@ -20,9 +20,10 @@ require (
 	github.com/zalando/go-keyring v0.2.6
 	go.mozilla.org/pkcs7 v0.9.0
 	golang.org/x/crypto v0.46.0
+	golang.org/x/image v0.41.0
 	golang.org/x/net v0.48.0
 	golang.org/x/sys v0.39.0
-	golang.org/x/text v0.32.0
+	golang.org/x/text v0.37.0
 	modernc.org/sqlite v1.42.2
 	software.sslmate.com/src/go-pkcs12 v0.7.0
 )

@@ -14,9 +14,21 @@
     density?: 'micro' | 'compact' | 'standard' | 'large'
     /** Override the density-derived pixel size (rare). */
     size?: number
+    /** Inline base64-encoded photo bytes. When set with photoMediaType, the
+     *  avatar renders as an <img> instead of initials. Falls back to initials
+     *  on image load error. (Phase 2b.2.b.2) */
+    photoData?: string
+    /** Photo media type (e.g. "image/jpeg"). Required alongside photoData. */
+    photoMediaType?: string
   }
 
-  const { email, name, density = 'standard', size }: Props = $props()
+  const { email, name, density = 'standard', size, photoData, photoMediaType }: Props = $props()
+
+  // Photo rendering state: true when we have data+media-type AND the img loaded
+  // successfully. On error (broken base64, unsupported MIME, etc.), falls back
+  // to initials.
+  let photoFailed = $state(false)
+  const showPhoto = $derived(!!photoData && !!photoMediaType && !photoFailed)
 
   // DJB2-style hash. Bit-for-bit the same as mail's getAvatarColor() in
   // ConversationRow.svelte:172-180 so an extension's contact and a mail
@@ -59,11 +71,20 @@
 </script>
 
 <div
-  class="rounded-full flex-shrink-0 inline-flex items-center justify-center font-medium {cls}"
+  class="rounded-full flex-shrink-0 inline-flex items-center justify-center font-medium overflow-hidden {showPhoto ? '' : cls}"
   style:width="{px}px"
   style:height="{px}px"
   style:font-size="{fontPx}px"
   aria-hidden="true"
 >
-  {text}
+  {#if showPhoto}
+    <img
+      src="data:{photoMediaType};base64,{photoData}"
+      alt=""
+      class="w-full h-full object-cover"
+      onerror={() => { photoFailed = true }}
+    />
+  {:else}
+    {text}
+  {/if}
 </div>

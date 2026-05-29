@@ -168,6 +168,18 @@ func isValidEmail(email string) bool {
 
 // App struct holds the application state and dependencies
 type App struct {
+	// Embedded extension bridges. Each extension contributes its Wails-bound
+	// surface via a Bridge struct embedded here; Go's method promotion makes
+	// those bridge methods appear on App so Wails reflection picks them up.
+	// All extension logic lives in extensions/<name>/backend/bridge.go; the
+	// only host-side touch is this field + ~10 LOC of wiring in
+	// app/extension_<name>.go.
+	//
+	// Convention: bridge methods MUST be named with the extension's prefix
+	// (`Contacts_`, `Calendar_`, etc.) so embedded methods can never collide
+	// across extensions. See docs/EXTENSIONS.md.
+	*extcontactsbe.Bridge
+
 	ctx context.Context
 
 	// ready is the backend-up signal the frontend polls before mounting the
@@ -212,14 +224,15 @@ type App struct {
 	carddavSyncer    *carddav.Syncer
 	carddavScheduler *carddav.Scheduler
 
-	// Extension system
-	extContactsStore *extcontactsbe.Store // per-extension DB (always open; schema persists across enable/disable)
+	// Extension system. Each extension's Wails-bound surface is embedded
+	// into App via its Bridge struct (declared at the top of this struct
+	// definition); the *Extension field below is the lightweight lifecycle
+	// handle the host's knownExtensions Register loop iterates.
 	authBroker       *extauth.Broker      // coreapi.Auth impl for extensions
 	mailAPI          *extmail.API         // coreapi.Mail impl wrapping core stores
 	composerAPI      *extcompose.API      // coreapi.Composer impl wrapping OpenComposerWindow
-	contactsAPI      *extcontactsbe.API   // coreapi.Contacts impl wrapping core stores (Phase 2a)
 	uiRegistry       *extui.Registry      // coreapi.UI impl: rail tabs, account-setup hooks, ...
-	contactsExt      *extcontactsbe.Extension // first-party Contacts extension handle (lifecycle owner)
+	contactsExt      *extcontactsbe.Extension // Contacts lifecycle handle (manifest + Register only)
 	knownExtensions  []coreapi.Extension      // all first-party extensions, iterated by ListExtensions
 	extensionUnregs  []coreapi.Unregister     // teardown funcs returned from each Extension.Register
 
@@ -491,15 +504,10 @@ func (a *App) Startup(ctx context.Context) {
 	a.carddavSyncer = carddav.NewSyncer(a.carddavStore, a.credStore)
 	a.carddavScheduler = carddav.NewScheduler(a.carddavSyncer, a.carddavStore)
 
-	// Extension system (Phase 1 infrastructure). Stores open eagerly even when
-	// the extension is disabled so the schema stays valid across enable/disable
-	// cycles. No background services start here — that's Phase 2 when actual
-	// extensions land.
-	extContacts, extErr := extcontactsbe.NewStore(a.paths.Data)
-	if extErr != nil {
-		log.Warn().Err(extErr).Msg("Failed to open contacts extension store")
-	}
-	a.extContactsStore = extContacts
+	// Extension system (Phase 1 infrastructure). Per the lightweight-by-default
+	// invariant, NO extension stores are opened here. Each extension's Bridge
+	// lazy-initializes its stores + per-extension SQLite + API on the first
+	// enabled method call. See extensions/<name>/backend/bridge.go.
 	a.authBroker = extauth.NewBroker(a.credStore, a.oauth2Manager)
 	a.mailAPI = extmail.NewAPI(a.messageStore, a.folderStore)
 	a.composerAPI = extcompose.NewAPI(a)
@@ -507,11 +515,18 @@ func (a *App) Startup(ctx context.Context) {
 
 	// Construct first-party extensions and call their lifecycle Register().
 	// Register is descriptive — it wires UI surfaces (rail tabs, hooks) that
-	// persist across enable/disable cycles. The frontend filters by enabled
-	// state at render time.
-	a.contactsExt = extcontactsbe.New(a.contactStore, a.carddavStore, a.credStore, a.extContactsStore)
-	a.contactsAPI = a.contactsExt.API()
+	// persist across enable/disable cycles regardless of enabled state. The
+	// frontend filters by enabled state at render time. Extension structs
+	// are intentionally tiny (manifest + Register only); the Wails-bound
+	// surface lives on each extension's Bridge struct, embedded into App.
+	a.contactsExt = extcontactsbe.NewExtension()
 	a.knownExtensions = []coreapi.Extension{a.contactsExt}
+
+	// Wire the Contacts extension's Bridge into App (embedded). Bridge
+	// methods become Wails-bindable via Go's method-promotion on the
+	// embedded field, so the frontend can call `Contacts_*` methods
+	// directly. Bridge state is lazy — no stores open here.
+	a.initContactsExtension()
 
 	// Construct one Core per known extension. The Core's Auth surface is
 	// scoped to that extension's identity, so HTTPClient calls route via

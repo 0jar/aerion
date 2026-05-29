@@ -1,7 +1,7 @@
 package contacts
 
 import (
-	"github.com/hkdb/aerion/internal/oauth2"
+	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 )
 
 // Build-time OAuth credentials for the Contacts extension. These are injected
@@ -32,37 +32,27 @@ var (
 	MicrosoftClientID string
 )
 
-// contactsCredentialsProvider implements oauth2.CredentialsProvider for the
-// Contacts extension's per-extension slots.
-type contactsCredentialsProvider struct{}
-
-func (contactsCredentialsProvider) Lookup(configID string) (oauth2.ClientCredentials, bool) {
-	switch configID {
-	case "google-contacts":
-		if GoogleClientID == "" {
-			return oauth2.ClientCredentials{}, false
-		}
-		return oauth2.ClientCredentials{
+// OAuthClients returns the per-extension OAuth client configurations the
+// Contacts extension contributes. The host calls this at startup and
+// registers each entry into the global oauth2.ClientConfigForID resolver
+// chain. Entries with empty ClientID are ignored — extensions can declare
+// all their slots unconditionally and rely on build-time ldflags to fill in
+// only the ones they have credentials for.
+//
+// This declarative pattern replaces the previous package-init RegisterCredentials
+// call. By going through coreapi, the extension no longer needs to import
+// `internal/oauth2` — that's the host's plumbing, not the extension's.
+func OAuthClients() []coreapi.OAuthProviderRegistration {
+	return []coreapi.OAuthProviderRegistration{
+		{
+			ConfigID:     "google-contacts",
 			ClientID:     GoogleClientID,
 			ClientSecret: GoogleClientSecret,
-		}, true
-	case "microsoft-contacts":
-		if MicrosoftClientID == "" {
-			return oauth2.ClientCredentials{}, false
-		}
-		// Microsoft desktop apps omit client_secret (PKCE).
-		return oauth2.ClientCredentials{
+		},
+		{
+			// Microsoft desktop apps with PKCE omit the client secret.
+			ConfigID: "microsoft-contacts",
 			ClientID: MicrosoftClientID,
-		}, true
-	default:
-		return oauth2.ClientCredentials{}, false
+		},
 	}
-}
-
-// init registers the Contacts extension's credentials provider so the global
-// oauth2.ClientConfigForID resolution picks up google-contacts /
-// microsoft-contacts. Runs once at package load — before any Extension.Register
-// call, which is what we want.
-func init() {
-	oauth2.RegisterCredentialsProvider(contactsCredentialsProvider{})
 }

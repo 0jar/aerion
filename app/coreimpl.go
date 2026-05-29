@@ -37,7 +37,86 @@ func newCoreForExtension(a *App, ext coreapi.Extension) *coreImpl {
 
 func (c *coreImpl) Mail() coreapi.Mail         { return c.app.mailAPI }
 func (c *coreImpl) Composer() coreapi.Composer { return c.app.composerAPI }
-func (c *coreImpl) Contacts() coreapi.Contacts { return c.app.contactsAPI }
+
+// Contacts returns a coreapi.Contacts surface that exposes source management
+// (ListSources, LinkAccountSource) to extensions. The contact CRUD methods
+// (Search/Get/List/Create/Update/Delete) are still owned by the Contacts
+// extension's Bridge (extensions/contacts/backend/bridge.go) and remain
+// ErrUnimplemented at this host-level surface — no cross-extension consumer
+// queries those yet, and routing them through coreImpl would force the
+// Contacts extension to initialize even when disabled, breaking the
+// lightweight-by-default invariant. Source management lives here (rather
+// than on the Bridge) because contact_sources is a host-owned table and
+// the host has the full source CRUD already; the extension just needs a
+// read-and-link surface to drive its sidebar + account-setup hook.
+func (c *coreImpl) Contacts() coreapi.Contacts {
+	return contactsCoreImpl{app: c.app}
+}
+
+type contactsCoreImpl struct {
+	app *App
+}
+
+func (contactsCoreImpl) SearchContacts(string, int) ([]coreapi.Contact, error) {
+	return nil, coreapi.ErrUnimplemented
+}
+func (contactsCoreImpl) GetContact(string) (*coreapi.Contact, error) {
+	return nil, coreapi.ErrUnimplemented
+}
+func (contactsCoreImpl) ListContacts(coreapi.ContactFilter) ([]coreapi.Contact, error) {
+	return nil, coreapi.ErrUnimplemented
+}
+func (contactsCoreImpl) ListAddressbooks(string) ([]coreapi.Addressbook, error) {
+	return nil, coreapi.ErrUnimplemented
+}
+
+// ListSources wraps the host's existing contact-source store. Filters down
+// to the API-surface shape (ContactSource) so the extension only sees what
+// it consumes — id, name, type, writable.
+func (c contactsCoreImpl) ListSources() ([]coreapi.ContactSource, error) {
+	sources, err := c.app.carddavStore.ListSources()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]coreapi.ContactSource, 0, len(sources))
+	for _, s := range sources {
+		if s == nil {
+			continue
+		}
+		out = append(out, coreapi.ContactSource{
+			ID:       s.ID,
+			Name:     s.Name,
+			Type:     string(s.Type),
+			Writable: s.Writable,
+		})
+	}
+	return out, nil
+}
+
+// LinkAccountSource delegates to the host's existing LinkAccountContactSource
+// Wails method. Returns the new source's id (Wails method returned the full
+// source struct; we extract its ID since that's all the extension needs).
+func (c contactsCoreImpl) LinkAccountSource(accountID, name string, syncInterval int) (string, error) {
+	source, err := c.app.LinkAccountContactSource(accountID, name, syncInterval)
+	if err != nil {
+		return "", err
+	}
+	if source == nil {
+		return "", nil
+	}
+	return source.ID, nil
+}
+
+func (contactsCoreImpl) CreateContact(coreapi.ContactCreateInput) (string, error) {
+	return "", coreapi.ErrUnimplemented
+}
+func (contactsCoreImpl) UpdateContact(string, coreapi.ContactPatch) error {
+	return coreapi.ErrUnimplemented
+}
+func (contactsCoreImpl) DeleteContact(string) error { return coreapi.ErrUnimplemented }
+func (contactsCoreImpl) SubscribeToContactEvents([]coreapi.ContactEventType) (<-chan coreapi.ContactEvent, coreapi.Unsubscribe, error) {
+	return nil, func() {}, coreapi.ErrUnimplemented
+}
 func (c *coreImpl) Auth() coreapi.Auth {
 	return &extensionAuth{
 		app:         c.app,

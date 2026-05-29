@@ -1,18 +1,19 @@
--- Aerion: rollback the v0.3.0 schema (migrations 31 + 32 + 33) back to v0.2.5 (v30).
+-- Aerion: rollback the v0.3.0 schema (migrations 31 + 32 + 33 + 34) back to v0.2.5 (v30).
 --
 -- This script reconstructs the v30 schema (`contacts` + `carddav_contacts` tables)
--- from the v33 unified schema (`contact_records` + `contact_emails` + sidecars)
+-- from the v34 unified schema (`contact_records` + `contact_emails` + sidecars)
 -- via JOINs. No external backup file is needed — the unified schema IS the data;
 -- the old shape is just a denormalized projection of it.
 --
 -- Aerion versions and the schemas they ship with:
 --   - v0.2.5 (last released) → schema v30 (separate `contacts`, `carddav_contacts`)
---   - v0.3.0 (upcoming)      → schema v33 (unified `contact_records` + UUID identity
---                                          + carddav_record_state.addressbook_id FK)
+--   - v0.3.0 (upcoming)      → schema v34 (unified `contact_records` + UUID identity
+--                                          + carddav_record_state.addressbook_id FK
+--                                          + PHOTO columns)
 --
--- v31 and v32 were intermediate development schemas that never shipped — no
--- real-world DB will ever be at v31 or v32 alone. The only rollback path that
--- matters is v33 → v30 (the released-to-released transition).
+-- v31, v32, v33 were intermediate development schemas that never shipped — no
+-- real-world DB will ever be at any of them alone. The only rollback path that
+-- matters is v34 → v30 (the released-to-released transition).
 --
 -- Migrations bundled into the 0.3.0 cumulative jump:
 --   - 31: unified contact_records + multi-field sub-tables; replaced legacy
@@ -23,10 +24,14 @@
 --     contact_source_addressbooks(id) ON DELETE CASCADE. Closes the privacy
 --     gap where deleting a contacts provider left record + state zombies in
 --     the local DB.
+--   - 34: first-class PHOTO field support — adds photo_data, photo_media_type,
+--     photo_url columns to contact_records so the parser/builder land vCard
+--     PHOTOs natively (no longer just round-tripping via vcard_raw).
 --
 -- Inherent data loss on rollback:
 --   - Multi-field data (phones, addresses, URLs, IMPPs, org, title, note, bday,
 --     nickname, categories) is dropped. v30's schema has no columns for these.
+--   - PHOTO data (introduced in v34) is dropped. v30 had no photo storage.
 --   - The `vcard_raw` round-trip preservation is dropped (same reason).
 --   - CardDAV record IDs are reshaped: each (record, email) pair becomes its own
 --     row again, with synthetic IDs of the form `<record_id>:<email>`. Older
@@ -46,7 +51,7 @@
 --      (or whatever your DB path is — `~/Library/Application Support/Aerion/`
 --       on macOS, `%LOCALAPPDATA%\aerion\` on Windows).
 --   3. Run this script against your DB:
---        sqlite3 ~/.local/share/aerion/aerion.db < rollback-v33-to-v30.sql
+--        sqlite3 ~/.local/share/aerion/aerion.db < rollback-v34-to-v30.sql
 --   4. Launch the older Aerion (v0.2.5). It should start normally and your
 --      contacts autocomplete should work.
 --
@@ -129,10 +134,10 @@ DROP TABLE contact_phones;
 DROP TABLE contact_emails;
 DROP TABLE contact_records;
 
--- 6. Roll back the migration tracker so older Aerion doesn't think v31/v32/v33
---    have been applied. After this, older Aerion sees schema_version=30 and
---    starts normally. The `>= 31` bound catches v31, v32, AND v33 — plus any
---    future intermediate schemas, if one slipped in.
+-- 6. Roll back the migration tracker so older Aerion doesn't think v31/v32/
+--    v33/v34 have been applied. After this, older Aerion sees schema_version=30
+--    and starts normally. The `>= 31` bound catches v31, v32, v33, AND v34 —
+--    plus any future intermediate schemas, if one slipped in.
 DELETE FROM migrations WHERE version >= 31;
 
 COMMIT;

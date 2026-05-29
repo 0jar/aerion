@@ -48,6 +48,15 @@ type stubContacts struct{}
 func (stubContacts) SearchContacts(string, int) ([]Contact, error) { return nil, ErrUnimplemented }
 func (stubContacts) GetContact(string) (*Contact, error)           { return nil, ErrUnimplemented }
 func (stubContacts) ListContacts(ContactFilter) ([]Contact, error) { return nil, ErrUnimplemented }
+func (stubContacts) ListAddressbooks(string) ([]Addressbook, error) {
+	return nil, ErrUnimplemented
+}
+func (stubContacts) ListSources() ([]ContactSource, error) {
+	return nil, ErrUnimplemented
+}
+func (stubContacts) LinkAccountSource(string, string, int) (string, error) {
+	return "", ErrUnimplemented
+}
 func (stubContacts) CreateContact(ContactCreateInput) (string, error) {
 	return "", ErrUnimplemented
 }

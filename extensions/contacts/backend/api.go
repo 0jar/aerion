@@ -1,13 +1,14 @@
 package backend
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/hkdb/aerion/extensions/contacts/backend/imaging"
 	"github.com/hkdb/aerion/internal/carddav"
 	"github.com/hkdb/aerion/internal/contact"
-	"github.com/hkdb/aerion/internal/credentials"
 	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 )
 
@@ -46,21 +47,24 @@ func localKindFromSourceID(id string) string {
 }
 
 // API implements coreapi.Contacts by wrapping the existing core contact.Store
-// and carddav.Store. credStore is needed to resolve per-source basic-auth
-// passwords for CardDAV writes (Phase 2b.2.b.1); it may be nil in test
-// fixtures that never exercise CardDAV writes.
+// and carddav.Store. getCardDAVPassword is a host-provided closure that
+// resolves per-source basic-auth passwords for CardDAV writes (Phase
+// 2b.2.b.1); it may be nil in test fixtures that never exercise CardDAV
+// writes. The closure pattern (rather than a direct *credentials.Store)
+// keeps this package free of `internal/credentials` so the extension
+// conforms to the docs/EXTENSIONS.md "no internal imports" rule.
 type API struct {
-	localStore   *contact.Store
-	carddavStore *carddav.Store
-	credStore    *credentials.Store
+	localStore         *contact.Store
+	carddavStore       *carddav.Store
+	getCardDAVPassword CardDAVPasswordFunc
 }
 
 // NewAPI constructs the Contacts API wrapper. Any store may be nil — the
 // wrapper degrades gracefully (a profile with no CardDAV sources has nil
 // carddavStore; search still returns local results; CardDAV writes refuse with
 // a clear error rather than panicking).
-func NewAPI(localStore *contact.Store, carddavStore *carddav.Store, credStore *credentials.Store) *API {
-	return &API{localStore: localStore, carddavStore: carddavStore, credStore: credStore}
+func NewAPI(localStore *contact.Store, carddavStore *carddav.Store, getCardDAVPassword CardDAVPasswordFunc) *API {
+	return &API{localStore: localStore, carddavStore: carddavStore, getCardDAVPassword: getCardDAVPassword}
 }
 
 // SearchContacts delegates to the core contact store's merged search across
@@ -108,6 +112,7 @@ func (a *API) GetContact(emailOrID string) (*coreapi.Contact, error) {
 	}
 	if rec != nil {
 		out := fromRecord(rec)
+		a.enrichCardDAVSourceID(&out, rec)
 		return &out, nil
 	}
 
@@ -121,10 +126,27 @@ func (a *API) GetContact(emailOrID string) (*coreapi.Contact, error) {
 		}
 		if rec != nil {
 			out := fromRecord(rec)
+			a.enrichCardDAVSourceID(&out, rec)
 			return &out, nil
 		}
 	}
 	return nil, nil
+}
+
+// enrichCardDAVSourceID rewrites coreapi.Contact.SourceID from the literal
+// "carddav" string that fromRecord defaults to into the actual CardDAV source
+// UUID, so the frontend's writability gate (which queries
+// contactSourcesStore.isSourceWritable(sourceId)) can find the row. No-op when
+// the record isn't a CardDAV record or when the source lookup misses.
+func (a *API) enrichCardDAVSourceID(out *coreapi.Contact, rec *contact.Record) {
+	if out == nil || rec == nil || rec.Source != "carddav" || a.carddavStore == nil {
+		return
+	}
+	sourceID, err := a.carddavStore.GetSourceIDForRecord(rec.ID)
+	if err != nil || sourceID == "" {
+		return
+	}
+	out.SourceID = sourceID
 }
 
 // ListContacts returns contacts filtered by SourceID:
@@ -151,13 +173,16 @@ func (a *API) ListContacts(filter coreapi.ContactFilter) ([]coreapi.Contact, err
 //     (kind='manual', name_overridden=1, send_count=0). Returns the email as
 //     the new contact's id. Errors with ErrContactExists when the email is
 //     already present.
-//   - "local:collected"            → REJECTED. The Collected sub-source is
-//     read-only by design — those entries are auto-derived from sent-mail.
-//   - CardDAV / Google / Microsoft → returns ErrUnimplemented. Filled in by
-//     Phase 2b.2 (CardDAV PUT) and 2b.3 (Google People / MS Graph).
+//   - "local:collected"            → REJECTED. The 'collected' kind is reserved
+//     for the sent-mail collection process to assign.
+//   - <CardDAV source UUID>        → PUTs a new vCard to the source's addressbook
+//     identified by input.AddressbookID (or the source's first enabled+writable
+//     addressbook when AddressbookID is ""). Returns the new record UUID.
+//   - Google / Microsoft           → returns ErrUnimplemented. 2b.3.
 //
-// Email is normalized (trim + lowercase) before storage; the returned id is
-// the normalized email.
+// Email is normalized (trim + lowercase) before storage. For local contacts
+// the returned id is the normalized email; for CardDAV contacts it's the
+// generated record UUID.
 func (a *API) CreateContact(input coreapi.ContactCreateInput) (string, error) {
 	email := strings.ToLower(strings.TrimSpace(input.Email))
 	if email == "" {
@@ -179,9 +204,95 @@ func (a *API) CreateContact(input coreapi.ContactCreateInput) (string, error) {
 	case input.SourceID == SourceIDLocalCollected:
 		return "", fmt.Errorf("contacts.CreateContact: cannot manually create a Collected contact (auto-derived from sent mail)")
 	default:
-		// CardDAV / OAuth-source contacts.
+		return a.createCardDAVContact(input, email)
+	}
+}
+
+// createCardDAVContact resolves the target addressbook + client and PUTs a new
+// vCard. Used by CreateContact when the SourceID is a CardDAV source UUID.
+// The record's UUID is freshly generated; href is "<addressbookPath><uuid>.vcf".
+func (a *API) createCardDAVContact(input coreapi.ContactCreateInput, email string) (string, error) {
+	if a.carddavStore == nil {
+		return "", fmt.Errorf("contacts.CreateContact: carddav store unavailable")
+	}
+
+	// Validate the source exists and is a CardDAV source. Google/Microsoft
+	// sources here would also have a UUID source id but their write path
+	// isn't wired yet.
+	source, err := a.carddavStore.GetSource(input.SourceID)
+	if err != nil {
+		return "", fmt.Errorf("contacts.CreateContact: lookup source %s: %w", input.SourceID, err)
+	}
+	if source == nil {
+		return "", fmt.Errorf("contacts.CreateContact: source %s not found", input.SourceID)
+	}
+	if source.Type != carddav.SourceTypeCardDAV {
+		// OAuth source — write capability lands in 2b.3.
 		return "", coreapi.ErrUnimplemented
 	}
+
+	// Resolve the target addressbook. If the caller passed one, validate it
+	// belongs to this source. Otherwise pick the first enabled addressbook.
+	addressbookID := input.AddressbookID
+	if addressbookID != "" {
+		ab, err := a.carddavStore.GetAddressbook(addressbookID)
+		if err != nil {
+			return "", fmt.Errorf("contacts.CreateContact: lookup addressbook %s: %w", addressbookID, err)
+		}
+		if ab == nil {
+			return "", fmt.Errorf("contacts.CreateContact: addressbook %s not found", addressbookID)
+		}
+		if ab.SourceID != input.SourceID {
+			return "", fmt.Errorf("contacts.CreateContact: addressbook %s does not belong to source %s", addressbookID, input.SourceID)
+		}
+	}
+	if addressbookID == "" {
+		abs, err := a.carddavStore.ListAddressbooks(input.SourceID)
+		if err != nil {
+			return "", fmt.Errorf("contacts.CreateContact: list addressbooks for %s: %w", input.SourceID, err)
+		}
+		for _, ab := range abs {
+			if ab != nil && ab.Enabled {
+				addressbookID = ab.ID
+				break
+			}
+		}
+		if addressbookID == "" {
+			return "", fmt.Errorf("contacts.CreateContact: source %s has no enabled addressbook to write to", input.SourceID)
+		}
+	}
+
+	// Build the record. FN is required by vCard 3.0 — fall back to email
+	// when Name is blank.
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = email
+	}
+	rec := &contact.Record{
+		Fn: name,
+		Emails: []contact.RecordEmail{
+			{
+				Email:     email,
+				EmailType: "",
+				IsPrimary: true,
+			},
+		},
+	}
+
+	client, _, err := a.cardDAVClientForAddressbook(addressbookID)
+	if err != nil {
+		return "", fmt.Errorf("contacts.CreateContact: %w", err)
+	}
+
+	id, err := a.carddavStore.CreateRecord(addressbookID, rec, client)
+	if err != nil {
+		var pre *carddav.ErrPreconditionFailed
+		if errors.As(err, &pre) {
+			return "", &coreapi.ErrConflict{ContactID: "", Message: "a contact already exists at the generated href; please retry"}
+		}
+		return "", fmt.Errorf("contacts.CreateContact (carddav source %s): %w", input.SourceID, err)
+	}
+	return id, nil
 }
 
 // UpdateContact mutates a contact by id. Source dispatch:
@@ -229,24 +340,135 @@ func (a *API) UpdateContact(id string, patch coreapi.ContactPatch) error {
 		return nil
 	}
 
-	// Local-source records: edit via the record-level helper.
+	// Apply every non-nil patch field to the resolved record. After this,
+	// `rec` carries the full intended state — the source-dispatch below
+	// just needs to persist it.
+	if !applyContactPatchToRecord(rec, patch) {
+		// All patch fields nil — no-op success.
+		return nil
+	}
+
+	// Local-source records: full-fidelity write via UpsertRecord (which wraps
+	// UpsertRecordTx in a transaction). Replaces all sub-table rows wholesale.
 	if rec.Source == "local" {
-		if patch.Name == nil {
-			return nil
-		}
-		return a.localStore.UpdateRecordName(rec.ID, *patch.Name)
+		return a.localStore.UpsertRecord(rec)
 	}
 
 	// CardDAV: server-side PUT path. Reuses the source's basic-auth creds.
 	if rec.Source == "carddav" {
-		if patch.Name == nil {
-			return nil
-		}
-		rec.Fn = strings.TrimSpace(*patch.Name)
 		return a.writeCardDAVRecord(rec)
 	}
 	// Google/Microsoft (other source values) — write path lands in 2b.3.
 	return coreapi.ErrUnimplemented
+}
+
+// applyContactPatchToRecord copies every non-nil patch field onto the record.
+// Returns true if any field was applied; false if the patch was entirely nil
+// (caller can short-circuit with a no-op success).
+//
+// Scalar fields are simple string assignments (with TrimSpace for user input).
+// Multi-value fields use the pointer-to-slice contract: non-nil empty slice
+// = clear, non-nil populated slice = replace. Photo uses pointer-to-struct
+// with the same semantics: non-nil with empty Data+URL = clear.
+func applyContactPatchToRecord(rec *contact.Record, patch coreapi.ContactPatch) bool {
+	applied := false
+	if patch.Name != nil {
+		rec.Fn = strings.TrimSpace(*patch.Name)
+		// Mark all emails as name_overridden so future AddOrUpdate calls from
+		// sent-mail auto-collection don't clobber the user edit. Matches the
+		// behavior the legacy UpdateRecordName path had.
+		for i := range rec.Emails {
+			rec.Emails[i].NameOverridden = true
+		}
+		applied = true
+	}
+	if patch.Nickname != nil {
+		rec.Nickname = strings.TrimSpace(*patch.Nickname)
+		applied = true
+	}
+	if patch.Org != nil {
+		rec.Org = strings.TrimSpace(*patch.Org)
+		applied = true
+	}
+	if patch.Title != nil {
+		rec.Title = strings.TrimSpace(*patch.Title)
+		applied = true
+	}
+	if patch.Note != nil {
+		rec.Note = strings.TrimSpace(*patch.Note)
+		applied = true
+	}
+	if patch.Bday != nil {
+		rec.Bday = strings.TrimSpace(*patch.Bday)
+		applied = true
+	}
+	if patch.Emails != nil {
+		rec.Emails = nil
+		for _, e := range *patch.Emails {
+			rec.Emails = append(rec.Emails, contact.RecordEmail{
+				Email:     strings.ToLower(strings.TrimSpace(e.Email)),
+				EmailType: e.Type,
+				IsPrimary: e.IsPrimary,
+			})
+		}
+		applied = true
+	}
+	if patch.Phones != nil {
+		rec.Phones = nil
+		for _, p := range *patch.Phones {
+			rec.Phones = append(rec.Phones, contact.RecordPhone{
+				Number:    strings.TrimSpace(p.Number),
+				PhoneType: p.Type,
+				IsPrimary: p.IsPrimary,
+			})
+		}
+		applied = true
+	}
+	if patch.Addresses != nil {
+		rec.Addresses = nil
+		for _, a := range *patch.Addresses {
+			rec.Addresses = append(rec.Addresses, contact.RecordAddress{
+				AddrType: a.Type,
+				Street:   strings.TrimSpace(a.Street),
+				City:     strings.TrimSpace(a.City),
+				Region:   strings.TrimSpace(a.Region),
+				Postcode: strings.TrimSpace(a.Postcode),
+				Country:  strings.TrimSpace(a.Country),
+			})
+		}
+		applied = true
+	}
+	if patch.URLs != nil {
+		rec.URLs = nil
+		for _, u := range *patch.URLs {
+			rec.URLs = append(rec.URLs, contact.RecordURL{
+				URL:     strings.TrimSpace(u.URL),
+				URLType: u.Type,
+			})
+		}
+		applied = true
+	}
+	if patch.IMPPs != nil {
+		rec.IMPPs = nil
+		for _, i := range *patch.IMPPs {
+			rec.IMPPs = append(rec.IMPPs, contact.RecordIMPP{
+				Handle:   strings.TrimSpace(i.Handle),
+				IMPPType: i.Type,
+			})
+		}
+		applied = true
+	}
+	if patch.Categories != nil {
+		rec.Categories = append([]string{}, *patch.Categories...)
+		applied = true
+	}
+	if patch.Photo != nil {
+		rec.PhotoData = strings.TrimSpace(patch.Photo.Data)
+		rec.PhotoMediaType = strings.TrimSpace(patch.Photo.MediaType)
+		rec.PhotoURL = strings.TrimSpace(patch.Photo.URL)
+		applied = true
+	}
+	return applied
 }
 
 // DeleteContact removes a contact by id. Source dispatch:
@@ -341,20 +563,35 @@ func (a *API) deleteCardDAVRecord(rec *contact.Record) error {
 	return nil
 }
 
-// cardDAVClientForRecord resolves the source for a CardDAV record (via the
-// record's source_ref = addressbook_id), gates on the source's writable flag,
-// fetches the basic-auth password from the credentials store, and returns a
-// ready-to-use Client. Also returns the source.ID for error context.
+// cardDAVClientForRecord resolves the source for an EXISTING CardDAV record
+// (via the record's source_ref = addressbook_id) and delegates to
+// cardDAVClientForAddressbook. Used by UpdateContact / DeleteContact paths
+// which already have a record loaded.
 func (a *API) cardDAVClientForRecord(rec *contact.Record) (*carddav.Client, string, error) {
+	if rec == nil {
+		return nil, "", fmt.Errorf("nil record")
+	}
+	if rec.SourceRef == "" {
+		return nil, "", fmt.Errorf("record has no addressbook reference")
+	}
+	return a.cardDAVClientForAddressbook(rec.SourceRef)
+}
+
+// cardDAVClientForAddressbook resolves the source for an addressbook, gates on
+// the source's writable flag, fetches the basic-auth password from the
+// credentials store, and returns a ready-to-use Client. Used by CreateContact
+// (where the record doesn't yet have a source_ref) and via
+// cardDAVClientForRecord for update/delete paths.
+func (a *API) cardDAVClientForAddressbook(addressbookID string) (*carddav.Client, string, error) {
 	if a.carddavStore == nil {
 		return nil, "", fmt.Errorf("carddav store unavailable")
 	}
-	source, err := a.carddavStore.GetSourceForAddressbook(rec.SourceRef)
+	source, err := a.carddavStore.GetSourceForAddressbook(addressbookID)
 	if err != nil {
-		return nil, "", fmt.Errorf("lookup source for addressbook %s: %w", rec.SourceRef, err)
+		return nil, "", fmt.Errorf("lookup source for addressbook %s: %w", addressbookID, err)
 	}
 	if source == nil {
-		return nil, "", fmt.Errorf("no source owns addressbook %s", rec.SourceRef)
+		return nil, "", fmt.Errorf("no source owns addressbook %s", addressbookID)
 	}
 	// Writability is a user-facing permission gate — fire it before the
 	// credentials-store check so non-writable sources surface the right
@@ -362,10 +599,10 @@ func (a *API) cardDAVClientForRecord(rec *contact.Record) (*carddav.Client, stri
 	if !source.Writable {
 		return nil, source.ID, fmt.Errorf("this source is not writable; enable write access in its settings")
 	}
-	if a.credStore == nil {
-		return nil, source.ID, fmt.Errorf("credentials store unavailable")
+	if a.getCardDAVPassword == nil {
+		return nil, source.ID, fmt.Errorf("credentials lookup unavailable")
 	}
-	password, err := a.credStore.GetCardDAVPassword(source.ID)
+	password, err := a.getCardDAVPassword(source.ID)
 	if err != nil {
 		return nil, source.ID, fmt.Errorf("get password for source %s: %w", source.ID, err)
 	}
@@ -374,6 +611,35 @@ func (a *API) cardDAVClientForRecord(rec *contact.Record) (*carddav.Client, stri
 		return nil, source.ID, fmt.Errorf("build carddav client: %w", err)
 	}
 	return client, source.ID, nil
+}
+
+// ListAddressbooks returns the addressbooks for a CardDAV source as the API
+// surface type. Backs Contacts_ListAddressbooks which feeds the Add Contact
+// dialog's addressbook picker.
+func (a *API) ListAddressbooks(sourceID string) ([]coreapi.Addressbook, error) {
+	if a.carddavStore == nil {
+		return nil, nil
+	}
+	if sourceID == "" {
+		return nil, nil
+	}
+	abs, err := a.carddavStore.ListAddressbooks(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("contacts.ListAddressbooks: %w", err)
+	}
+	out := make([]coreapi.Addressbook, 0, len(abs))
+	for _, ab := range abs {
+		if ab == nil || !ab.Enabled {
+			continue
+		}
+		out = append(out, coreapi.Addressbook{
+			ID:       ab.ID,
+			SourceID: ab.SourceID,
+			Name:     ab.Name,
+			Path:     ab.Path,
+		})
+	}
+	return out, nil
 }
 
 // SubscribeToContactEvents is scaffolded; Phase 3+ wires through a core
@@ -452,4 +718,33 @@ func (a *API) listMerged(filter coreapi.ContactFilter) ([]coreapi.Contact, error
 	// carddavSearchFn bridge wired in app.go Startup). Offset is unsupported
 	// by Search; callers paginate by raising limit until "more" is needed.
 	return a.SearchContacts(filter.Query, limit)
+}
+
+// ResizeContactPhoto takes a base64-encoded image (PNG / JPEG / WEBP / GIF),
+// rescales it to a max edge of 256px preserving aspect ratio, and re-encodes
+// as JPEG at quality 85. Returns the resized base64 + "image/jpeg" as the
+// media type ready to drop into a coreapi.ContactPatch.Photo.
+//
+// The contacts Edit dialog calls this after the frontend HTML file input
+// hands over a picked image (matches the picker pattern Composer.svelte
+// uses for inline images — pure frontend pick, backend processing).
+// Image processing logic lives in extensions/contacts/backend/imaging
+// because it's contacts-specific; nothing else in the codebase needs it.
+func (a *API) ResizeContactPhoto(b64In string) (b64Out string, mediaType string, err error) {
+	b64In = strings.TrimSpace(b64In)
+	if b64In == "" {
+		return "", "", fmt.Errorf("contacts.ResizeContactPhoto: empty input")
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64In)
+	if err != nil {
+		return "", "", fmt.Errorf("contacts.ResizeContactPhoto: decode base64: %w", err)
+	}
+	jpegBytes, mt, err := imaging.ResizeToJPEG(raw, imaging.ResizeOptions{
+		MaxEdge: 256,
+		Quality: 85,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("contacts.ResizeContactPhoto: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(jpegBytes), mt, nil
 }

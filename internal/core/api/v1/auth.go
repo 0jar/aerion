@@ -11,6 +11,27 @@ import (
 // consolidation if combined-scope verification lands.
 type ClientConfigID string
 
+// OAuthProviderRegistration declares a single OAuth client config that an
+// extension contributes at startup. Extensions export a slice of these (e.g.,
+// `contacts.OAuthClients()`) so the host can wire them into the global
+// `internal/oauth2.ClientConfigForID` resolver without the extension having
+// to import `internal/oauth2` directly — the closure-injection pattern used
+// elsewhere is awkward for slice-of-providers registration. The host
+// translates each registration into an `oauth2.CredentialsProvider` and
+// appends it to the resolver chain at `App.Startup`.
+//
+// Empty ClientID entries are ignored by the host — extensions can list all
+// their configs unconditionally and rely on the build-time ldflags injection
+// to fill in only the ones they have credentials for.
+//
+// Microsoft desktop apps with PKCE omit the secret; ClientSecret stays
+// empty for those.
+type OAuthProviderRegistration struct {
+	ConfigID     string `json:"configId"`
+	ClientID     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret,omitempty"`
+}
+
 // AuthScope is a single OAuth scope an extension needs against a provider,
 // paired with a human-readable reason shown to the user at consent time.
 type AuthScope struct {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/emersion/go-vcard"
+	"github.com/emersion/go-webdav/carddav"
 	"github.com/hkdb/aerion/internal/contact"
 )
 
@@ -157,4 +158,126 @@ func TestBuildVCard_NilRecord(t *testing.T) {
 	if _, err := BuildVCard(nil, ""); err == nil {
 		t.Fatal("expected error on nil record")
 	}
+}
+
+// ============================================================================
+// PHOTO field — Phase 2b.2.b.2
+// ============================================================================
+
+func TestParseVCard_InlinePhoto(t *testing.T) {
+	// Build a parseable AddressObject via decoding our own minimal vCard,
+	// then run parseVCard on the resulting Card.
+	raw := strings.Join([]string{
+		"BEGIN:VCARD",
+		"VERSION:3.0",
+		"FN:Photo Person",
+		"PHOTO;ENCODING=b;TYPE=JPEG:VEVTVERBVEE=",
+		"END:VCARD",
+		"",
+	}, "\r\n")
+	dec := vcard.NewDecoder(strings.NewReader(raw))
+	card, err := dec.Decode()
+	if err != nil {
+		t.Fatalf("decode test vcard: %v", err)
+	}
+	rec := parseVCard(carddavAddressObject(card, "/test/p1.vcf", "etag-1"))
+	if rec == nil {
+		t.Fatal("parseVCard returned nil")
+	}
+	if rec.PhotoData != "VEVTVERBVEE=" {
+		t.Errorf("PhotoData = %q, want VEVTVERBVEE=", rec.PhotoData)
+	}
+	if rec.PhotoMediaType != "image/jpeg" {
+		t.Errorf("PhotoMediaType = %q, want image/jpeg", rec.PhotoMediaType)
+	}
+	if rec.PhotoURL != "" {
+		t.Errorf("PhotoURL should be empty for inline, got %q", rec.PhotoURL)
+	}
+}
+
+func TestParseVCard_URLRefPhoto(t *testing.T) {
+	raw := strings.Join([]string{
+		"BEGIN:VCARD",
+		"VERSION:3.0",
+		"FN:URL Person",
+		"PHOTO;VALUE=URI:http://example.com/photo.jpg",
+		"END:VCARD",
+		"",
+	}, "\r\n")
+	dec := vcard.NewDecoder(strings.NewReader(raw))
+	card, err := dec.Decode()
+	if err != nil {
+		t.Fatalf("decode test vcard: %v", err)
+	}
+	rec := parseVCard(carddavAddressObject(card, "/test/p2.vcf", "etag-2"))
+	if rec == nil {
+		t.Fatal("parseVCard returned nil")
+	}
+	if rec.PhotoURL != "http://example.com/photo.jpg" {
+		t.Errorf("PhotoURL = %q, want http://example.com/photo.jpg", rec.PhotoURL)
+	}
+	if rec.PhotoData != "" || rec.PhotoMediaType != "" {
+		t.Errorf("inline fields should be empty for URL ref; got data=%q media=%q", rec.PhotoData, rec.PhotoMediaType)
+	}
+}
+
+func TestBuildVCard_EmitsInlinePhoto(t *testing.T) {
+	rec := &contact.Record{
+		ID:             "rec-photo",
+		Fn:             "Has Photo",
+		PhotoData:      "VEVTVERBVEE=",
+		PhotoMediaType: "image/png",
+	}
+	out, err := BuildVCard(rec, "")
+	if err != nil {
+		t.Fatalf("BuildVCard: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "PHOTO") {
+		t.Errorf("expected PHOTO line in output:\n%s", s)
+	}
+	if !strings.Contains(s, "ENCODING=b") {
+		t.Errorf("expected ENCODING=b in PHOTO line:\n%s", s)
+	}
+	if !strings.Contains(s, "TYPE=PNG") {
+		t.Errorf("expected TYPE=PNG (derived from image/png):\n%s", s)
+	}
+	if !strings.Contains(s, "VEVTVERBVEE=") {
+		t.Errorf("expected base64 data in output:\n%s", s)
+	}
+}
+
+func TestBuildVCard_RemovesPhoto(t *testing.T) {
+	// Originalraw has a PHOTO; record has no photo → output should drop PHOTO.
+	original := strings.Join([]string{
+		"BEGIN:VCARD",
+		"VERSION:3.0",
+		"FN:Old Name",
+		"PHOTO;ENCODING=b;TYPE=JPEG:VEVTVERBVEE=",
+		"END:VCARD",
+		"",
+	}, "\r\n")
+	rec := &contact.Record{
+		ID: "rec-no-photo",
+		Fn: "Now No Photo",
+		// PhotoData, PhotoMediaType, PhotoURL all empty.
+	}
+	out, err := BuildVCard(rec, original)
+	if err != nil {
+		t.Fatalf("BuildVCard: %v", err)
+	}
+	s := string(out)
+	if strings.Contains(s, "PHOTO") {
+		t.Errorf("PHOTO line should be absent after rec has no photo:\n%s", s)
+	}
+	if strings.Contains(s, "VEVTVERBVEE=") {
+		t.Errorf("old base64 should be gone:\n%s", s)
+	}
+}
+
+// carddavAddressObject wraps a vcard.Card into a carddav.AddressObject suitable
+// for parseVCard — keeps the test setup minimal without spinning up an httptest
+// server.
+func carddavAddressObject(card vcard.Card, path, etag string) carddav.AddressObject {
+	return carddav.AddressObject{Path: path, ETag: etag, Card: card}
 }

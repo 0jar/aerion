@@ -126,6 +126,14 @@ type Contact struct {
 	Bday       string           `json:"bday,omitempty"`
 	Nickname   string           `json:"nickname,omitempty"`
 	Categories []string         `json:"categories,omitempty"`
+	// Photo fields (Phase 2b.2.b.2). Flat-scalar pattern matching Org/Title/Note.
+	// At most one of {PhotoData + PhotoMediaType} OR PhotoURL is populated:
+	//   - PhotoData (base64) + PhotoMediaType (e.g. "image/jpeg") = inline embed
+	//   - PhotoURL = vCard URL-ref (PHOTO;VALUE=URI). Avatar falls back to initials
+	//     in this phase; fetching is its own track.
+	PhotoData      string `json:"photoData,omitempty"`
+	PhotoMediaType string `json:"photoMediaType,omitempty"`
+	PhotoURL       string `json:"photoUrl,omitempty"`
 	SourceID   string           `json:"sourceId,omitempty"`
 	UpdatedAt  time.Time        `json:"updatedAt"`
 }
