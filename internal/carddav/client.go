@@ -581,6 +581,135 @@ func firstFieldType(f *vcard.Field) string {
 	return strings.ToLower(types[0])
 }
 
+// ErrPreconditionFailed signals a CardDAV PUT/DELETE 412 — the server's
+// current ETag for the resource doesn't match the If-Match header we sent.
+// Callers (the extension API) re-fetch the server's current state and surface
+// a typed conflict event to the UI rather than discarding the user's edit
+// silently.
+type ErrPreconditionFailed struct {
+	Href       string
+	ServerETag string // best-effort: server may not send a new ETag with the 412
+}
+
+func (e *ErrPreconditionFailed) Error() string {
+	return fmt.Sprintf("carddav: precondition failed for %s (server etag: %q)", e.Href, e.ServerETag)
+}
+
+// PutContact writes a vCard to the server at href under the given addressbook
+// path. If-Match honors the caller-supplied ETag (exact match — 412 on
+// mismatch). Returns the server's new ETag from the response (best-effort —
+// returns "" if the server doesn't echo one; the next sync will pick it up).
+//
+// addressbookPath should be the addressbook's path relative to the base URL
+// (the same value stored on contact_source_addressbooks.path). href is the
+// full vCard resource path (typically "<addressbookPath>/<uuid>.vcf").
+//
+// Reuses the existing httpClient + basic-auth wrapping established at client
+// construction so xmlFixTransport normalization applies to any error-body
+// XML, and basic auth flows through automatically.
+func (c *Client) PutContact(addressbookPath, href, ifMatchETag string, card []byte) (string, error) {
+	fullURL := resolveURL(c.baseURL, href)
+	httpClient := webdav.HTTPClientWithBasicAuth(
+		newHTTPClient(60*time.Second),
+		c.username, c.password,
+	)
+
+	req, err := http.NewRequest(http.MethodPut, fullURL, bytes.NewReader(card))
+	if err != nil {
+		return "", fmt.Errorf("build PUT request: %w", err)
+	}
+	req.Header.Set("Content-Type", "text/vcard; charset=utf-8")
+	if ifMatchETag != "" {
+		req.Header.Set("If-Match", quotedETag(ifMatchETag))
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("PUT %s: %w", fullURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		return "", &ErrPreconditionFailed{Href: href, ServerETag: resp.Header.Get("ETag")}
+	}
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("PUT %s: unexpected status %d: %s", fullURL, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return strings.Trim(resp.Header.Get("ETag"), `"`), nil
+}
+
+// DeleteContact removes a vCard from the server at href. If-Match honors
+// the caller-supplied ETag (exact match — 412 on mismatch). 204 / 200 / 404
+// all count as success (404 is idempotent — the resource is gone either way).
+func (c *Client) DeleteContact(addressbookPath, href, ifMatchETag string) error {
+	fullURL := resolveURL(c.baseURL, href)
+	httpClient := webdav.HTTPClientWithBasicAuth(
+		newHTTPClient(60*time.Second),
+		c.username, c.password,
+	)
+
+	req, err := http.NewRequest(http.MethodDelete, fullURL, nil)
+	if err != nil {
+		return fmt.Errorf("build DELETE request: %w", err)
+	}
+	if ifMatchETag != "" {
+		req.Header.Set("If-Match", quotedETag(ifMatchETag))
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", fullURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		return &ErrPreconditionFailed{Href: href, ServerETag: resp.Header.Get("ETag")}
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		// Already gone — treat as success (idempotent).
+		return nil
+	}
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("DELETE %s: unexpected status %d: %s", fullURL, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// FetchContactByPath fetches a single vCard from the server by its href via
+// addressbook-multiget. Used by the 412-recovery path: after a precondition
+// failure we re-fetch the server's current state, sync locally, and surface
+// the conflict to the UI.
+func (c *Client) FetchContactByPath(addressbookPath, href string) (*ParsedRecord, error) {
+	fullPath := resolveURL(c.baseURL, addressbookPath)
+	httpClient := webdav.HTTPClientWithBasicAuth(
+		newHTTPClient(60*time.Second),
+		c.username, c.password,
+	)
+	abClient, err := carddav.NewClient(httpClient, fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("build addressbook client: %w", err)
+	}
+	records, err := c.fetchContactsByPath(abClient, addressbookPath, []string{href})
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return nil, nil
+	}
+	return records[0], nil
+}
+
+// quotedETag ensures the ETag value is wrapped in literal quotes, the form
+// required by RFC 7232 If-Match. Strips any existing surrounding quotes first
+// so re-quoting is idempotent.
+func quotedETag(etag string) string {
+	etag = strings.TrimSpace(etag)
+	etag = strings.Trim(etag, `"`)
+	return `"` + etag + `"`
+}
+
 // SyncResult represents the result of an incremental sync
 type SyncResult struct {
 	SyncToken string          // New sync token to store

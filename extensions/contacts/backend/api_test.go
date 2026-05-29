@@ -1,14 +1,45 @@
 package backend
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hkdb/aerion/internal/carddav"
 	"github.com/hkdb/aerion/internal/contact"
+	"github.com/hkdb/aerion/internal/credentials"
 	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 	"github.com/hkdb/aerion/internal/database"
 )
+
+// setupAPIWithCreds builds an API plus a real credentials.Store so the
+// CardDAV write paths (which need GetCardDAVPassword) can be exercised
+// end-to-end. The plain setupAPI passes credStore=nil since most tests
+// don't touch the write path.
+func setupAPIWithCreds(t *testing.T) (*API, *contact.Store, *carddav.Store, *credentials.Store) {
+	t.Helper()
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "test.db")
+	db, err := database.Open(path)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	localStore := contact.NewStore(db.DB)
+	carddavStore := carddav.NewStore(db.DB)
+	credStore, err := credentials.NewStore(db.DB, tmp)
+	if err != nil {
+		t.Fatalf("credentials.NewStore: %v", err)
+	}
+	return NewAPI(localStore, carddavStore, credStore), localStore, carddavStore, credStore
+}
 
 func setupAPI(t *testing.T) (*API, *contact.Store, *carddav.Store) {
 	t.Helper()
@@ -30,7 +61,7 @@ func setupAPI(t *testing.T) (*API, *contact.Store, *carddav.Store) {
 	// and contact.Store.Search natively walks them. The legacy SetCardDAVSearchFunc
 	// wiring was deleted from app.go + this test setup at the same time.
 
-	return NewAPI(localStore, carddavStore), localStore, carddavStore
+	return NewAPI(localStore, carddavStore, nil), localStore, carddavStore
 }
 
 func TestAPI_SearchContacts_LocalOnly(t *testing.T) {
@@ -286,14 +317,14 @@ func TestAPI_UpdateContact_NilPatchIsNoOp(t *testing.T) {
 	}
 }
 
-func TestAPI_UpdateContact_CardDAVUnimplemented(t *testing.T) {
+func TestAPI_UpdateContact_CardDAVNotWritable_Refused(t *testing.T) {
 	api, _, carddavStore := setupAPI(t)
 
-	// Seed a real CardDAV record so UpdateContact resolves it and rejects with
-	// ErrUnimplemented at the source-type check (instead of returning nil for
-	// a missing record).
+	// Seed a CardDAV record on a source that is NOT marked writable. Per
+	// 2b.2.b.1 the dispatch refuses to write rather than ErrUnimplemented;
+	// the user has to flip the per-source "Enable write access" flag first.
 	src, err := carddavStore.CreateSource(&carddav.SourceConfig{
-		Name: "S1", Type: carddav.SourceTypeCardDAV, URL: "https://x", Enabled: true, SyncInterval: 60,
+		Name: "S1", Type: carddav.SourceTypeCardDAV, URL: "https://x", Enabled: true, Writable: false, SyncInterval: 60,
 	})
 	if err != nil {
 		t.Fatalf("create source: %v", err)
@@ -308,9 +339,12 @@ func TestAPI_UpdateContact_CardDAVUnimplemented(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	err = api.UpdateContact("cdv-uuid-1", coreapi.ContactPatch{Name: strPtr("ignored")})
-	if err != coreapi.ErrUnimplemented {
-		t.Fatalf("expected ErrUnimplemented for CardDAV id, got %v", err)
+	err = api.UpdateContact("cdv-uuid-1", coreapi.ContactPatch{Name: strPtr("renamed")})
+	if err == nil {
+		t.Fatal("expected refusal when source is not writable")
+	}
+	if !strings.Contains(err.Error(), "not writable") {
+		t.Fatalf("error should mention writability; got: %v", err)
 	}
 }
 
@@ -341,11 +375,11 @@ func TestAPI_DeleteContact_Local(t *testing.T) {
 	}
 }
 
-func TestAPI_DeleteContact_CardDAVUnimplemented(t *testing.T) {
+func TestAPI_DeleteContact_CardDAVNotWritable_Refused(t *testing.T) {
 	api, _, carddavStore := setupAPI(t)
 
 	src, err := carddavStore.CreateSource(&carddav.SourceConfig{
-		Name: "S1", Type: carddav.SourceTypeCardDAV, URL: "https://x", Enabled: true, SyncInterval: 60,
+		Name: "S1", Type: carddav.SourceTypeCardDAV, URL: "https://x", Enabled: true, Writable: false, SyncInterval: 60,
 	})
 	if err != nil {
 		t.Fatalf("create source: %v", err)
@@ -361,8 +395,11 @@ func TestAPI_DeleteContact_CardDAVUnimplemented(t *testing.T) {
 	}
 
 	err = api.DeleteContact("cdv-uuid-1")
-	if err != coreapi.ErrUnimplemented {
-		t.Fatalf("expected ErrUnimplemented for CardDAV id, got %v", err)
+	if err == nil {
+		t.Fatal("expected refusal when source is not writable")
+	}
+	if !strings.Contains(err.Error(), "not writable") {
+		t.Fatalf("error should mention writability; got: %v", err)
 	}
 }
 
@@ -382,7 +419,7 @@ func TestAPI_SubscribeToContactEvents_Unimplemented(t *testing.T) {
 }
 
 func TestAPI_NilStores_GracefulDegradation(t *testing.T) {
-	api := NewAPI(nil, nil)
+	api := NewAPI(nil, nil, nil)
 	if got, err := api.SearchContacts("anything", 10); err != nil || got != nil {
 		t.Fatalf("search with nil stores: got=%v err=%v", got, err)
 	}
@@ -635,4 +672,173 @@ func TestAPI_ListContacts_LocalParentReturnsBoth(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 (manual + collected), got %d: %+v", len(got), got)
 	}
+}
+
+// ============================================================================
+// CardDAV write paths (Phase 2b.2.b.1)
+// ============================================================================
+
+// seedWritableCardDAVRecord stands up a fake CardDAV server, creates a
+// writable source pointed at it, persists basic-auth creds, and seeds one
+// record in the unified store. Returns the fake server (close it via t.Cleanup
+// the caller registers), the record id, and the source id.
+func seedWritableCardDAVRecord(
+	t *testing.T,
+	carddavStore *carddav.Store,
+	credStore *credentials.Store,
+	handler http.HandlerFunc,
+) (server *httptest.Server, recordID, sourceID, addressbookID string) {
+	t.Helper()
+	server = httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	src, err := carddavStore.CreateSource(&carddav.SourceConfig{
+		Name: "Fake", Type: carddav.SourceTypeCardDAV, URL: server.URL,
+		Username: "user", Enabled: true, Writable: true, SyncInterval: 60,
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	// Bump writable on after create (CreateSource doesn't write the writable column).
+	if err := carddavStore.SetSourceWritable(src.ID, true); err != nil {
+		t.Fatalf("set writable: %v", err)
+	}
+	ab, err := carddavStore.CreateAddressbook(src.ID, "/addressbook/", "ab", true)
+	if err != nil {
+		t.Fatalf("create addressbook: %v", err)
+	}
+	if err := credStore.SetCardDAVPassword(src.ID, "pass"); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+	if err := carddavStore.UpsertContact(&carddav.Contact{
+		ID:            "cdv-uuid-1",
+		AddressbookID: ab.ID,
+		Email:         "carddav@example.com",
+		DisplayName:   "Original",
+		Href:          "/addressbook/contact.vcf",
+		ETag:          "etag-v1",
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	return server, "cdv-uuid-1", src.ID, ab.ID
+}
+
+func TestAPI_UpdateContact_CardDAV_HappyPath(t *testing.T) {
+	api, _, carddavStore, credStore := setupAPIWithCreds(t)
+
+	var gotMethod, gotPath, gotIfMatch string
+	var gotBody []byte
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotIfMatch = r.Header.Get("If-Match")
+		gotBody = readAll(t, r)
+		w.Header().Set("ETag", `"etag-v2"`)
+		w.WriteHeader(http.StatusNoContent)
+	}
+	_, recordID, _, _ := seedWritableCardDAVRecord(t, carddavStore, credStore, handler)
+
+	if err := api.UpdateContact(recordID, coreapi.ContactPatch{Name: strPtr("Renamed")}); err != nil {
+		t.Fatalf("UpdateContact: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("server saw method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/addressbook/contact.vcf" {
+		t.Errorf("server saw path = %q", gotPath)
+	}
+	if gotIfMatch != `"etag-v1"` {
+		t.Errorf("server saw If-Match = %q, want %q", gotIfMatch, `"etag-v1"`)
+	}
+	if !strings.Contains(string(gotBody), "FN:Renamed") {
+		t.Errorf("PUT body missing renamed FN:\n%s", gotBody)
+	}
+
+	// Local cache should reflect the new ETag from the server response.
+	c, err := carddavStore.GetContactByHref("", "/addressbook/contact.vcf")
+	if err != nil {
+		t.Fatalf("post-write lookup: %v", err)
+	}
+	_ = c // we don't currently expose the new ETag on the public Contact shape;
+	// the assertion that the write succeeded + body shape is enough for this
+	// unit-level test. Integration coverage of the ETag round-trip lives at
+	// the manual / smoke-test layer per the plan's verification section.
+}
+
+func TestAPI_UpdateContact_CardDAV_Conflict(t *testing.T) {
+	api, _, carddavStore, credStore := setupAPIWithCreds(t)
+
+	// First request (PUT) returns 412; second request (FetchContactByPath via
+	// MultiGetAddressBook) returns a normal multistatus body for the refresh.
+	// For the unit test we only need to verify the API returns *ErrConflict
+	// and doesn't bubble the raw precondition error — the refresh path is
+	// allowed to fail silently here (its job is best-effort cache resync).
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+	}
+	_, recordID, _, _ := seedWritableCardDAVRecord(t, carddavStore, credStore, handler)
+
+	err := api.UpdateContact(recordID, coreapi.ContactPatch{Name: strPtr("Renamed")})
+	var conflict *coreapi.ErrConflict
+	if !asConflict(err, &conflict) {
+		t.Fatalf("expected *coreapi.ErrConflict, got %T: %v", err, err)
+	}
+	if conflict.ContactID != recordID {
+		t.Errorf("conflict.ContactID = %q, want %q", conflict.ContactID, recordID)
+	}
+}
+
+func TestAPI_DeleteContact_CardDAV_HappyPath(t *testing.T) {
+	api, local, carddavStore, credStore := setupAPIWithCreds(t)
+
+	var gotMethod, gotIfMatch string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotIfMatch = r.Header.Get("If-Match")
+		w.WriteHeader(http.StatusNoContent)
+	}
+	_, recordID, _, _ := seedWritableCardDAVRecord(t, carddavStore, credStore, handler)
+
+	if err := api.DeleteContact(recordID); err != nil {
+		t.Fatalf("DeleteContact: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("server saw method = %q, want DELETE", gotMethod)
+	}
+	if gotIfMatch != `"etag-v1"` {
+		t.Errorf("server saw If-Match = %q", gotIfMatch)
+	}
+
+	// Local record should be cascade-deleted.
+	rec, err := local.GetRecord(recordID)
+	if err != nil {
+		t.Fatalf("GetRecord post-delete: %v", err)
+	}
+	if rec != nil {
+		t.Fatalf("expected local record gone, still got: %+v", rec)
+	}
+}
+
+// readAll is a small helper so we don't have to thread io/ioutil through the
+// individual handler closures.
+func readAll(t *testing.T, r *http.Request) []byte {
+	t.Helper()
+	defer r.Body.Close()
+	buf := make([]byte, 0, 1024)
+	tmp := make([]byte, 512)
+	for {
+		n, err := r.Body.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+		}
+		if err != nil {
+			break
+		}
+	}
+	return buf
+}
+
+// asConflict is a thin wrapper around errors.As to keep test sites readable.
+func asConflict(err error, target **coreapi.ErrConflict) bool {
+	return errors.As(err, target)
 }

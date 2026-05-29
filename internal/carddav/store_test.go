@@ -1,6 +1,7 @@
 package carddav
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -349,5 +350,108 @@ func TestGetContactByEmail_EmptyArg(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("empty email should return nil, got %+v", got)
+	}
+}
+
+// TestDeleteSource_ScrubsAllData verifies the privacy invariant: removing a
+// contacts provider deletes everything that was synced from it. No state
+// rows, no records, no sub-table rows, no addressbook rows, no source row
+// remain. Regression for the 613-zombie bug — the schema has no FK from
+// carddav_record_state.addressbook_id to contact_source_addressbooks(id),
+// so the previous "DELETE FROM contact_sources" only cascaded one level
+// and left records as unreachable orphans.
+func TestDeleteSource_ScrubsAllData(t *testing.T) {
+	db := openCardDAVTestDB(t)
+	s := NewStore(db.DB)
+
+	src, err := s.CreateSource(&SourceConfig{
+		Name: "Doomed", Type: SourceTypeCardDAV, URL: "https://x", Enabled: true, SyncInterval: 60,
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	ab, err := s.CreateAddressbook(src.ID, "/dav/contacts/", "contacts", true)
+	if err != nil {
+		t.Fatalf("create addressbook: %v", err)
+	}
+	// Seed two records via UpsertContact (one row per email, but the upsert
+	// consolidates by href — so two distinct hrefs → two records).
+	for i, e := range []string{"a@x.com", "b@x.com"} {
+		if err := s.UpsertContact(&Contact{
+			ID:            fmt.Sprintf("rec-%d", i),
+			AddressbookID: ab.ID,
+			Email:         e,
+			DisplayName:   e,
+			Href:          fmt.Sprintf("/dav/contacts/%d.vcf", i),
+			ETag:          "etag",
+		}); err != nil {
+			t.Fatalf("upsert %d: %v", i, err)
+		}
+	}
+
+	// Sanity: rows exist before the delete.
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_sources WHERE id=?", 1, src.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_source_addressbooks WHERE source_id=?", 1, src.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM carddav_record_state WHERE addressbook_id=?", 2, ab.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_records WHERE source='carddav'", 2)
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_emails WHERE email IN ('a@x.com','b@x.com')", 2)
+
+	if err := s.DeleteSource(src.ID); err != nil {
+		t.Fatalf("DeleteSource: %v", err)
+	}
+
+	// Everything tied to that source must be gone — no zombies.
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_sources WHERE id=?", 0, src.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_source_addressbooks WHERE source_id=?", 0, src.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM carddav_record_state WHERE addressbook_id=?", 0, ab.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_records WHERE source='carddav'", 0)
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_emails WHERE email IN ('a@x.com','b@x.com')", 0)
+}
+
+// TestDeleteSource_PreservesOtherSources ensures the explicit cleanup in
+// DeleteSource is correctly scoped — deleting source A doesn't reach into
+// source B's data. The subquery in step 1 filters by ab.source_id, so
+// this should always hold; the test pins the invariant.
+func TestDeleteSource_PreservesOtherSources(t *testing.T) {
+	db := openCardDAVTestDB(t)
+	s := NewStore(db.DB)
+
+	a, err := s.CreateSource(&SourceConfig{Name: "A", Type: SourceTypeCardDAV, URL: "https://a", Enabled: true, SyncInterval: 60})
+	if err != nil {
+		t.Fatalf("create A: %v", err)
+	}
+	b, err := s.CreateSource(&SourceConfig{Name: "B", Type: SourceTypeCardDAV, URL: "https://b", Enabled: true, SyncInterval: 60})
+	if err != nil {
+		t.Fatalf("create B: %v", err)
+	}
+	abA, _ := s.CreateAddressbook(a.ID, "/dav/a/", "a", true)
+	abB, _ := s.CreateAddressbook(b.ID, "/dav/b/", "b", true)
+	if err := s.UpsertContact(&Contact{ID: "ra", AddressbookID: abA.ID, Email: "x@a.com", DisplayName: "X", Href: "/dav/a/x.vcf", ETag: "e"}); err != nil {
+		t.Fatalf("upsert A: %v", err)
+	}
+	if err := s.UpsertContact(&Contact{ID: "rb", AddressbookID: abB.ID, Email: "y@b.com", DisplayName: "Y", Href: "/dav/b/y.vcf", ETag: "e"}); err != nil {
+		t.Fatalf("upsert B: %v", err)
+	}
+
+	if err := s.DeleteSource(a.ID); err != nil {
+		t.Fatalf("DeleteSource(A): %v", err)
+	}
+
+	// B's data untouched.
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_sources WHERE id=?", 1, b.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_source_addressbooks WHERE source_id=?", 1, b.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM carddav_record_state WHERE addressbook_id=?", 1, abB.ID)
+	assertCount(t, db, "SELECT COUNT(*) FROM contact_records WHERE source='carddav'", 1)
+}
+
+// assertCount runs a count query and fails the test if the result doesn't match.
+func assertCount(t *testing.T, db *database.DB, query string, want int, args ...interface{}) {
+	t.Helper()
+	var got int
+	if err := db.QueryRow(query, args...).Scan(&got); err != nil {
+		t.Fatalf("count query %q: %v", query, err)
+	}
+	if got != want {
+		t.Errorf("count: query=%q want=%d got=%d args=%v", query, want, got, args)
 	}
 }

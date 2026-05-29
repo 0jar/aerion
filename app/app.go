@@ -170,6 +170,12 @@ func isValidEmail(email string) bool {
 type App struct {
 	ctx context.Context
 
+	// ready is the backend-up signal the frontend polls before mounting the
+	// main app. False until Startup completes. The boot splash in
+	// index.html stays visible while ready is false; flipping it true is
+	// what lets main.ts proceed to mount(App). See IsReady().
+	ready bool
+
 	// Paths
 	paths *platform.Paths
 
@@ -503,7 +509,7 @@ func (a *App) Startup(ctx context.Context) {
 	// Register is descriptive — it wires UI surfaces (rail tabs, hooks) that
 	// persist across enable/disable cycles. The frontend filters by enabled
 	// state at render time.
-	a.contactsExt = extcontactsbe.New(a.contactStore, a.carddavStore, a.extContactsStore)
+	a.contactsExt = extcontactsbe.New(a.contactStore, a.carddavStore, a.credStore, a.extContactsStore)
 	a.contactsAPI = a.contactsExt.API()
 	a.knownExtensions = []coreapi.Extension{a.contactsExt}
 
@@ -598,6 +604,27 @@ func (a *App) Startup(ctx context.Context) {
 	a.draftSyncContexts = make(map[string]context.CancelFunc)
 	a.draftSyncDone = make(map[string]chan struct{})
 
+	// IMPORTANT: backend-ready signal. The frontend's main.ts waits for the
+	// "app:ready" event (with IsReady() as a one-shot fallback) and will NOT
+	// mount the main app until that event fires. If you remove, reorder, or
+	// skip these two lines, the UI will never load — the boot splash will
+	// stay visible forever.
+	//
+	// Placement: BEFORE the D-Bus desktop-integration inits below
+	// (initNotifications, initSleepWakeMonitor, initThemeMonitor). Those
+	// calls can block for many seconds on systems where xdg-desktop-portal
+	// isn't running — they're best-effort system integration, NOT prerequisites
+	// for the frontend. At this point the frontend has everything it needs:
+	// stores constructed, migrations applied, extensions registered, network
+	// monitor up, IPC server running, background sync started.
+	//
+	// We do NOT poll IsReady from the frontend — Wails' IPC bridge saturates
+	// under high call rates on Linux/webkit2gtk and Flatpak. So: event for
+	// the normal case, IsReady for the "event fired before listener
+	// registered" race.
+	a.ready = true
+	wailsRuntime.EventsEmit(a.ctx, "app:ready")
+
 	// Initialize desktop notifications with click handling
 	a.initNotifications(ctx)
 
@@ -649,6 +676,19 @@ func (a *App) Startup(ctx context.Context) {
 	a.autostartMgr = platform.NewAutostartManager()
 
 	log.Info().Msg("Aerion started successfully")
+}
+
+// IsReady reports whether Startup has fully completed. The frontend calls
+// this ONCE at boot as a safety net for the "Go emitted app:ready before
+// the frontend listener registered" race. Always safe to call: reads a
+// bool field, no nil dereference possible, fires regardless of which
+// stores are or aren't initialized.
+//
+// IMPORTANT: do NOT call this in a polling loop — it saturates the Wails
+// IPC bridge. The frontend should use EventsOn('app:ready', ...) for the
+// normal path; IsReady() is a one-shot check only.
+func (a *App) IsReady() bool {
+	return a.ready
 }
 
 // BeforeClose is called when the window is about to close (e.g., OS close signal)

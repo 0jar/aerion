@@ -202,18 +202,65 @@ func (s *Store) UpdateSource(id string, config *SourceConfig) error {
 	return nil
 }
 
-// DeleteSource deletes a source and all its addressbooks/contacts (via CASCADE)
+// DeleteSource deletes a source and ALL its data — addressbooks, contact
+// records, and the records' state + email + sub-table rows — in one
+// transaction. Removing a provider must scrub everything that was synced
+// from it; leaving local copies of contacts behind would be a privacy leak.
+//
+// The schema has a coverage gap that requires explicit handling: although
+// contact_sources → contact_source_addressbooks has ON DELETE CASCADE, and
+// contact_records → carddav_record_state has ON DELETE CASCADE, there is
+// NO FK from carddav_record_state.addressbook_id to
+// contact_source_addressbooks(id). So a plain "DELETE FROM contact_sources"
+// cascades only to the addressbooks; the state rows and the records they
+// reference are left as unreachable orphans. This method works around the
+// gap by deleting contact_records (and chaining the cascade through them)
+// before deleting the source row.
+//
+// Order inside the transaction:
+//  1. Delete contact_records belonging to addressbooks of this source.
+//     Cascades through contact_emails, contact_phones, contact_addresses,
+//     contact_urls, contact_impps, contact_categories, and
+//     carddav_record_state via the FKs on contact_records(id).
+//  2. Delete the source row. The existing source→addressbook CASCADE
+//     cleans up the addressbook rows.
+//
+// A regression-test in store_test.go (TestDeleteSource_ScrubsAllData)
+// guards against future schema/code changes reintroducing the leak.
 func (s *Store) DeleteSource(id string) error {
-	result, err := s.db.Exec("DELETE FROM contact_sources WHERE id = ?", id)
+	if id == "" {
+		return fmt.Errorf("source id is required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`
+		DELETE FROM contact_records
+		WHERE id IN (
+			SELECT crs.record_id
+			FROM carddav_record_state crs
+			JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+			WHERE ab.source_id = ?
+		)
+	`, id); err != nil {
+		return fmt.Errorf("delete contact records for source: %w", err)
+	}
+
+	result, err := tx.Exec("DELETE FROM contact_sources WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete source: %w", err)
 	}
-
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return fmt.Errorf("source not found: %s", id)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
 	s.log.Info().Str("id", id).Msg("Contact source deleted")
 	return nil
 }
@@ -457,6 +504,42 @@ func (s *Store) UpdateAddressbookSyncToken(id, syncToken string) error {
 func (s *Store) DeleteAddressbooksForSource(sourceID string) error {
 	_, err := s.db.Exec("DELETE FROM contact_source_addressbooks WHERE source_id = ?", sourceID)
 	return err
+}
+
+// DeleteAddressbookByID removes a single addressbook AND all the CardDAV
+// records it holds, in one transaction. Deleting contact_records cascades
+// through contact_emails + sub-tables AND carddav_record_state (which has
+// ON DELETE CASCADE on record_id), so the local cache for that addressbook
+// is fully torn down before the addressbook row itself is removed.
+//
+// Use this when the user explicitly removes an addressbook from their
+// selection. The plain "DELETE FROM contact_source_addressbooks" path has
+// no FK cascade into carddav_record_state — it would orphan every record
+// row, which is the exact bug the 2b.2.b.1 writable-toggle save exposed.
+func (s *Store) DeleteAddressbookByID(id string) error {
+	if id == "" {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`
+		DELETE FROM contact_records
+		WHERE id IN (SELECT record_id FROM carddav_record_state WHERE addressbook_id = ?)
+	`, id); err != nil {
+		return fmt.Errorf("delete contact records: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM contact_source_addressbooks WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("delete addressbook row: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	s.log.Info().Str("id", id).Msg("Addressbook deleted")
+	return nil
 }
 
 // ============================================================================
@@ -708,6 +791,238 @@ func (s *Store) UpsertContactsBatch(contacts []*Contact) error {
 	}
 	s.log.Debug().Int("inserted", inserted).Int("total", len(contacts)).Msg("Batch upsert complete")
 	return nil
+}
+
+// UpdateRecord PUTs the given record to its CardDAV server via the supplied
+// Client (basic-auth already applied), then mirrors the server's accepted
+// state locally:
+//
+//  1. Look up the record's state row (href, etag, addressbook_id, addressbook
+//     path). Refuse if the record isn't a CardDAV record we know about.
+//  2. Build the vCard via BuildVCard (preserves unknown properties from the
+//     stored vcard_raw).
+//  3. PutContact with If-Match: "<current etag>".
+//  4. On success: call contact.UpsertRecordTx to replace sub-table rows from
+//     the record's current shape, then update carddav_record_state with the
+//     server's new ETag.
+//
+// On *ErrPreconditionFailed: local state is NOT mutated. The caller (the
+// extension API) re-fetches the server's current vCard via FetchContactByPath,
+// syncs locally, and surfaces a conflict event to the UI.
+//
+// Used by the Contacts extension's UpdateContact dispatch when the source is
+// CardDAV-writable. The single-name Edit dialog in 2b.2.b.1 passes a record
+// whose Fn has been updated; the rest of the record (emails, phones, etc.)
+// comes from the local cache so they survive the rename verbatim.
+func (s *Store) UpdateRecord(rec *contact.Record, client *Client) error {
+	if rec == nil {
+		return fmt.Errorf("UpdateRecord: nil record")
+	}
+	if rec.ID == "" {
+		return fmt.Errorf("UpdateRecord: id is required")
+	}
+	if client == nil {
+		return fmt.Errorf("UpdateRecord: nil client")
+	}
+
+	var href, etag, addressbookPath string
+	err := s.db.QueryRow(`
+		SELECT crs.href, COALESCE(crs.etag, ''), ab.path
+		FROM carddav_record_state crs
+		JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+		WHERE crs.record_id = ?
+	`, rec.ID).Scan(&href, &etag, &addressbookPath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("UpdateRecord: no carddav state for record %s", rec.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("UpdateRecord: lookup state: %w", err)
+	}
+
+	card, err := BuildVCard(rec, rec.VCardRaw)
+	if err != nil {
+		return fmt.Errorf("UpdateRecord: build vcard: %w", err)
+	}
+
+	newETag, err := client.PutContact(addressbookPath, href, etag, card)
+	if err != nil {
+		// Includes *ErrPreconditionFailed unchanged for the caller to type-check.
+		return err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("UpdateRecord: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rec.Source = "carddav"
+	if err := contact.UpsertRecordTx(tx, rec); err != nil {
+		return fmt.Errorf("UpdateRecord: upsert local record: %w", err)
+	}
+
+	now := time.Now()
+	if _, err := tx.Exec(`
+		UPDATE carddav_record_state SET etag = ?, synced_at = ? WHERE record_id = ?
+	`, newETag, now, rec.ID); err != nil {
+		return fmt.Errorf("UpdateRecord: update state: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("UpdateRecord: commit: %w", err)
+	}
+	s.log.Info().Str("id", rec.ID).Str("href", href).Msg("CardDAV record updated")
+	return nil
+}
+
+// DeleteRecord DELETEs the given record from its CardDAV server via the
+// supplied Client, then cascade-deletes the local record (which removes the
+// emails/phones/addresses/etc. sub-tables via FK ON DELETE CASCADE, plus the
+// carddav_record_state row).
+//
+// On *ErrPreconditionFailed: local state is NOT mutated. The caller refreshes
+// the local cache from the server's current state and surfaces a conflict.
+//
+// 404 from the server is treated as success (the resource is already gone —
+// matches PutContact / DeleteContact's idempotency).
+func (s *Store) DeleteRecord(recordID string, client *Client) error {
+	if recordID == "" {
+		return fmt.Errorf("DeleteRecord: id is required")
+	}
+	if client == nil {
+		return fmt.Errorf("DeleteRecord: nil client")
+	}
+
+	var href, etag, addressbookPath string
+	err := s.db.QueryRow(`
+		SELECT crs.href, COALESCE(crs.etag, ''), ab.path
+		FROM carddav_record_state crs
+		JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+		WHERE crs.record_id = ?
+	`, recordID).Scan(&href, &etag, &addressbookPath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("DeleteRecord: no carddav state for record %s", recordID)
+	}
+	if err != nil {
+		return fmt.Errorf("DeleteRecord: lookup state: %w", err)
+	}
+
+	if err := client.DeleteContact(addressbookPath, href, etag); err != nil {
+		return err
+	}
+
+	if _, err := s.db.Exec(`DELETE FROM contact_records WHERE id = ?`, recordID); err != nil {
+		return fmt.Errorf("DeleteRecord: delete local: %w", err)
+	}
+	s.log.Info().Str("id", recordID).Str("href", href).Msg("CardDAV record deleted")
+	return nil
+}
+
+// RefreshRecordFromServer is the 412-recovery helper: after a precondition
+// failure, the caller refetches the server's current vCard and syncs locally
+// so the next read reflects what the server actually has. The record's
+// addressbook_id + href are resolved from carddav_record_state; the fetched
+// ParsedRecord is upserted via contact.UpsertRecordTx with full sub-table
+// replacement.
+func (s *Store) RefreshRecordFromServer(recordID string, client *Client) error {
+	if recordID == "" {
+		return fmt.Errorf("RefreshRecordFromServer: id is required")
+	}
+	if client == nil {
+		return fmt.Errorf("RefreshRecordFromServer: nil client")
+	}
+	var addressbookID, href, addressbookPath string
+	err := s.db.QueryRow(`
+		SELECT crs.addressbook_id, crs.href, ab.path
+		FROM carddav_record_state crs
+		JOIN contact_source_addressbooks ab ON ab.id = crs.addressbook_id
+		WHERE crs.record_id = ?
+	`, recordID).Scan(&addressbookID, &href, &addressbookPath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("RefreshRecordFromServer: lookup state: %w", err)
+	}
+
+	parsed, err := client.FetchContactByPath(addressbookPath, href)
+	if err != nil {
+		return fmt.Errorf("RefreshRecordFromServer: fetch: %w", err)
+	}
+	if parsed == nil {
+		return nil
+	}
+
+	rec := ParsedRecordToContactRecord(parsed, recordID, addressbookID)
+	return s.UpsertRecordsBatch([]RecordSyncEntry{{
+		Record:        rec,
+		AddressbookID: addressbookID,
+		Href:          href,
+		ETag:          parsed.ETag,
+	}})
+}
+
+// ParsedRecordToContactRecord converts a parser output into the rich
+// contact.Record shape the unified store consumes. Exported so the
+// extension API can build records from a server fetch when handling
+// conflicts. recordID is the existing local UUID (preserved across
+// re-fetches); addressbookID is the source_ref.
+func ParsedRecordToContactRecord(p *ParsedRecord, recordID, addressbookID string) *contact.Record {
+	if p == nil {
+		return nil
+	}
+	rec := &contact.Record{
+		ID:        recordID,
+		Source:    "carddav",
+		SourceRef: addressbookID,
+		Fn:        p.FN,
+		NGiven:    p.NGiven,
+		NFamily:   p.NFamily,
+		Org:       p.Org,
+		Title:     p.Title,
+		Note:      p.Note,
+		Bday:      p.Bday,
+		Nickname:  p.Nickname,
+		VCardRaw:  p.VCardRaw,
+		Categories: p.Categories,
+	}
+	for _, e := range p.Emails {
+		rec.Emails = append(rec.Emails, contact.RecordEmail{
+			Email:     e.Value,
+			EmailType: e.Type,
+			IsPrimary: e.IsPrimary,
+		})
+	}
+	for _, ph := range p.Phones {
+		rec.Phones = append(rec.Phones, contact.RecordPhone{
+			Number:    ph.Value,
+			PhoneType: ph.Type,
+			IsPrimary: ph.IsPrimary,
+		})
+	}
+	for _, a := range p.Addresses {
+		rec.Addresses = append(rec.Addresses, contact.RecordAddress{
+			AddrType: a.Type,
+			Street:   a.Street,
+			City:     a.City,
+			Region:   a.Region,
+			Postcode: a.Postcode,
+			Country:  a.Country,
+		})
+	}
+	for _, u := range p.URLs {
+		rec.URLs = append(rec.URLs, contact.RecordURL{
+			URL:     u.Value,
+			URLType: u.Type,
+		})
+	}
+	for _, i := range p.IMPPs {
+		rec.IMPPs = append(rec.IMPPs, contact.RecordIMPP{
+			Handle:   i.Handle,
+			IMPPType: i.Type,
+		})
+	}
+	return rec
 }
 
 // DeleteContactsForAddressbook deletes all CardDAV contact records belonging to
@@ -1027,6 +1342,50 @@ func (s *Store) CountContactsForSource(sourceID string) (int, error) {
 	var count int
 	err := s.db.QueryRow(query, sourceID).Scan(&count)
 	return count, err
+}
+
+// GetSourceForAddressbook returns the source that owns the given addressbook
+// via JOIN. Used by the Contacts extension's write dispatch (Phase 2b.2.b) to
+// gate writes on the source's `writable` flag and look up `username` / `url`
+// for the basic-auth CardDAV client. Returns (nil, nil) when the addressbook
+// has been deleted out from under the caller.
+func (s *Store) GetSourceForAddressbook(addressbookID string) (*Source, error) {
+	if addressbookID == "" {
+		return nil, nil
+	}
+	query := `
+		SELECT s.id, s.name, s.type, s.url, s.username, s.account_id, s.enabled, s.writable, s.sync_interval,
+		       s.last_synced_at, s.last_error, s.last_error_at, s.created_at
+		FROM contact_sources s
+		JOIN contact_source_addressbooks ab ON ab.source_id = s.id
+		WHERE ab.id = ?
+	`
+	var source Source
+	var lastSyncedAt, lastErrorAt sql.NullTime
+	var lastError, accountID sql.NullString
+	err := s.db.QueryRow(query, addressbookID).Scan(
+		&source.ID, &source.Name, &source.Type, &source.URL, &source.Username,
+		&accountID, &source.Enabled, &source.Writable, &source.SyncInterval,
+		&lastSyncedAt, &lastError, &lastErrorAt, &source.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get source for addressbook: %w", err)
+	}
+	if accountID.Valid {
+		source.AccountID = &accountID.String
+	}
+	if lastSyncedAt.Valid {
+		source.LastSyncedAt = &lastSyncedAt.Time
+	}
+	if lastError.Valid {
+		source.LastError = lastError.String
+	}
+	if lastErrorAt.Valid {
+		source.LastErrorAt = &lastErrorAt.Time
+	}
+	return &source, nil
 }
 
 // GetSourceByAccountID returns a contact source linked to an email account

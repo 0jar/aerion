@@ -27,6 +27,24 @@ var (
 	ErrUnimplemented = errors.New("not implemented in this release")
 )
 
+// ErrConflict signals that a mutation lost a race with concurrent state on
+// the source's authoritative side (e.g., a CardDAV server returned 412 for a
+// PUT/DELETE because its current ETag differs from ours). The local cache has
+// been refreshed from the source to mirror current state; the user's edit was
+// dropped. The Wails layer translates this into an event the UI handles by
+// toast + reload.
+type ErrConflict struct {
+	ContactID string // the record id (UUID) the conflict was on
+	Message   string // human-readable detail; safe to display
+}
+
+func (e *ErrConflict) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("conflict on contact %s", e.ContactID)
+	}
+	return fmt.Sprintf("conflict on contact %s: %s", e.ContactID, e.Message)
+}
+
 // ErrAdditionalConsentRequired signals that the extension's request needs
 // additional OAuth consent from the user before it can succeed. The host (not
 // the extension) handles the consent flow and retries.

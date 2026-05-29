@@ -43,7 +43,7 @@
   // @ts-ignore - wailsjs path
   import { smtp, folder, certificate } from '../wailsjs/go/models'
   // @ts-ignore - wailsjs runtime
-  import { WindowShow, EventsOn } from '../wailsjs/runtime/runtime'
+  import { WindowShow, WindowHide, EventsOn } from '../wailsjs/runtime/runtime'
   import { _ } from '$lib/i18n'
 
   // Component refs for keyboard navigation. Plain `let` (not $state) is
@@ -377,9 +377,25 @@
       handleMediaQueryChange(e.matches)
     })
 
-    // Show window after UI is ready (prevents white flash on startup)
-    // Skip if starting hidden in background mode
+    // App is fully initialized — dismiss the inline boot splash from
+    // index.html. The CSS transition fades it out; we remove the element
+    // shortly after to free the DOM. Done BEFORE the start-hidden check
+    // so users in background mode don't see the splash linger on screen
+    // before the window hides.
+    const splash = document.getElementById('boot-splash')
+    if (splash) {
+      splash.hidden = true
+      setTimeout(() => splash.remove(), 250)
+    }
+
+    // main.ts called WindowShow() at module load so the splash was visible
+    // during slow startup work (migrations etc.). If the user has start-
+    // hidden background mode, undo that now. Otherwise the window is already
+    // visible — calling WindowShow again is harmless.
     const shouldStartHidden = await GetStartHiddenActive()
+    if (shouldStartHidden) {
+      WindowHide()
+    }
     if (!shouldStartHidden) {
       WindowShow()
     }

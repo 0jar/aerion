@@ -104,18 +104,58 @@ func (a *App) UpdateContactSource(id string, config carddav.SourceConfig) error 
 		}
 	}
 
-	// Update addressbooks if provided
+	// Differential addressbook update: only delete addressbooks whose paths
+	// are no longer in EnabledAddressbooks; only create addressbooks for
+	// paths not already present. Existing addressbooks keep their UUID,
+	// sync_token, last_synced_at, and all the carddav_record_state rows
+	// pointing at them — so a writable-toggle save or a name-only edit
+	// becomes a no-op on the addressbook side.
+	//
+	// The previous behavior tore down ALL addressbooks on every call and
+	// re-created them with new UUIDs. carddav_record_state.addressbook_id
+	// has no FK cascade, so every record row was orphaned (UI went empty;
+	// the next full sync rebuilt the cache from scratch and left the old
+	// rows as dead bloat).
 	if len(config.EnabledAddressbooks) > 0 {
-		// Delete existing addressbooks
-		a.carddavStore.DeleteAddressbooksForSource(id)
+		existing, listErr := a.carddavStore.ListAddressbooks(id)
+		if listErr != nil {
+			return fmt.Errorf("failed to list current addressbooks: %w", listErr)
+		}
 
-		// Create new ones
+		existingByPath := make(map[string]*carddav.Addressbook, len(existing))
+		for _, ab := range existing {
+			existingByPath[ab.Path] = ab
+		}
+		incomingByPath := make(map[string]bool, len(config.EnabledAddressbooks))
 		for _, path := range config.EnabledAddressbooks {
+			incomingByPath[path] = true
+		}
+
+		// Delete addressbooks the user removed from their selection. Uses
+		// DeleteAddressbookByID (tx-wrapped) so the carddav_record_state
+		// rows + contact_records under that addressbook are cleaned up.
+		for path, ab := range existingByPath {
+			if incomingByPath[path] {
+				continue
+			}
+			if err := a.carddavStore.DeleteAddressbookByID(ab.ID); err != nil {
+				log.Warn().Err(err).Str("path", path).Msg("Failed to delete removed addressbook")
+			}
+		}
+
+		// Create addressbooks for paths the user newly enabled. Existing
+		// paths are skipped — preserving their UUID and downstream cache.
+		for _, path := range config.EnabledAddressbooks {
+			if _, exists := existingByPath[path]; exists {
+				continue
+			}
 			name := path
 			if parts := strings.Split(strings.Trim(path, "/"), "/"); len(parts) > 0 {
 				name = parts[len(parts)-1]
 			}
-			a.carddavStore.CreateAddressbook(id, path, name, true)
+			if _, err := a.carddavStore.CreateAddressbook(id, path, name, true); err != nil {
+				log.Warn().Err(err).Str("path", path).Msg("Failed to create new addressbook")
+			}
 		}
 	}
 

@@ -5,6 +5,7 @@
 ---
 
 - Added fallback for Mailfence and other non-quote-compliant providers - [#209](https://github.com/hkdb/aerion/issues/209)
+- Fixed CardDav remove provider code path to not leave orphaned contacts in db
 
 
 **v0.2.5 - 05-27-2026**

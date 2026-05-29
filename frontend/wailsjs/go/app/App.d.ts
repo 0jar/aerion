@@ -298,6 +298,8 @@ export function IsImageAllowed(arg1:string):Promise<boolean>;
 
 export function IsOAuthConfigured(arg1:string):Promise<boolean>;
 
+export function IsReady():Promise<boolean>;
+
 export function LinkAccountContactSource(arg1:string,arg2:string,arg3:number):Promise<carddav.Source>;
 
 export function ListAccountSetupHooksForProvider(arg1:string):Promise<Array<v1.AccountSetupHookRequest>>;

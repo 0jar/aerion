@@ -6,13 +6,36 @@
   import AddContactDialog from './AddContactDialog.svelte'
   import ContactEditDialog from './ContactEditDialog.svelte'
   import { contactsView, reloadContacts, selectSource, selectContact } from '$extensions/contacts/frontend/stores/contactsView.svelte'
+  import { contactSourcesStore } from '$lib/stores/contactSources.svelte'
+  import { toasts } from '$lib/stores/toast'
   import { registerExtensionShortcut } from '$lib/stores/extensionShortcuts.svelte'
   import { KEY } from '$extensions/contacts/frontend/keyboard/shortcuts'
   // @ts-ignore - wailsjs bindings
+  import { EventsOn } from '$wailsjs/runtime/runtime'
+  // @ts-ignore - wailsjs bindings
   import type { v1 } from '$wailsjs/go/models'
+
+  // Conflict events fire when a CardDAV write loses the optimistic-concurrency
+  // race (server's ETag changed between read and PUT/DELETE). The Wails
+  // backend has already refreshed the local cache from the server before
+  // emitting — the UI just needs to toast + re-render.
+  let unsubscribeConflict: (() => void) | null = null
 
   onMount(() => {
     reloadContacts()
+    unsubscribeConflict = EventsOn('contacts:conflict', async (payload: { contactId: string; message: string }) => {
+      toasts.error(
+        'This contact was changed elsewhere. Your edit was discarded — refreshed with the latest version.',
+      )
+      await reloadContacts()
+      if (payload?.contactId && contactsView.selectedContactId === payload.contactId) {
+        await selectContact(payload.contactId)
+      }
+    })
+  })
+
+  onDestroy(() => {
+    if (unsubscribeConflict) unsubscribeConflict()
   })
 
   let showAdd = $state(false)
@@ -32,8 +55,12 @@
 
   function openEdit(contact: v1.Contact | null) {
     if (!contact) return
-    // Local-only edit while we wait for CardDAV/OAuth write paths (2b.2.b / 2b.3).
-    if (contact.sourceId !== 'aerion') return
+    // Open for any writable source — local (always writable) or a CardDAV
+    // source that has its writable flag enabled. Google/Microsoft sources
+    // are gated to read-only until 2b.3 ships their write paths.
+    const writable =
+      contact.sourceId === 'aerion' || contactSourcesStore.isSourceWritable(contact.sourceId)
+    if (!writable) return
     editTarget = contact
     showEdit = true
   }

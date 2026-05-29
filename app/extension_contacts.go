@@ -1,8 +1,32 @@
 package app
 
 import (
+	"errors"
+
 	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// emitContactsConflict translates a *coreapi.ErrConflict from a write path
+// into a contacts:conflict event the extension's frontend listens for. The
+// store has already refreshed the local cache from the source before this
+// fires, so the frontend's response is "toast + reload" — no data carried
+// in the payload beyond the contact id (the UI re-fetches the fresh row).
+//
+// Returns true when the error WAS a conflict (and an event was emitted);
+// false otherwise so the caller can keep treating non-conflict errors as
+// hard failures.
+func (a *App) emitContactsConflict(err error) bool {
+	var conflict *coreapi.ErrConflict
+	if !errors.As(err, &conflict) {
+		return false
+	}
+	wailsRuntime.EventsEmit(a.ctx, "contacts:conflict", map[string]string{
+		"contactId": conflict.ContactID,
+		"message":   conflict.Message,
+	})
+	return true
+}
 
 // ListContactsForBrowse is the Wails-bound entry for the Contacts extension's
 // browse pane. Returns contacts filtered by sourceID:
@@ -74,20 +98,26 @@ func (a *App) CreateLocalContact(email, name string) (string, error) {
 	})
 }
 
-// UpdateLocalContact renames a local (sent-recipient) contact. Routes through
-// the Contacts extension's API (a.contactsAPI.UpdateContact) which dispatches
-// by source under the hood — local id (contains @) → contact.Store.UpdateName
-// (which also sets name_overridden=1). Wails-bound surface; gated on the
-// extension being enabled.
+// UpdateLocalContact renames a contact via the Contacts extension's API,
+// which dispatches by source under the hood:
 //
-// `email` is the contact's primary key (lower-cased). `name` is the new
-// display name; empty string is allowed (clears the visible name but keeps
-// the override flag, so auto-collection still won't reset it).
+//   - Local records → contact.Store.UpdateRecordName (which sets
+//     name_overridden=1 so auto-collection won't clobber the edit).
+//   - CardDAV records → PUT to the CardDAV server (gated on the source's
+//     writable flag), then mirror server state locally. 412 conflicts surface
+//     via the contacts:conflict event the UI listens for; on conflict the
+//     method also returns nil (the user's edit was discarded but the local
+//     cache now matches the server, so the UI can simply reload).
 //
-// The "Local" in the method name is historical — this method handles local
-// edits today. When 2b.2/2b.3 land, a more general App.UpdateContact will
-// dispatch by source via the same API and this one stays as a thin alias.
-func (a *App) UpdateLocalContact(email, name string) error {
+// `idOrEmail` is the record id (UUID for both local and CardDAV records) or
+// — for back-compat — a bare email which the API falls back to. `name` is
+// the new display name; empty string is allowed (clears the visible name
+// but keeps name_overridden so auto-collection still won't reset it).
+//
+// The "Local" in the method name is historical — this method now handles
+// CardDAV writes too. Wails-bound surface; gated on the extension being
+// enabled.
+func (a *App) UpdateLocalContact(idOrEmail, name string) error {
 	enabled, err := a.settingsStore.IsExtensionEnabled("contacts")
 	if err != nil {
 		return err
@@ -98,17 +128,28 @@ func (a *App) UpdateLocalContact(email, name string) error {
 	if a.contactsAPI == nil {
 		return nil
 	}
-	return a.contactsAPI.UpdateContact(email, coreapi.ContactPatch{Name: &name})
+	err = a.contactsAPI.UpdateContact(idOrEmail, coreapi.ContactPatch{Name: &name})
+	if a.emitContactsConflict(err) {
+		// Local cache refreshed; UI reloads via the event. Don't bubble the
+		// conflict as a write failure — the user's intent is acknowledged,
+		// just superseded by the server.
+		return nil
+	}
+	return err
 }
 
-// DeleteLocalContact removes a local contact entirely. Routes through the
-// extension API for SDK consistency with reads + UpdateContact. Wails-bound;
-// gated on the extension being enabled. Idempotent on the local path.
+// DeleteLocalContact removes a contact via the Contacts extension's API,
+// which dispatches by source — local records cascade-delete in the unified
+// store; CardDAV records DELETE on the server (gated on writable) and then
+// cascade locally. 412 conflicts surface via the contacts:conflict event;
+// on conflict the method returns nil (local cache has been refreshed).
+//
+// Idempotent on the local + 404 paths.
 //
 // Note: there's a separate top-level `App.DeleteContact` that's been around
 // since pre-extension days for legacy callers. This one is gated to the
 // extension's enabled state for the extension UI to call.
-func (a *App) DeleteLocalContact(email string) error {
+func (a *App) DeleteLocalContact(idOrEmail string) error {
 	enabled, err := a.settingsStore.IsExtensionEnabled("contacts")
 	if err != nil {
 		return err
@@ -119,5 +160,9 @@ func (a *App) DeleteLocalContact(email string) error {
 	if a.contactsAPI == nil {
 		return nil
 	}
-	return a.contactsAPI.DeleteContact(email)
+	err = a.contactsAPI.DeleteContact(idOrEmail)
+	if a.emitContactsConflict(err) {
+		return nil
+	}
+	return err
 }

@@ -1080,4 +1080,75 @@ var migrations = []Migration{
 			DROP TABLE _migration_32_idmap;
 		`,
 	},
+	{
+		Version: 33,
+		SQL: `
+			-- Phase 2b.2.b.1 follow-up: add the FK that should have been on
+			-- carddav_record_state.addressbook_id from the start.
+			--
+			-- Why: migration 31 created carddav_record_state with
+			-- "addressbook_id TEXT NOT NULL" (no FK). When a CardDAV source
+			-- (or any one of its addressbooks) is deleted, the existing
+			-- source→addressbook CASCADE fires, but nothing cascades from
+			-- addressbook to state — every state row becomes an orphan
+			-- pointing at a dead addressbook_id, and the contact_records
+			-- they reference become unreachable from the source→ab→state→cr
+			-- chain that ListRecordIDsForSource walks. The UI sees them
+			-- disappear; the rows sit in the DB as zombies indefinitely.
+			--
+			-- That coverage gap was the underlying cause of two real
+			-- failures during 2b.2.b.1 development:
+			--   1. The "Enable write access" toggle's save path tore down
+			--      and rebuilt addressbooks via UpdateContactSource → every
+			--      state row got orphaned in one save.
+			--   2. A previously-deleted CardDAV source left 613 zombie
+			--      state + record rows behind.
+			--
+			-- Code-side fixes landed first (UpdateContactSource is now
+			-- differential; Store.DeleteSource explicitly scrubs records
+			-- before deleting the source). This migration closes the gap
+			-- at the schema layer so any future delete path benefits
+			-- automatically.
+			--
+			-- SQLite can't ALTER TABLE to add a FK; we have to rebuild the
+			-- table. Pre-step: clean any existing orphans so the rebuild's
+			-- INSERT doesn't fail FK validation. This makes the migration
+			-- safe for installs that ran the buggy code (i.e., anyone who
+			-- developed against 0.3.0-dev between 2b.2.a and 2b.2.b.1).
+
+			-- 1. Drop orphan state rows whose addressbook is gone.
+			DELETE FROM carddav_record_state
+			WHERE addressbook_id NOT IN (SELECT id FROM contact_source_addressbooks);
+
+			-- 2. Drop orphan contact_records (source='carddav') with no
+			--    state row. Bloat from interrupted syncs or past bugs;
+			--    they're unreachable via the source→ab→state→cr chain.
+			DELETE FROM contact_records
+			WHERE source = 'carddav'
+			  AND id NOT IN (SELECT record_id FROM carddav_record_state);
+
+			-- 3. Rebuild carddav_record_state with the FK. Copy preserves
+			--    the PRIMARY KEY (record_id) and the UNIQUE href constraint
+			--    that migration 31 set.
+			CREATE TABLE carddav_record_state_new (
+				record_id       TEXT PRIMARY KEY REFERENCES contact_records(id) ON DELETE CASCADE,
+				addressbook_id  TEXT NOT NULL REFERENCES contact_source_addressbooks(id) ON DELETE CASCADE,
+				href            TEXT NOT NULL UNIQUE,
+				etag            TEXT,
+				synced_at       DATETIME
+			);
+
+			INSERT INTO carddav_record_state_new (record_id, addressbook_id, href, etag, synced_at)
+			SELECT record_id, addressbook_id, href, etag, synced_at
+			FROM carddav_record_state;
+
+			DROP TABLE carddav_record_state;
+			ALTER TABLE carddav_record_state_new RENAME TO carddav_record_state;
+
+			-- 4. Recreate the index that migration 31 added (DROP TABLE
+			--    above also removed its indexes).
+			CREATE INDEX idx_carddav_record_state_addressbook
+				ON carddav_record_state(addressbook_id);
+		`,
+	},
 }

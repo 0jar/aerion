@@ -6,6 +6,7 @@ import (
 	"github.com/hkdb/aerion/extensions/contacts"
 	"github.com/hkdb/aerion/internal/carddav"
 	"github.com/hkdb/aerion/internal/contact"
+	"github.com/hkdb/aerion/internal/credentials"
 	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 )
 
@@ -20,11 +21,13 @@ type Extension struct {
 
 // New constructs the Contacts extension. localStore and carddavStore are the
 // host's existing core stores; the Contacts API wraps them for the
-// coreapi.Contacts read surface. store is the per-extension SQLite (already
-// opened by the host so its migrations apply regardless of enabled state).
-func New(localStore *contact.Store, carddavStore *carddav.Store, store *Store) *Extension {
+// coreapi.Contacts read surface. credStore is needed for CardDAV write
+// dispatch (per-source basic-auth password lookup, Phase 2b.2.b.1). store is
+// the per-extension SQLite (already opened by the host so its migrations
+// apply regardless of enabled state).
+func New(localStore *contact.Store, carddavStore *carddav.Store, credStore *credentials.Store, store *Store) *Extension {
 	return &Extension{
-		api:      NewAPI(localStore, carddavStore),
+		api:      NewAPI(localStore, carddavStore, credStore),
 		store:    store,
 		manifest: contacts.Manifest(),
 	}

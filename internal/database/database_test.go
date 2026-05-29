@@ -162,8 +162,11 @@ func TestMigrationV32_LocalRecordIDsRewrittenToUUIDs(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("seed contact_emails: %v", err)
 	}
-	if _, err := db.Exec(`DELETE FROM migrations WHERE version = 32`); err != nil {
-		t.Fatalf("clear migration 32 marker: %v", err)
+	// Clear v32 AND any later markers so Migrate() sees v32 as pending.
+	// Migrate compares against MAX(version), so leaving a later marker
+	// (e.g., v33) would cause v32 to be skipped on the re-run.
+	if _, err := db.Exec(`DELETE FROM migrations WHERE version >= 32`); err != nil {
+		t.Fatalf("clear migration 32+ markers: %v", err)
 	}
 
 	// Re-run migrations — migration 32 should rewrite the seeded local- id.
@@ -209,6 +212,150 @@ func TestMigrationV32_LocalRecordIDsRewrittenToUUIDs(t *testing.T) {
 	}
 	if sendCount != 5 {
 		t.Errorf("send_count = %d, want 5 (preserved through migration)", sendCount)
+	}
+}
+
+// TestMigrationV33_AddsAddressbookFK verifies migration 33 cleans existing
+// orphans AND wires the new FK so future addressbook deletes cascade to
+// state rows automatically.
+func TestMigrationV33_AddsAddressbookFK(t *testing.T) {
+	db := openTestDB(t)
+
+	// Seed a source + addressbook + record so we have a row to chain through.
+	if _, err := db.Exec(`
+		INSERT INTO contact_sources (id, name, type, url, username, enabled, sync_interval)
+		VALUES ('src-1', 'Test', 'carddav', 'https://x', 'u', 1, 60)
+	`); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO contact_source_addressbooks (id, source_id, path, name, enabled)
+		VALUES ('ab-1', 'src-1', '/dav/', 'ab', 1)
+	`); err != nil {
+		t.Fatalf("seed addressbook: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO contact_records (id, source, source_ref, fn)
+		VALUES ('rec-1', 'carddav', 'ab-1', 'Test')
+	`); err != nil {
+		t.Fatalf("seed record: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO carddav_record_state (record_id, addressbook_id, href, etag)
+		VALUES ('rec-1', 'ab-1', '/dav/rec-1.vcf', 'etag')
+	`); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	// Schema-level invariant: deleting the addressbook now cascades to state.
+	// Pre-migration this would have left the state row as a zombie.
+	if _, err := db.Exec(`DELETE FROM contact_source_addressbooks WHERE id = 'ab-1'`); err != nil {
+		t.Fatalf("delete addressbook: %v", err)
+	}
+
+	var stateRows, recordRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM carddav_record_state WHERE record_id = 'rec-1'`).Scan(&stateRows); err != nil {
+		t.Fatalf("count state: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM contact_records WHERE id = 'rec-1'`).Scan(&recordRows); err != nil {
+		t.Fatalf("count records: %v", err)
+	}
+	if stateRows != 0 {
+		t.Errorf("expected 0 state rows after addressbook delete, got %d", stateRows)
+	}
+	// contact_records does NOT cascade from state (cascade goes the other
+	// direction: record→state). So the record row survives. That's expected.
+	// (The application-level DeleteSource path handles record cleanup.)
+	if recordRows != 1 {
+		t.Errorf("expected record to survive addressbook delete (no cascade in that direction); got %d rows", recordRows)
+	}
+}
+
+// TestMigrationV33_CleansExistingOrphans verifies the pre-step that scrubs
+// orphan state rows + records before the FK is added. Simulates the v32
+// state by rebuilding carddav_record_state WITHOUT the FK, seeding orphans,
+// then re-running migration 33 — which must pre-clean orphans before the
+// table rebuild's INSERT.
+func TestMigrationV33_CleansExistingOrphans(t *testing.T) {
+	db := openTestDB(t)
+
+	// Roll back the v33 schema: drop the FK by rebuilding the table without
+	// it. This mimics what an install at v32 would have looked like.
+	if _, err := db.Exec(`
+		PRAGMA foreign_keys = OFF;
+		DROP TABLE carddav_record_state;
+		CREATE TABLE carddav_record_state (
+			record_id       TEXT PRIMARY KEY REFERENCES contact_records(id) ON DELETE CASCADE,
+			addressbook_id  TEXT NOT NULL,
+			href            TEXT NOT NULL UNIQUE,
+			etag            TEXT,
+			synced_at       DATETIME
+		);
+		CREATE INDEX idx_carddav_record_state_addressbook
+			ON carddav_record_state(addressbook_id);
+		DELETE FROM migrations WHERE version = 33;
+		PRAGMA foreign_keys = ON;
+	`); err != nil {
+		t.Fatalf("rewind to v32 schema: %v", err)
+	}
+
+	// Seed: orphan state row whose addressbook doesn't exist. Pre-migration,
+	// this insert succeeds because the FK isn't there.
+	if _, err := db.Exec(`
+		INSERT INTO contact_records (id, source, source_ref, fn)
+		VALUES ('zombie-rec', 'carddav', 'dead-ab-id', 'Zombie')
+	`); err != nil {
+		t.Fatalf("seed zombie record: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO carddav_record_state (record_id, addressbook_id, href, etag)
+		VALUES ('zombie-rec', 'dead-ab-id', '/dav/zombie.vcf', 'etag')
+	`); err != nil {
+		t.Fatalf("seed zombie state: %v", err)
+	}
+
+	// Seed: contact_records (carddav) with no state row — bloat the
+	// migration should drop in pre-step 2.
+	if _, err := db.Exec(`
+		INSERT INTO contact_records (id, source, fn)
+		VALUES ('orphan-record', 'carddav', 'OrphanRec')
+	`); err != nil {
+		t.Fatalf("seed orphan record: %v", err)
+	}
+
+	// Re-run migrations; v33 should pre-clean both before rebuilding the
+	// table with the FK.
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+
+	var stateCount, recordCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM carddav_record_state WHERE record_id = 'zombie-rec'`).Scan(&stateCount); err != nil {
+		t.Fatalf("count zombie state: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM contact_records WHERE id IN ('zombie-rec','orphan-record')`).Scan(&recordCount); err != nil {
+		t.Fatalf("count orphan records: %v", err)
+	}
+	if stateCount != 0 {
+		t.Errorf("zombie state row should have been pre-cleaned; got %d", stateCount)
+	}
+	if recordCount != 0 {
+		t.Errorf("orphan records (no state) should have been pre-cleaned; got %d", recordCount)
+	}
+
+	// FK should now be enforcing — try inserting another orphan, expect FK violation.
+	_, err := db.Exec(`
+		INSERT INTO contact_records (id, source, fn) VALUES ('post-rec', 'carddav', 'Post');
+	`)
+	if err != nil {
+		t.Fatalf("insert valid record: %v", err)
+	}
+	_, err = db.Exec(`
+		INSERT INTO carddav_record_state (record_id, addressbook_id, href, etag)
+		VALUES ('post-rec', 'still-dead', '/dav/post.vcf', 'etag')
+	`)
+	if err == nil {
+		t.Error("expected FK violation when inserting state pointing at dead addressbook_id post-migration, got nil")
 	}
 }
 

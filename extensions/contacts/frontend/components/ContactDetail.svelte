@@ -5,6 +5,7 @@
   import ConfirmDialog from '$lib/components/kit/ConfirmDialog.svelte'
   import Icon from '@iconify/svelte'
   import { contactsView, deleteLocalContact } from '$extensions/contacts/frontend/stores/contactsView.svelte'
+  import { contactSourcesStore } from '$lib/stores/contactSources.svelte'
   import { toasts } from '$lib/stores/toast'
   // @ts-ignore - wailsjs bindings
   import type { v1 } from '$wailsjs/go/models'
@@ -20,10 +21,13 @@
   let contact = $derived(contactsView.detail)
   let primaryEmail = $derived(contact && contact.emails && contact.emails.length > 0 ? contact.emails[0] : '')
 
-  // Phase 2b.1: edit + delete enabled only for local (sent-recipient) contacts.
-  // CardDAV / Google / Microsoft sources gain write capability in 2b.2 / 2b.3
+  // Local records are always writable. CardDAV records are writable when the
+  // source's `writable` flag is enabled (Settings → source → "Enable write
+  // access"). Google / Microsoft sources gain write capability in 2b.3
   // alongside the provider-specific write paths.
-  let isLocal = $derived(contact?.sourceId === 'aerion')
+  let isWritable = $derived(
+    contact?.sourceId === 'aerion' || contactSourcesStore.isSourceWritable(contact?.sourceId),
+  )
 
   let showDeleteConfirm = $state(false)
   let deleting = $state(false)
@@ -71,7 +75,7 @@
       <h1 class="m-0 text-xl font-semibold text-foreground flex-1 min-w-0 truncate">
         {contact.name || '(unnamed)'}
       </h1>
-      {#if isLocal}
+      {#if isWritable}
         <div class="flex items-center gap-1 flex-shrink-0">
           <Button variant="outline" size="sm" onclick={() => { if (contact) onEdit?.(contact) }}>
             <Icon icon="mdi:pencil" class="w-4 h-4 mr-1" />
@@ -246,7 +250,11 @@
 <ConfirmDialog
   bind:open={showDeleteConfirm}
   title="Delete this contact?"
-  description={contact ? `${contact.name || primaryEmail || '(unnamed)'} will be removed from your local contacts. Mail you've already sent to this address is not affected.` : ''}
+  description={contact
+    ? contact.sourceId === 'aerion'
+      ? `${contact.name || primaryEmail || '(unnamed)'} will be removed from your local contacts. Mail you've already sent to this address is not affected.`
+      : `${contact.name || primaryEmail || '(unnamed)'} will be removed from this address book on the server. This cannot be undone from Aerion.`
+    : ''}
   confirmLabel="Delete"
   cancelLabel="Cancel"
   variant="destructive"

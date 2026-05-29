@@ -1,11 +1,13 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/hkdb/aerion/internal/carddav"
 	"github.com/hkdb/aerion/internal/contact"
+	"github.com/hkdb/aerion/internal/credentials"
 	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 )
 
@@ -44,18 +46,21 @@ func localKindFromSourceID(id string) string {
 }
 
 // API implements coreapi.Contacts by wrapping the existing core contact.Store
-// and carddav.Store. Phase 2a is read-only; write methods will land in Phase
-// 2b alongside the Auth Broker's first real consumer.
+// and carddav.Store. credStore is needed to resolve per-source basic-auth
+// passwords for CardDAV writes (Phase 2b.2.b.1); it may be nil in test
+// fixtures that never exercise CardDAV writes.
 type API struct {
 	localStore   *contact.Store
 	carddavStore *carddav.Store
+	credStore    *credentials.Store
 }
 
-// NewAPI constructs the Contacts API wrapper. Either store may be nil — the
-// wrapper degrades gracefully (e.g., a profile with no CardDAV sources has a
-// nil carddavStore; search still returns local results).
-func NewAPI(localStore *contact.Store, carddavStore *carddav.Store) *API {
-	return &API{localStore: localStore, carddavStore: carddavStore}
+// NewAPI constructs the Contacts API wrapper. Any store may be nil — the
+// wrapper degrades gracefully (a profile with no CardDAV sources has nil
+// carddavStore; search still returns local results; CardDAV writes refuse with
+// a clear error rather than panicking).
+func NewAPI(localStore *contact.Store, carddavStore *carddav.Store, credStore *credentials.Store) *API {
+	return &API{localStore: localStore, carddavStore: carddavStore, credStore: credStore}
 }
 
 // SearchContacts delegates to the core contact store's merged search across
@@ -179,16 +184,22 @@ func (a *API) CreateContact(input coreapi.ContactCreateInput) (string, error) {
 	}
 }
 
-// UpdateContact mutates a contact by id. Source dispatch follows the same id
-// heuristic as GetContact (email → local, UUID → CardDAV):
+// UpdateContact mutates a contact by id. Source dispatch:
 //
-//   - Local (email): updates display_name via contact.Store.UpdateName, which
-//     also sets name_overridden=1 so future AddOrUpdate calls on sent mail
-//     won't clobber the user edit. Phase 2b.1 supports only the Name field;
-//     other patch fields are ignored.
-//   - CardDAV / Google / Microsoft (UUID): returns ErrUnimplemented. Filled
-//     in by Phase 2b.2 (CardDAV PUT) and 2b.3 (Google People / MS Graph write
-//     paths via the Auth Broker).
+//   - Local (record.Source == "local"): updates display_name via
+//     contact.Store.UpdateRecordName, which also sets name_overridden=1 so
+//     future AddOrUpdate calls on sent mail won't clobber the user edit.
+//   - CardDAV (record.Source == "carddav"): PUTs the full record to the
+//     CardDAV server gated on the source's writable flag, then mirrors the
+//     server's accepted state locally. 412 conflicts surface as
+//     *coreapi.ErrConflict after refreshing the local cache.
+//   - Google / Microsoft (other source values): returns ErrUnimplemented;
+//     filled in by Phase 2b.3 via the Auth Broker.
+//
+// Phase 2b.2.b.1 ships only the Name field in ContactPatch; other patch
+// fields land in 2b.2.b.2 alongside the multi-field Edit dialog. The CardDAV
+// write path is full-fidelity already (UpdateRecord serializes the entire
+// record's current state), so 2b.2.b.2's UI is purely additive frontend work.
 //
 // Empty/nil patch (no fields set) is a no-op success — callers can issue a
 // "touch" call without sending field updates.
@@ -218,25 +229,37 @@ func (a *API) UpdateContact(id string, patch coreapi.ContactPatch) error {
 		return nil
 	}
 
-	// Local-source records: edit via the record-level helper. CardDAV/OAuth
-	// records still need a real write path — return ErrUnimplemented (2b.2.b).
-	if rec.Source != "local" {
-		return coreapi.ErrUnimplemented
+	// Local-source records: edit via the record-level helper.
+	if rec.Source == "local" {
+		if patch.Name == nil {
+			return nil
+		}
+		return a.localStore.UpdateRecordName(rec.ID, *patch.Name)
 	}
-	if patch.Name == nil {
-		// No fields set — successful no-op.
-		return nil
+
+	// CardDAV: server-side PUT path. Reuses the source's basic-auth creds.
+	if rec.Source == "carddav" {
+		if patch.Name == nil {
+			return nil
+		}
+		rec.Fn = strings.TrimSpace(*patch.Name)
+		return a.writeCardDAVRecord(rec)
 	}
-	return a.localStore.UpdateRecordName(rec.ID, *patch.Name)
+	// Google/Microsoft (other source values) — write path lands in 2b.3.
+	return coreapi.ErrUnimplemented
 }
 
 // DeleteContact removes a contact by id. Source dispatch:
 //
-//   - Local (email): delegates to contact.Store.Delete.
-//   - CardDAV / Google / Microsoft (UUID): returns ErrUnimplemented until
-//     Phase 2b.2 / 2b.3 wires provider write paths.
+//   - Local: cascade-deletes the record (and its sub-tables) via
+//     contact.Store.DeleteRecord.
+//   - CardDAV: DELETEs the resource from the server (gated on the source's
+//     writable flag), then cascade-deletes locally. 412 conflicts surface as
+//     *coreapi.ErrConflict after refreshing the local cache.
+//   - Google / Microsoft: returns ErrUnimplemented until Phase 2b.3.
 //
-// Idempotent on the local path (deleting a non-existent contact succeeds).
+// Idempotent on the local + 404 paths (deleting a non-existent contact
+// succeeds).
 func (a *API) DeleteContact(id string) error {
 	if id == "" {
 		return fmt.Errorf("contacts.DeleteContact: id is required")
@@ -263,12 +286,94 @@ func (a *API) DeleteContact(id string) error {
 		return nil
 	}
 
-	// Local records: cascade-delete via the record id. CardDAV/OAuth need
-	// server-side DELETE — 2b.2.b wires that up.
-	if rec.Source != "local" {
-		return coreapi.ErrUnimplemented
+	// Local records: cascade-delete via the record id.
+	if rec.Source == "local" {
+		return a.localStore.DeleteRecord(rec.ID)
 	}
-	return a.localStore.DeleteRecord(rec.ID)
+
+	// CardDAV: server-side DELETE then cascade-delete locally.
+	if rec.Source == "carddav" {
+		return a.deleteCardDAVRecord(rec)
+	}
+	// Google/Microsoft — 2b.3.
+	return coreapi.ErrUnimplemented
+}
+
+// writeCardDAVRecord is the shared CardDAV-write dispatch used by UpdateContact.
+// Resolves the source for the record's addressbook, checks the writable flag,
+// builds an authenticated client with the source's basic-auth creds, then
+// delegates the PUT + local sync to carddav.Store.UpdateRecord.
+//
+// On a 412 conflict, refreshes the local cache from the server and returns a
+// *coreapi.ErrConflict the Wails layer translates into a contacts:conflict
+// event.
+func (a *API) writeCardDAVRecord(rec *contact.Record) error {
+	client, sourceID, err := a.cardDAVClientForRecord(rec)
+	if err != nil {
+		return err
+	}
+	if err := a.carddavStore.UpdateRecord(rec, client); err != nil {
+		var pre *carddav.ErrPreconditionFailed
+		if errors.As(err, &pre) {
+			_ = a.carddavStore.RefreshRecordFromServer(rec.ID, client)
+			return &coreapi.ErrConflict{ContactID: rec.ID, Message: "the contact was modified on the server"}
+		}
+		return fmt.Errorf("contacts.UpdateContact (carddav source %s): %w", sourceID, err)
+	}
+	return nil
+}
+
+// deleteCardDAVRecord is the shared CardDAV-delete dispatch. Same recipe as
+// writeCardDAVRecord with DELETE in place of PUT.
+func (a *API) deleteCardDAVRecord(rec *contact.Record) error {
+	client, sourceID, err := a.cardDAVClientForRecord(rec)
+	if err != nil {
+		return err
+	}
+	if err := a.carddavStore.DeleteRecord(rec.ID, client); err != nil {
+		var pre *carddav.ErrPreconditionFailed
+		if errors.As(err, &pre) {
+			_ = a.carddavStore.RefreshRecordFromServer(rec.ID, client)
+			return &coreapi.ErrConflict{ContactID: rec.ID, Message: "the contact was modified on the server"}
+		}
+		return fmt.Errorf("contacts.DeleteContact (carddav source %s): %w", sourceID, err)
+	}
+	return nil
+}
+
+// cardDAVClientForRecord resolves the source for a CardDAV record (via the
+// record's source_ref = addressbook_id), gates on the source's writable flag,
+// fetches the basic-auth password from the credentials store, and returns a
+// ready-to-use Client. Also returns the source.ID for error context.
+func (a *API) cardDAVClientForRecord(rec *contact.Record) (*carddav.Client, string, error) {
+	if a.carddavStore == nil {
+		return nil, "", fmt.Errorf("carddav store unavailable")
+	}
+	source, err := a.carddavStore.GetSourceForAddressbook(rec.SourceRef)
+	if err != nil {
+		return nil, "", fmt.Errorf("lookup source for addressbook %s: %w", rec.SourceRef, err)
+	}
+	if source == nil {
+		return nil, "", fmt.Errorf("no source owns addressbook %s", rec.SourceRef)
+	}
+	// Writability is a user-facing permission gate — fire it before the
+	// credentials-store check so non-writable sources surface the right
+	// error regardless of whether credentials are loadable.
+	if !source.Writable {
+		return nil, source.ID, fmt.Errorf("this source is not writable; enable write access in its settings")
+	}
+	if a.credStore == nil {
+		return nil, source.ID, fmt.Errorf("credentials store unavailable")
+	}
+	password, err := a.credStore.GetCardDAVPassword(source.ID)
+	if err != nil {
+		return nil, source.ID, fmt.Errorf("get password for source %s: %w", source.ID, err)
+	}
+	client, err := carddav.NewClient(source.URL, source.Username, password)
+	if err != nil {
+		return nil, source.ID, fmt.Errorf("build carddav client: %w", err)
+	}
+	return client, source.ID, nil
 }
 
 // SubscribeToContactEvents is scaffolded; Phase 3+ wires through a core

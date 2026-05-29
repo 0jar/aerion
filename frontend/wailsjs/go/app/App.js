@@ -562,6 +562,10 @@ export function IsOAuthConfigured(arg1) {
   return window['go']['app']['App']['IsOAuthConfigured'](arg1);
 }
 
+export function IsReady() {
+  return window['go']['app']['App']['IsReady']();
+}
+
 export function LinkAccountContactSource(arg1, arg2, arg3) {
   return window['go']['app']['App']['LinkAccountContactSource'](arg1, arg2, arg3);
 }
