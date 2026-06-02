@@ -1,0 +1,69 @@
+{
+  "calendar": {
+    "common": {
+      "cancel": "Cancel",
+      "save": "Save",
+      "delete": "Delete",
+      "loading": "Loading…",
+      "close": "Close"
+    },
+    "sidebar": {
+      "title": "Calendars",
+      "addSource": "Add CalDAV source",
+      "settings": "Calendar settings",
+      "lastSync": "Synced {time}",
+      "lastSyncNever": "Not synced yet",
+      "noCalendars": "No calendars yet. Add a CalDAV source to get started.",
+      "syncNow": "Sync now"
+    },
+    "viewSwitcher": {
+      "month": "Month",
+      "week": "Week",
+      "day": "Day",
+      "agenda": "Agenda",
+      "today": "Today",
+      "prev": "Previous",
+      "next": "Next",
+      "sync": "Sync",
+      "comingSoon": "{view} view coming soon",
+      "tzLabel": "tz: {tz}"
+    },
+    "month": {
+      "weekdayShort": {
+        "sun": "SUN",
+        "mon": "MON",
+        "tue": "TUE",
+        "wed": "WED",
+        "thu": "THU",
+        "fri": "FRI",
+        "sat": "SAT"
+      },
+      "moreEventsHidden": "+{n} more",
+      "allDay": "all day",
+      "emptyState": "Add a CalDAV source to see events here."
+    },
+    "add": {
+      "title": "Add CalDAV source",
+      "description": "Connect to a CalDAV server (Nextcloud, Radicale, iCloud, FastMail, etc.). The Calendar extension reads events from the calendars you choose.",
+      "nameLabel": "Name",
+      "namePlaceholder": "e.g. Personal Nextcloud",
+      "urlLabel": "Server URL",
+      "urlPlaceholder": "https://cloud.example.com/remote.php/dav",
+      "urlHelp": "Enter the base URL or full calendar-home URL. Aerion will probe common paths.",
+      "usernameLabel": "Username",
+      "passwordLabel": "Password",
+      "submit": "Discover & Connect",
+      "submitting": "Connecting…",
+      "successToast": "Added {count} calendar(s) from {name}",
+      "errorTitle": "Couldn't connect",
+      "errorHelp": "Check the URL, username, and password. The error from the server is shown below.",
+      "fieldRequired": "{field} is required"
+    },
+    "toast": {
+      "syncStarted": "Syncing {name}…",
+      "syncFailed": "Sync failed for {name}: {message}",
+      "sourceDeleted": "Removed {name}",
+      "visibilityChanged": "Calendar visibility updated"
+    }
+  }
+}

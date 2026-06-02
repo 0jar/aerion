@@ -161,6 +161,12 @@ func (s *Syncer) SyncSource(ctx context.Context, sourceID string) error {
 		return err
 	}
 	_ = s.store.UpdateSourceSyncStatus(sourceID, "")
+	// Notify subscribers that this source finished syncing — the frontend's
+	// events store refetches its window cache so newly-arrived events
+	// render without waiting for the next view-state change.
+	_ = s.events.Publish("calendar:sync-complete", map[string]any{
+		"sourceId": sourceID,
+	})
 	return nil
 }
 
