@@ -38,6 +38,7 @@ type CalendarBridge struct {
 	initErr  error
 	api      *API
 	syncer   *Syncer
+	alarms   *AlarmScheduler
 }
 
 // CalendarBridgeDeps bundles the host-provided dependencies the bridge needs.
@@ -130,6 +131,8 @@ func (b *CalendarBridge) ensureInit() error {
 		b.api = NewAPI(store, secrets)
 		b.syncer = NewSyncer(store, secrets, b.deps.Core.Events(), b.deps.SettingsStore)
 		b.syncer.Start()
+		b.alarms = NewAlarmScheduler(store, b.deps.Core.Notifications(), b.deps.Core.Events(), b.deps.Core.Log())
+		b.alarms.Start(context.Background())
 	})
 	return b.initErr
 }
@@ -322,6 +325,67 @@ func (b *CalendarBridge) Calendar_SetCalendarColor(calendarID, hex string) error
 		return err
 	}
 	return b.api.store.SetCalendarColor(calendarID, hex)
+}
+
+// Calendar_SetSyncInterval changes a source's poll interval (minutes).
+// Validates {5, 15, 30, 60, 120, 240, 720}; rejects other values.
+func (b *CalendarBridge) Calendar_SetSyncInterval(sourceID string, minutes int) error {
+	if !b.gateEnabled() {
+		return nil
+	}
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	if err := b.api.SetSyncInterval(sourceID, minutes); err != nil {
+		return err
+	}
+	// Restart the per-source goroutine at the new interval so it takes
+	// effect immediately rather than waiting for the next tick.
+	b.syncer.UpdateInterval(sourceID, minutes)
+	return nil
+}
+
+// Calendar_DismissAlarm marks a pending alarm as dismissed. Idempotent
+// for already-fired/dismissed rows. The frontend doesn't surface a
+// dismiss button yet, but the method exists for future UI + scripting.
+func (b *CalendarBridge) Calendar_DismissAlarm(alarmID string) error {
+	if !b.gateEnabled() {
+		return nil
+	}
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	return b.api.store.MarkAlarmDismissed(alarmID)
+}
+
+// Calendar_LogFrontend emits a log message from the calendar extension's
+// frontend through the host's coreapi.Logger, stamped with
+// extension=calendar. The calendar-side `frontend/lib/logger.ts` wraps
+// this so calendar components can call `logger.warn(msg)` without reaching
+// for the host's generic LogFrontend method.
+//
+// Unlike most Calendar_* methods, this is NOT gated by the enabled flag —
+// disabled extensions may still need to log construction-time errors. The
+// extension tag in coreapi.Logger keeps disabled-extension noise easy to
+// filter downstream.
+func (b *CalendarBridge) Calendar_LogFrontend(level, message string) {
+	if b.deps.Core == nil {
+		return
+	}
+	log := b.deps.Core.Log()
+	if log == nil {
+		return
+	}
+	switch level {
+	case "debug":
+		log.Debug(message)
+	case "warn":
+		log.Warn(message)
+	case "error":
+		log.Error(message)
+	default:
+		log.Info(message)
+	}
 }
 
 // listAllSourceIDs is a tiny helper for Calendar_ListEventsInRange —

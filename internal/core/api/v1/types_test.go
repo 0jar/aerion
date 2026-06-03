@@ -19,10 +19,18 @@ func (stubCore) Notifications() Notifications { return stubNotifications{} }
 func (stubCore) UI() UI                       { return stubUI{} }
 func (stubCore) Storage() Storage             { return stubStorage{} }
 func (stubCore) Events() EventBus             { return stubEvents{} }
+func (stubCore) Log() Logger                  { return stubLogger{} }
 func (stubCore) Extension(id string) (any, bool) {
 	_ = id
 	return nil, false
 }
+
+type stubLogger struct{}
+
+func (stubLogger) Debug(string) {}
+func (stubLogger) Info(string)  {}
+func (stubLogger) Warn(string)  {}
+func (stubLogger) Error(string) {}
 
 type stubMail struct{}
 

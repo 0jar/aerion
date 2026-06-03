@@ -116,6 +116,22 @@ func (s *Syncer) RemoveSource(sourceID string) {
 	s.mu.Unlock()
 }
 
+// UpdateInterval restarts the per-source goroutine at the new interval so
+// the change takes effect immediately rather than waiting for the next
+// tick. Called by the bridge after Calendar_SetSyncInterval persists.
+func (s *Syncer) UpdateInterval(sourceID string, intervalMin int) {
+	if intervalMin <= 0 {
+		intervalMin = 15
+	}
+	s.mu.Lock()
+	if cancel, ok := s.sourceCancels[sourceID]; ok {
+		cancel()
+		delete(s.sourceCancels, sourceID)
+	}
+	s.mu.Unlock()
+	s.startSourceLoop(sourceID, time.Duration(intervalMin)*time.Minute)
+}
+
 // SyncAllSources runs SyncSource for every configured source sequentially.
 // Used for app-startup + wake/network triggers. Errors per-source are
 // emitted via events and stored on the source row; the loop continues
@@ -315,6 +331,26 @@ func (s *Syncer) syncCalendar(ctx context.Context, client *extcaldav.Client, cal
 			}
 			for _, ov := range srv.parsed.Overrides {
 				if err := s.store.UpsertOverrideTx(tx, eventID, ov.RecurrenceIDUnix, ov.ICSBlob); err != nil {
+					return err
+				}
+			}
+
+			// Compute VALARM instances for the next ~7 days and upsert.
+			// INSERT OR IGNORE makes this idempotent across resyncs — once
+			// an alarm is fired or dismissed, the unique index prevents a
+			// fresh sync from resurrecting it.
+			now := time.Now()
+			alarmWindow := now.Add(7 * 24 * time.Hour)
+			instances, expErr := ExpandInRange(ev, srv.parsed.Overrides, now, alarmWindow)
+			if expErr != nil {
+				return fmt.Errorf("expand for alarms: %w", expErr)
+			}
+			alarms, aerr := ExtractAlarms(ev, srv.parsed.Overrides, instances)
+			if aerr != nil {
+				return fmt.Errorf("extract alarms: %w", aerr)
+			}
+			for _, a := range alarms {
+				if err := s.store.UpsertAlarmTx(tx, a); err != nil {
 					return err
 				}
 			}

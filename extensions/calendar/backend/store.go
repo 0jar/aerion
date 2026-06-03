@@ -122,6 +122,33 @@ var migrations = []extensions.Migration{
 			CREATE INDEX IF NOT EXISTS idx_sync_log_source ON sync_log(source_id);
 		`,
 	},
+	{
+		Version: 4,
+		SQL: `
+			-- Phase 1G: VALARM notifications.
+			--
+			-- One row per (event-instance × VALARM) within the scheduler's 24h
+			-- horizon. instance_unix is the occurrence DTSTART; trigger_unix is
+			-- the resolved fire-time. status flows pending → fired | dismissed.
+			-- The unique index makes per-sync re-evaluation idempotent.
+
+			CREATE TABLE IF NOT EXISTS event_alarms (
+				id                  TEXT PRIMARY KEY,
+				event_id            TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+				instance_unix       INTEGER NOT NULL,
+				trigger_unix        INTEGER NOT NULL,
+				status              TEXT NOT NULL DEFAULT 'pending',
+				action              TEXT NOT NULL DEFAULT 'display',
+				description         TEXT,
+				fired_at            INTEGER,
+				created_at          INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_event_alarms_status ON event_alarms(status);
+			CREATE INDEX IF NOT EXISTS idx_event_alarms_trigger ON event_alarms(trigger_unix);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_event_alarms_unique
+				ON event_alarms(event_id, instance_unix, trigger_unix);
+		`,
+	},
 }
 
 // Store wraps the per-extension DB for the Calendar extension. Lives in an
@@ -651,6 +678,141 @@ func (s *Store) SetCalendarColor(calendarID, hex string) error {
 		nullIfEmpty(hex), calendarID)
 	if err != nil {
 		return fmt.Errorf("set calendar color: %w", err)
+	}
+	return nil
+}
+
+// UpdateSyncInterval changes the per-source poll interval. Validation
+// happens at the API layer; this helper just writes.
+func (s *Store) UpdateSyncInterval(sourceID string, minutes int) error {
+	_, err := s.DB().Exec(`UPDATE calendar_sources SET sync_interval_min = ? WHERE id = ?`,
+		minutes, sourceID)
+	if err != nil {
+		return fmt.Errorf("update sync interval: %w", err)
+	}
+	return nil
+}
+
+// --- Alarms (Phase 1G) -----------------------------------------------------
+
+// Alarm is one VALARM instance materialized for the scheduler. Each row in
+// event_alarms maps to one Alarm; recurring events produce one Alarm per
+// occurrence × VALARM block.
+type Alarm struct {
+	ID           string `json:"id"`
+	EventID      string `json:"eventId"`
+	InstanceUnix int64  `json:"instanceUnix"` // DTSTART of this occurrence
+	TriggerUnix  int64  `json:"triggerUnix"`  // resolved fire time (UTC seconds)
+	Status       string `json:"status"`       // 'pending' | 'fired' | 'dismissed'
+	Action       string `json:"action"`       // 'display' / 'audio' / 'email'
+	Description  string `json:"description,omitempty"`
+	FiredAt      int64  `json:"firedAt,omitempty"`
+	CreatedAt    int64  `json:"createdAt"`
+}
+
+// UpsertAlarmTx inserts an alarm if no row already covers the same
+// (event_id, instance_unix, trigger_unix). Idempotent — safe to call
+// after every sync. Existing rows are NOT updated (we don't want to
+// clobber a 'fired' status by re-evaluating).
+func (s *Store) UpsertAlarmTx(tx *sql.Tx, a Alarm) error {
+	if a.CreatedAt == 0 {
+		a.CreatedAt = time.Now().Unix()
+	}
+	if a.Status == "" {
+		a.Status = "pending"
+	}
+	if a.Action == "" {
+		a.Action = "display"
+	}
+	_, err := tx.Exec(`
+		INSERT OR IGNORE INTO event_alarms
+			(id, event_id, instance_unix, trigger_unix, status, action, description, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.EventID, a.InstanceUnix, a.TriggerUnix,
+		a.Status, a.Action, nullIfEmpty(a.Description), a.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert alarm: %w", err)
+	}
+	return nil
+}
+
+// PendingAlarmsInRange returns all 'pending' alarms with trigger_unix in
+// [from, to]. Used by the scheduler to find what to arm.
+func (s *Store) PendingAlarmsInRange(from, to int64) ([]Alarm, error) {
+	rows, err := s.DB().Query(`
+		SELECT id, event_id, instance_unix, trigger_unix, status, action,
+		       COALESCE(description, ''), COALESCE(fired_at, 0), created_at
+		FROM event_alarms
+		WHERE status = 'pending' AND trigger_unix >= ? AND trigger_unix <= ?
+		ORDER BY trigger_unix ASC`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("query pending alarms: %w", err)
+	}
+	defer rows.Close()
+	var out []Alarm
+	for rows.Next() {
+		var a Alarm
+		if err := rows.Scan(&a.ID, &a.EventID, &a.InstanceUnix, &a.TriggerUnix,
+			&a.Status, &a.Action, &a.Description, &a.FiredAt, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan alarm: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// GetAlarm reads a single alarm by ID. Returns nil + nil error when missing.
+func (s *Store) GetAlarm(id string) (*Alarm, error) {
+	row := s.DB().QueryRow(`
+		SELECT id, event_id, instance_unix, trigger_unix, status, action,
+		       COALESCE(description, ''), COALESCE(fired_at, 0), created_at
+		FROM event_alarms WHERE id = ?`, id)
+	var a Alarm
+	err := row.Scan(&a.ID, &a.EventID, &a.InstanceUnix, &a.TriggerUnix,
+		&a.Status, &a.Action, &a.Description, &a.FiredAt, &a.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get alarm: %w", err)
+	}
+	return &a, nil
+}
+
+// MarkAlarmFired transitions a pending alarm to 'fired' and records when.
+func (s *Store) MarkAlarmFired(alarmID string, firedAt int64) error {
+	_, err := s.DB().Exec(`
+		UPDATE event_alarms
+		SET status = 'fired', fired_at = ?
+		WHERE id = ? AND status = 'pending'`, firedAt, alarmID)
+	if err != nil {
+		return fmt.Errorf("mark alarm fired: %w", err)
+	}
+	return nil
+}
+
+// MarkAlarmDismissed transitions a pending alarm to 'dismissed'.
+func (s *Store) MarkAlarmDismissed(alarmID string) error {
+	_, err := s.DB().Exec(`
+		UPDATE event_alarms
+		SET status = 'dismissed'
+		WHERE id = ? AND status = 'pending'`, alarmID)
+	if err != nil {
+		return fmt.Errorf("mark alarm dismissed: %w", err)
+	}
+	return nil
+}
+
+// MarkPastAlarmsFired sweeps any pending alarms with trigger_unix in the
+// past to 'fired' status without sending a notification. Used on app
+// resume / startup so missed alarms don't fire-after-the-fact.
+func (s *Store) MarkPastAlarmsFired(now int64) error {
+	_, err := s.DB().Exec(`
+		UPDATE event_alarms
+		SET status = 'fired', fired_at = ?
+		WHERE status = 'pending' AND trigger_unix < ?`, now, now)
+	if err != nil {
+		return fmt.Errorf("mark past alarms fired: %w", err)
 	}
 	return nil
 }

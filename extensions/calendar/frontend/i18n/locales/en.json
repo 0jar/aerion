@@ -110,6 +110,25 @@
       "autoDetect": "Auto-detect (use system)",
       "noResults": "No matching timezones",
       "tooltip": "Click to change display timezone"
+    },
+    "settings": {
+      "title": "Calendar settings",
+      "sourcesSection": "Sources",
+      "noSources": "No CalDAV sources yet — add one to start syncing.",
+      "calendarCount": "{count} calendars",
+      "calendarCountOne": "1 calendar",
+      "lastSync": "Synced {time} ago",
+      "lastSyncNever": "Never synced",
+      "syncIntervalLabel": "Sync every",
+      "syncNow": "Sync now",
+      "deleteConfirmTitle": "Remove {name}?",
+      "deleteConfirmDescription": "All calendars and events from this source will be removed locally. The CalDAV server is not affected.",
+      "alarmsSection": "Alarms",
+      "alarmsHelp": "Events with VALARM reminders trigger a desktop notification at their trigger time.",
+      "intervalMinutes": "{n} minutes",
+      "intervalHours": "{n} hours",
+      "intervalToastSuccess": "Sync interval updated for {name}",
+      "intervalToastError": "Failed to update sync interval: {message}"
     }
   }
 }

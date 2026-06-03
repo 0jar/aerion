@@ -56,8 +56,8 @@
   }
 </script>
 
-<aside class="w-60 flex-shrink-0 flex flex-col border-r border-border bg-muted/30">
-  <h2 class="px-4 py-3 text-sm font-semibold text-foreground border-b border-border">
+<aside class="w-60 flex-shrink-0 flex flex-col pt-3 border-r border-border bg-muted/30">
+  <h2 class="px-4 mb-3 text-lg font-semibold text-foreground">
     {$_('calendar.sidebar.title')}
   </h2>
 

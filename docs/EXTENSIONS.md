@@ -323,6 +323,114 @@ func (a *App) initContactsExtension() {
 
 When you add a new first-party extension, the host side is similarly thin: embed the extension's `*Bridge` on App, add an `init<Name>Extension()` helper, append the lifecycle `Extension` to `a.knownExtensions`. Everything else (Settings UI listing, rail rendering, hook discovery, Wails bindings generation) flows automatically.
 
+### Example: Calendar extension
+
+The Calendar extension is the second canonical extension and exercises every Phase 1 capability the SDK exposes. Where Contacts focuses on a single domain (per-source contact CRUD wrapped around the host's `coreapi.Contacts` surface), Calendar is **fully self-contained at the data layer** — it owns its per-extension SQLite with five tables, runs its own CalDAV sync engine, parses iCal events / RRULE expansions / VALARM blocks, and schedules desktop notifications via `coreapi.Notifications`. Use it as the reference when your extension needs to do more than wrap an existing host surface.
+
+**Package layout** ([`extensions/calendar/`](../extensions/calendar)):
+
+```
+extensions/calendar/
+├── manifest.go            // wraps embedded manifest.json
+├── manifest.json          // capabilities + reserved OAuth slots
+├── creds.go               // ldflag-injected GoogleClientID/Secret etc. (Phase 2)
+├── register.go            // RegisterRailTab + RegisterSettingsTab
+└── backend/
+    ├── bridge.go          // CalendarBridge + Calendar_* Wails methods
+    ├── api.go             // extension-local API (source CRUD, sync interval validation)
+    ├── store.go           // per-extension SQLite + migrations v1–v4
+    ├── caldav.go          // emersion/go-webdav/caldav wrapper + handwritten backfills
+    ├── sync.go            // per-source poll scheduler, CTag-based incremental sync
+    ├── ical_convert.go    // VEVENT ↔ internal Event (emersion/go-ical)
+    ├── rrule_expand.go    // Component.RecurrenceSet → rrule.Set.Between() expansion
+    ├── alarm.go           // VALARM parser + per-instance trigger computation
+    ├── alarm_scheduler.go // time.AfterFunc scheduler subscribed to system:wake
+    └── xmlfix.go          // inline-duplicated XML normalizer for buggy CalDAV servers
+```
+
+**Manifest** ([`extensions/calendar/manifest.json`](../extensions/calendar/manifest.json)) declares two capabilities and reserves Phase 2 OAuth slots so a future Google/Microsoft Calendar build doesn't need a schema change:
+
+```json
+{
+  "id": "calendar",
+  "name": "Calendar",
+  "capabilities": ["ui.rail-tab", "ui.settings-tab"],
+  "oauth_slots": [
+    { "id": "google-calendar", "provider": "google", "scopes": ["https://www.googleapis.com/auth/calendar"] },
+    { "id": "microsoft-calendar", "provider": "microsoft", "scopes": ["Calendars.ReadWrite"] }
+  ]
+}
+```
+
+**Per-extension SQLite** — Calendar owns five tables across four migrations:
+
+| Migration | Tables | Purpose |
+|---|---|---|
+| v1 | `meta` | Generic key/value store. Currently holds the user's display-timezone choice; future settings extend here. |
+| v2 | `calendar_sources`, `calendars` | CalDAV source rows + per-calendar visibility + color overrides. |
+| v3 | `events`, `event_recurrence_overrides`, `sync_log` | Materialized events from sync; RECURRENCE-ID exception blobs; per-sync audit trail. |
+| v4 | `event_alarms` | One row per (occurrence × VALARM) within the scheduler's 24h horizon; `INSERT OR IGNORE` unique index makes re-evaluation after sync idempotent. |
+
+This is **distinct from Contacts**, which uses the host's `coreapi.Contacts` surface and only adds a thin local-store layer. Calendar wraps no host data — it owns everything from sync to expansion to alarms.
+
+**Bridge + lazy init** ([`extensions/calendar/backend/bridge.go`](../extensions/calendar/backend/bridge.go)) follows the same `<Name>Bridge` + `sync.Once` pattern Contacts uses, but the `ensureInit` body wires **three** subsystems instead of one:
+
+```go
+b.initOnce.Do(func() {
+    store, err := backend.OpenStore(b.deps.Paths.DataDir, "calendar", migrations)
+    if err != nil { b.initErr = err; return }
+
+    secrets := b.deps.Core.Storage().Secrets("calendar")
+    b.api = NewAPI(store, secrets)
+    b.syncer = NewSyncer(store, secrets, b.deps.Core.Events(), b.deps.SettingsStore)
+    b.syncer.Start()
+    b.alarms = NewAlarmScheduler(store, b.deps.Core.Notifications(), b.deps.Core.Events())
+    b.alarms.Start(context.Background())
+})
+```
+
+The Syncer subscribes to `system:wake` and `system:network-online` for immediate resync; the AlarmScheduler subscribes to `calendar:sync-complete` (re-evaluates alarms after each sync writes new VALARM rows) and `system:wake` (sweeps past alarms to `fired` status without firing-after-the-fact, re-arms future ones). Both subscriptions go through `coreapi.EventBus`; the extension never imports `internal/platform`.
+
+**VALARM notifications via `coreapi.Notifications`** — at sync time, the upsert transaction extracts VALARM templates from each event's stored ICSBlob, projects them onto the expanded recurrence instances within a 7-day window, and writes one row per `(event_id, instance_unix, trigger_unix)` triple. The scheduler reads pending rows in `[now, now+24h]`, arms `time.AfterFunc` callbacks, and fires desktop notifications via the published `coreapi.Notifications` surface:
+
+```go
+s.notif.Show(coreapi.NotifyRequest{
+    Title: ev.Summary,
+    Body:  formatAlarmBody(*ev, a, time.Unix(a.InstanceUnix, 0)),
+    OnClick: coreapi.NotifyClickAction{
+        Kind:        "open-extension",
+        ExtensionID: "calendar",
+        Path:        "/event/" + ev.ID,
+    },
+})
+```
+
+Clicking the notification raises the Aerion window, switches the rail to Calendar via the host's generic `extension:open` Wails event, and the calendar pane drains the `/event/<id>` path on mount via a small kit-level pending-deep-link buffer ([`frontend/src/lib/stores/extensionDeepLink.svelte.ts`](../frontend/src/lib/stores/extensionDeepLink.svelte.ts)) — solving the mount-gap problem where the target pane isn't mounted yet when the Wails event fires.
+
+**Frontend patterns Calendar pioneered** that future extensions can borrow from:
+
+- **Tz-aware UI** via `date-fns-tz` + a calendar-scoped helper module ([`extensions/calendar/frontend/lib/tzMath.ts`](../extensions/calendar/frontend/lib/tzMath.ts)) wrapping `toZonedTime`/`fromZonedTime`. Every date-math helper in the view store reads the user's chosen tz at call time so changes propagate. See the [Per-extension npm deps convention](#vite--tsconfig-aliases) note for how the extension declares its dep without touching the host config files structurally.
+- **Searchable IANA timezone picker** via `Intl.supportedValuesOf('timeZone')` + `Intl.DateTimeFormat({ timeZone })` for formatters. localStorage persistence behind a `calendarSettings` store with the API shape ready to swap for a Wails-backed Store when extensions get richer settings infrastructure.
+- **Greenfield kit primitives Calendar consumed first**: `DetailOverlay` (right-side focus-mode panel — the first kit primitive with no mail equivalent, sanctioned by R25), `SidebarAddItem` (in-list "+ Add …" button), `ColorPicker` (palette + hex input pass-through). All three are calendar-driven additions to the kit; future extensions can adopt them.
+
+**Settings dialog** ([`extensions/calendar/frontend/components/CalendarSettingsDialog.svelte`](../extensions/calendar/frontend/components/CalendarSettingsDialog.svelte)) follows the same `bits-ui` Dialog pattern Contacts uses but adds a per-source `Select`-based sync-interval picker, a Sync Now button with optimistic UI, and a `ConfirmDialog`-driven Delete flow. Add CalDAV source uses the existing 2-stage AddCalDAVSourceDialog (color picker stage 2 was added during the per-calendar color work).
+
+The wiring file on the host side stays minimal — same shape as `app/extension_contacts.go`, ~30 LOC, just constructs the bridge with its BridgeDeps:
+
+```go
+// app/extension_calendar.go
+func (a *App) initCalendarExtension() {
+    a.CalendarBridge = calendarbackend.NewCalendarBridge(calendarbackend.CalendarBridgeDeps{
+        SettingsStore: a.settingsStore,
+        Paths:         a.paths,
+        Core:          newCoreImpl(a, "calendar"),
+        // ... + the EventEmitter closure + OAuth provider registrations ...
+    })
+}
+```
+
+When your extension needs more than wrapping a host surface — own data sovereignty, custom sync protocols, scheduled background work, desktop-level integrations — Calendar is the shape to copy.
+
 ---
 
 ## `coreapi` reference

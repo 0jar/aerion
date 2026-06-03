@@ -348,18 +348,30 @@ func (a *App) initNotifications(ctx context.Context) {
 
 	a.notifier = notification.New("Aerion", a.useDirectDBus)
 
-	// Set click handler to navigate to the message
+	// Set click handler. Dispatcher routes based on which NotificationData
+	// fields are populated: ExtensionID set → extension click (raise window
+	// + emit `extension:open` so frontend switches rail tab and processes
+	// path); otherwise → mail click (existing path).
 	a.notifier.SetClickHandler(func(data notification.NotificationData) {
+		a.ShowWindow()
+
+		if data.ExtensionID != "" {
+			log.Info().
+				Str("extensionId", data.ExtensionID).
+				Str("path", data.Path).
+				Msg("Notification clicked, routing to extension")
+			wailsRuntime.EventsEmit(a.ctx, "extension:open", map[string]interface{}{
+				"extensionId": data.ExtensionID,
+				"path":        data.Path,
+			})
+			return
+		}
+
 		log.Info().
 			Str("accountId", data.AccountID).
 			Str("folderId", data.FolderID).
 			Str("threadId", data.ThreadID).
 			Msg("Notification clicked, navigating to message")
-
-		// Bring window to foreground
-		a.ShowWindow()
-
-		// Emit event to frontend to navigate to the message
 		wailsRuntime.EventsEmit(a.ctx, "notification:clicked", map[string]interface{}{
 			"accountId": data.AccountID,
 			"folderId":  data.FolderID,

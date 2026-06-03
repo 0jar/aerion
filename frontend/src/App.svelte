@@ -24,6 +24,7 @@
   import { loadImageAllowlist } from '$lib/stores/imageAllowlist.svelte'
   import { initTheme, applyThemeFromMode, handleSystemThemeEvent, handleMediaQueryChange } from '$lib/stores/theme.svelte'
   import { loadUIState, saveUIState, paneConstraints, getActiveExtension, setActiveExtension } from '$lib/stores/uiState.svelte'
+  import { setPendingDeepLink } from '$lib/stores/extensionDeepLink.svelte'
   import {
     type FocusablePane,
     getFocusedPane,
@@ -266,6 +267,17 @@
         selectedConversationAccountId: data.accountId,
         selectedConversationFolderId: data.folderId,
       })
+    })
+
+    // Generic extension-routed notification clicks. The host switches the
+    // rail tab here AND stashes the path in a pending-deep-link buffer.
+    // The target extension's pane drains the buffer on mount (it isn't
+    // mounted yet at the moment we set the tab). Extension-specific path
+    // parsing lives in each extension's own pane component.
+    EventsOn('extension:open', (data: { extensionId: string; path: string }) => {
+      if (!data.extensionId) return
+      if (data.path) setPendingDeepLink(data.extensionId, data.path)
+      setActiveExtension(data.extensionId)
     })
 
     // Listen for window show requests (from single-instance activation, notification clicks)

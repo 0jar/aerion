@@ -136,6 +136,52 @@ function defaultColor(calendarID: string): string {
   return `hsl(${hue}, 65%, 55%)`
 }
 
+// Hex-string equivalents for places that need #rrggbb specifically — namely
+// the kit ColorPicker, which validates input as 7-char hex and falls back to
+// its first preset (blue) when given an HSL string. Same hash → same color
+// as defaultColor() / colorOf().
+function colorOfHex(calendarID: string): string {
+  for (const sid of Object.keys(calendarsBySource)) {
+    const cals = calendarsBySource[sid]
+    for (const cal of cals) {
+      if (cal.id === calendarID) {
+        if (cal.color && cal.color !== '') return cal.color
+        return defaultColorHex(cal.id)
+      }
+    }
+  }
+  return defaultColorHex(calendarID)
+}
+
+function defaultColorHex(calendarID: string): string {
+  let hash = 0
+  for (let i = 0; i < calendarID.length; i++) {
+    hash = (hash * 31 + calendarID.charCodeAt(i)) | 0
+  }
+  const hue = Math.abs(hash) % 360
+  return hslToHex(hue, 65, 55)
+}
+
+// Standard HSL → hex conversion. Saturation + lightness are percentages
+// (0..100). Returns a 7-char #rrggbb string suitable for ColorPicker's
+// `value` prop.
+function hslToHex(h: number, s: number, l: number): string {
+  const sn = s / 100
+  const ln = l / 100
+  const c = (1 - Math.abs(2 * ln - 1)) * sn
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = ln - c / 2
+  let r = 0, g = 0, b = 0
+  if (h < 60)        { r = c; g = x; b = 0 }
+  else if (h < 120)  { r = x; g = c; b = 0 }
+  else if (h < 180)  { r = 0; g = c; b = x }
+  else if (h < 240)  { r = 0; g = x; b = c }
+  else if (h < 300)  { r = x; g = 0; b = c }
+  else               { r = c; g = 0; b = x }
+  const to2 = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0')
+  return `#${to2(r)}${to2(g)}${to2(b)}`
+}
+
 export const calendarSources = {
   get sources() { return sources },
   get calendarsBySource() { return calendarsBySource },
@@ -151,4 +197,5 @@ export const calendarSources = {
   setVisible,
   setColor,
   colorOf,
+  colorOfHex,
 }

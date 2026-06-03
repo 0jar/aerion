@@ -11,7 +11,7 @@
 // Consumers should always read `effectiveTimezone` — it resolves the
 // auto-detect fallback so callers don't have to.
 
-import { logger } from '$lib/logger'
+import { logger } from '$extensions/calendar/frontend/lib/logger'
 
 const STORAGE_KEY = 'aerion:calendar:displayTimezone'
 

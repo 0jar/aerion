@@ -27,13 +27,17 @@
   import { events } from '$extensions/calendar/frontend/stores/events.svelte'
   import { registerExtensionShortcut } from '$lib/stores/extensionShortcuts.svelte'
   import { openExtensionSettings } from '$lib/stores/extensionRegistry.svelte'
+  import { consumePendingDeepLink } from '$lib/stores/extensionDeepLink.svelte'
   import { KEY } from '$extensions/calendar/frontend/keyboard/shortcuts'
 
   let showAddSource = $state(false)
 
-  // Subscribe to `calendar:sync-complete` once, on mount. The handler
-  // refetches whatever window is currently active — closures captured
-  // here read the latest store state at fire time.
+  // Subscribe to `calendar:sync-complete` once, on mount.
+  //
+  // Also drains any pending deep link the host stashed before mounting
+  // us (e.g., the user clicked a VALARM notification while Calendar wasn't
+  // the active rail tab — App.svelte set the pending link + switched tab,
+  // and we open the matching event here).
   onMount(() => {
     void calendarSources.load()
     events.initSubscription(() => ({
@@ -41,6 +45,12 @@
       fromUnix: calendarView.visibleRange.fromUnix,
       toUnix: calendarView.visibleRange.toUnix,
     }))
+    const pending = consumePendingDeepLink('calendar')
+    const prefix = '/event/'
+    if (pending && pending.startsWith(prefix)) {
+      const eventID = pending.slice(prefix.length)
+      if (eventID !== '') calendarView.selectEvent(eventID)
+    }
   })
 
   // Auto-refetch events whenever the visible calendar set OR the visible

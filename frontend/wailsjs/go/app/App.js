@@ -46,6 +46,10 @@ export function Calendar_DeleteSource(arg1) {
   return window['go']['app']['App']['Calendar_DeleteSource'](arg1);
 }
 
+export function Calendar_DismissAlarm(arg1) {
+  return window['go']['app']['App']['Calendar_DismissAlarm'](arg1);
+}
+
 export function Calendar_GetEvent(arg1) {
   return window['go']['app']['App']['Calendar_GetEvent'](arg1);
 }
@@ -62,12 +66,20 @@ export function Calendar_ListSources() {
   return window['go']['app']['App']['Calendar_ListSources']();
 }
 
+export function Calendar_LogFrontend(arg1, arg2) {
+  return window['go']['app']['App']['Calendar_LogFrontend'](arg1, arg2);
+}
+
 export function Calendar_SetCalendarColor(arg1, arg2) {
   return window['go']['app']['App']['Calendar_SetCalendarColor'](arg1, arg2);
 }
 
 export function Calendar_SetCalendarVisible(arg1, arg2) {
   return window['go']['app']['App']['Calendar_SetCalendarVisible'](arg1, arg2);
+}
+
+export function Calendar_SetSyncInterval(arg1, arg2) {
+  return window['go']['app']['App']['Calendar_SetSyncInterval'](arg1, arg2);
 }
 
 export function Calendar_SyncAllSources() {

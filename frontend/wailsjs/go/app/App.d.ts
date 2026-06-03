@@ -41,6 +41,8 @@ export function Calendar_AddCalDAVSource(arg1:string,arg2:string,arg3:string,arg
 
 export function Calendar_DeleteSource(arg1:string):Promise<void>;
 
+export function Calendar_DismissAlarm(arg1:string):Promise<void>;
+
 export function Calendar_GetEvent(arg1:string):Promise<backend.Event>;
 
 export function Calendar_ListCalendars(arg1:string):Promise<Array<backend.Calendar>>;
@@ -49,9 +51,13 @@ export function Calendar_ListEventsInRange(arg1:Array<string>,arg2:number,arg3:n
 
 export function Calendar_ListSources():Promise<Array<backend.Source>>;
 
+export function Calendar_LogFrontend(arg1:string,arg2:string):Promise<void>;
+
 export function Calendar_SetCalendarColor(arg1:string,arg2:string):Promise<void>;
 
 export function Calendar_SetCalendarVisible(arg1:string,arg2:boolean):Promise<void>;
+
+export function Calendar_SetSyncInterval(arg1:string,arg2:number):Promise<void>;
 
 export function Calendar_SyncAllSources():Promise<void>;
 

@@ -140,3 +140,21 @@ func (a *API) DeleteSource(sourceID string) error {
 	_ = a.secrets.Delete(sourceID)
 	return a.store.DeleteSource(sourceID)
 }
+
+// validSyncIntervals enumerates the values the frontend picker exposes.
+// Reject other values to avoid hammering servers or wedging the scheduler.
+var validSyncIntervals = map[int]struct{}{
+	5: {}, 15: {}, 30: {}, 60: {}, 120: {}, 240: {}, 720: {},
+}
+
+// SetSyncInterval validates the minutes value, then writes it to the
+// source row. The bridge restarts the per-source ticker after.
+func (a *API) SetSyncInterval(sourceID string, minutes int) error {
+	if sourceID == "" {
+		return errors.New("calendar: source ID required")
+	}
+	if _, ok := validSyncIntervals[minutes]; !ok {
+		return fmt.Errorf("calendar: invalid sync interval %d (allowed: 5/15/30/60/120/240/720)", minutes)
+	}
+	return a.store.UpdateSyncInterval(sourceID, minutes)
+}

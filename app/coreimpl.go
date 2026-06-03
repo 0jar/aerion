@@ -6,9 +6,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 	"github.com/hkdb/aerion/internal/credentials"
 	"github.com/hkdb/aerion/internal/logging"
+	"github.com/hkdb/aerion/internal/notification"
 	"github.com/hkdb/aerion/internal/oauth2"
 	"github.com/hkdb/aerion/internal/platform"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -145,9 +148,10 @@ func (c *coreImpl) Auth() coreapi.Auth {
 	}
 }
 func (c *coreImpl) UI() coreapi.UI                       { return c.app.uiRegistry }
-func (c *coreImpl) Notifications() coreapi.Notifications { return stubNotifications{} }
+func (c *coreImpl) Notifications() coreapi.Notifications { return notificationsCoreImpl{app: c.app} }
 func (c *coreImpl) Storage() coreapi.Storage             { return storageCoreImpl{app: c.app} }
 func (c *coreImpl) Events() coreapi.EventBus             { return c.app.coreEventBus() }
+func (c *coreImpl) Log() coreapi.Logger                  { return loggerCoreImpl{extensionID: c.extensionID} }
 
 // Extension returns the typed handle published by another extension via its
 // api.go, or (nil, false) if the extension is not loaded.
@@ -304,10 +308,31 @@ func (a *extensionAuth) StartIncrementalConsent(req coreapi.StartIncrementalCons
 
 // --- Phase 1 stubs for unimplemented surfaces -------------------------------
 
-type stubNotifications struct{}
+// notificationsCoreImpl bridges coreapi.NotifyRequest to internal/notification's
+// Notifier. Click actions are encoded into NotificationData.{ExtensionID,Path}
+// so the dispatcher in background.go's SetClickHandler can route on those
+// fields. The Notifier itself stays mail-agnostic.
+type notificationsCoreImpl struct {
+	app *App
+}
 
-func (stubNotifications) Show(req coreapi.NotifyRequest) error {
-	return coreapi.ErrUnimplemented
+func (n notificationsCoreImpl) Show(req coreapi.NotifyRequest) error {
+	if n.app == nil || n.app.notifier == nil {
+		return fmt.Errorf("notifier not ready")
+	}
+	data := notification.NotificationData{}
+	switch req.OnClick.Kind {
+	case "open-extension", "open-deep-link":
+		data.ExtensionID = req.OnClick.ExtensionID
+		data.Path = req.OnClick.Path
+	}
+	_, err := n.app.notifier.Show(notification.Notification{
+		Title: req.Title,
+		Body:  req.Body,
+		Icon:  req.Icon,
+		Data:  data,
+	})
+	return err
 }
 
 // storageCoreImpl is the host implementation of coreapi.Storage. KV is still
@@ -375,6 +400,36 @@ func (k stubKV) Set(key, value string) error          { return coreapi.ErrUnimpl
 func (k stubKV) Delete(key string) error              { return coreapi.ErrUnimplemented }
 func (k stubKV) List(prefix string) ([]string, error) { return nil, coreapi.ErrUnimplemented }
 
+// loggerCoreImpl routes Logger calls through the host's zerolog with an
+// extension tag so unified log output is filterable per-extension.
+type loggerCoreImpl struct {
+	extensionID string
+}
+
+func (l loggerCoreImpl) logger() zerologStr {
+	// Embedded component=frontend/backend distinction is up to the call
+	// site; coreapi.Logger.Log just adds the extension tag.
+	base := logging.WithComponent("extension")
+	if l.extensionID != "" {
+		base = base.With().Str("extension", l.extensionID).Logger()
+	}
+	return zerologStr{l: base}
+}
+
+func (l loggerCoreImpl) Debug(msg string) { l.logger().Debug(msg) }
+func (l loggerCoreImpl) Info(msg string)  { l.logger().Info(msg) }
+func (l loggerCoreImpl) Warn(msg string)  { l.logger().Warn(msg) }
+func (l loggerCoreImpl) Error(msg string) { l.logger().Error(msg) }
+
+// zerologStr is a tiny wrapper so the call sites stay readable.
+type zerologStr struct{ l zerolog.Logger }
+
+func (z zerologStr) Debug(msg string) { z.l.Debug().Msg(msg) }
+func (z zerologStr) Info(msg string)  { z.l.Info().Msg(msg) }
+func (z zerologStr) Warn(msg string)  { z.l.Warn().Msg(msg) }
+func (z zerologStr) Error(msg string) { z.l.Error().Msg(msg) }
+
 // compile-time check: coreImpl satisfies coreapi.Core, extensionAuth satisfies coreapi.Auth
 var _ coreapi.Core = (*coreImpl)(nil)
 var _ coreapi.Auth = (*extensionAuth)(nil)
+var _ coreapi.Logger = loggerCoreImpl{}
