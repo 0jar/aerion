@@ -1199,7 +1199,19 @@ Two aliases are configured in [`frontend/vite.config.ts`](../frontend/vite.confi
 | `$extensions/*` | `<repo>/extensions/*` | Host (App.svelte, AccountDialog.svelte) importing extension Svelte components |
 | `$wailsjs/*` | `<repo>/frontend/wailsjs/*` | Extension Svelte/TS files importing generated Wails bindings (without deep `../` chains) |
 
-Because extension files live outside `frontend/`, Rollup's default node-modules walking doesn't find `frontend/node_modules`. Shared npm dependencies (currently `@iconify/svelte`) are aliased explicitly in `vite.config.ts` to point back at the host's `node_modules`. Add new entries to the alias list as extensions pull in additional npm packages.
+Because extension files live outside `frontend/`, Rollup's default node-modules walking doesn't find `frontend/node_modules`. Shared npm dependencies (currently `@iconify/svelte`, `svelte-i18n`) are aliased explicitly in `vite.config.ts` to point back at the host's `node_modules`. Add new entries to the alias list as extensions pull in additional npm packages.
+
+**Extension-pulled deps convention (interim).** Until per-extension `package.json` / npm workspaces land, every extension dep is installed at the host's `frontend/package.json` and aliased in `vite.config.ts`. Tag each alias with the owning extension's manifest ID in a comment so we know which deps to move when we split. The aliases in `vite.config.ts` are grouped into **SHARED** (kit + multi-extension) and **PER-EXTENSION** sections — keep new entries in the right group.
+
+Three steps to add an extension-pulled npm dep:
+
+1. `npm install <pkg>` in `frontend/` (writes to host's `package.json` + `package-lock.json`).
+2. Add the alias to `vite.config.ts` under PER-EXTENSION, with the owning extension's manifest ID in a one-line comment.
+3. Run `python3 build/flatpak/flathub/gen-node-sources.py` so Flatpak CI picks up the tarball (per `feedback_regenerate_node_sources.md`). Commit lockfile + Flatpak sources together.
+
+If the dep's package.json ships a broken `exports` map (no `types` condition), add a small `.d.ts` shim under `extensions/<name>/frontend/lib/` so `svelte-check` can resolve it. `date-fns-tz` is the current example.
+
+This coupling is architectural debt — extensions touching `frontend/vite.config.ts` and `frontend/package.json` violates the SDK promise. Tracked for future work (Vite resolver plugin → manifest-declared deps → per-extension `package.json`).
 
 `tsconfig.json` includes `../extensions/**/frontend/**/*.{ts,svelte}` in its `include` array so `svelte-check` validates extension code alongside host code. Explicit `paths` entries (`@iconify/*`, `svelte`, `svelte/*`) keep TypeScript's type resolution pointing at the host's `node_modules`.
 

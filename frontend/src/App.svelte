@@ -3,7 +3,6 @@
   import './lib/iconify-offline'
 
   import { onMount, untrack } from 'svelte'
-  import { logger } from './lib/logger'
   import TitleBar from './lib/components/common/TitleBar.svelte'
   import Sidebar from './lib/components/sidebar/Sidebar.svelte'
   import MessageList from './lib/components/list/MessageList.svelte'
@@ -806,20 +805,21 @@
           e.preventDefault()
           handleCompose()
           return
-        case 'tab': {
+        case 'tab':
+        case '`': {
           // Cycle through rail items: Mail + enabled extensions.
-          // Ctrl+Tab forward, Ctrl+Shift+Tab backward. Wraps at the ends.
+          // Ctrl+Tab        → forward
+          // Ctrl+`          → backward
+          // (Ctrl+Shift+Tab is intercepted by webkit2gtk before the
+          //  keydown event reaches us, so we use Ctrl+` for backward.)
           e.preventDefault()
           const tabs = getRailTabs()
           const order = ['mail', ...tabs.map(t => t.extensionId)]
-          // TEMP DIAGNOSTIC — remove once Ctrl+Shift+Tab issue is resolved.
-          logger.debug(`rail-cycle: shift=${e.shiftKey} order=${order.join(',')} current=${getActiveExtension()}`)
           if (order.length <= 1) return // only Mail — nothing to cycle
           const current = getActiveExtension()
           const idx = order.indexOf(current)
-          const step = e.shiftKey ? -1 : 1
+          const step = e.key === '`' ? -1 : 1
           const next = (idx + step + order.length) % order.length
-          logger.debug(`rail-cycle: idx=${idx} step=${step} next=${next} target=${order[next]}`)
           setActiveExtension(order[next])
           return
         }
