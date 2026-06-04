@@ -8,6 +8,7 @@
   import { _ } from 'svelte-i18n'
   import Icon from '@iconify/svelte'
   import { Button } from '$lib/components/ui/button'
+  import ResponsiveSidebarToggle from '$lib/components/kit/ResponsiveSidebarToggle.svelte'
   import TimezonePicker from './TimezonePicker.svelte'
   import EventComposerDialog from './EventComposerDialog.svelte'
   import { calendarView, type ViewKind } from '$extensions/calendar/frontend/stores/calendarView.svelte'
@@ -74,6 +75,7 @@
 <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-border bg-background">
   <!-- Left: view selector + date nav. -->
   <div class="flex items-center gap-2 min-w-0">
+    <ResponsiveSidebarToggle />
     <div class="inline-flex rounded-md border border-border overflow-hidden">
       {#each viewOptions as opt (opt.kind)}
         <button

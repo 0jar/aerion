@@ -10,17 +10,19 @@
   //                                       current minute in today's column,
   //                                       refreshed every 60s
   //
-  // Click an event → calendarView.selectEvent(instance.id). Click empty
-  // timeslot is a no-op (composer is Phase 3).
+  // Click an event → calendarView.selectEvent(instance.id). Click an empty
+  // spot in a day column → 15-min slot highlights and the event composer
+  // opens with `defaultStart` snapped to that slot.
 
   import { onMount, onDestroy } from 'svelte'
   import { _ } from 'svelte-i18n'
   import EventCard from '$extensions/calendar/frontend/components/EventCard.svelte'
+  import EventComposerDialog from '$extensions/calendar/frontend/components/EventComposerDialog.svelte'
   import { events } from '$extensions/calendar/frontend/stores/events.svelte'
   import { calendarSources } from '$extensions/calendar/frontend/stores/calendarSources.svelte'
   import { calendarView } from '$extensions/calendar/frontend/stores/calendarView.svelte'
   import { calendarSettings } from '$extensions/calendar/frontend/stores/calendarSettings.svelte'
-  import { toTzDate } from '$extensions/calendar/frontend/lib/tzMath'
+  import { toTzDate, fromTzDate } from '$extensions/calendar/frontend/lib/tzMath'
   // @ts-ignore - wailsjs bindings
   import type { backend } from '$wailsjs/go/models'
 
@@ -307,6 +309,48 @@
   function onEventClick(inst: backend.EventInstance) {
     calendarView.selectEvent(inst.id)
   }
+
+  // --- Click empty timeslot → open composer at 15-min snapped slot ------------
+
+  let composerOpen = $state(false)
+  let composerDefaultStart = $state<Date | null>(null)
+  let highlightedSlot = $state<{ colIdx: number; startMinute: number } | null>(null)
+
+  function onColumnClick(colIdx: number, e: MouseEvent) {
+    // Event blocks are absolute-positioned <button> children of the column.
+    // Skip if the click hit one — its own onclick handles event selection.
+    const target = e.target as HTMLElement
+    if (target.closest('button')) return
+
+    const col = e.currentTarget as HTMLElement
+    const rect = col.getBoundingClientRect()
+    const localY = e.clientY - rect.top
+    const minuteOfDay = (localY / DAY_PX) * 1440
+    const snapped = Math.max(0, Math.min(1425, Math.floor(minuteOfDay / 15) * 15))
+
+    // dates[colIdx] is midnight-in-tz as a real UTC Date. Round-trip through
+    // toTzDate / fromTzDate so DST transitions stay correct.
+    const wall = toTzDate(dates[colIdx])
+    wall.setHours(Math.floor(snapped / 60), snapped % 60, 0, 0)
+    const startUtc = fromTzDate(wall)
+
+    highlightedSlot = { colIdx, startMinute: snapped }
+    composerDefaultStart = startUtc
+    composerOpen = true
+  }
+
+  function clearHighlight() {
+    highlightedSlot = null
+    composerDefaultStart = null
+  }
+
+  function refreshEvents() {
+    void events.fetchRange(
+      calendarSources.visibleCalendarIDs,
+      calendarView.visibleRange.fromUnix,
+      calendarView.visibleRange.toUnix,
+    )
+  }
 </script>
 
 <div class="flex-1 flex flex-col min-h-0 bg-background">
@@ -384,7 +428,13 @@
 
       <!-- Day columns -->
       {#each dates as date, colIdx (colIdx)}
-        <div class="relative border-l border-border">
+        <div
+          class="relative border-l border-border cursor-pointer"
+          onclick={(e) => onColumnClick(colIdx, e)}
+          onkeydown={() => {}}
+          role="button"
+          tabindex="-1"
+        >
           <!-- Hour gridlines -->
           {#each hourLabels as _label, h (h)}
             <div
@@ -392,6 +442,15 @@
               style:height={`${HOUR_PX}px`}
             ></div>
           {/each}
+
+          <!-- Click-to-create highlight: 15-min band at clicked slot -->
+          {#if highlightedSlot?.colIdx === colIdx}
+            <div
+              class="pointer-events-none absolute left-0 right-0 bg-primary/15 border border-primary/40 rounded-sm"
+              style:top={`${(highlightedSlot.startMinute / 1440) * 100}%`}
+              style:height={`${(15 / 1440) * 100}%`}
+            ></div>
+          {/if}
 
           <!-- Timed event blocks (absolute, %-based vertical positioning) -->
           {#each timedByDay[colIdx] as block (block.instance.id)}
@@ -437,3 +496,11 @@
     </div>
   </div>
 </div>
+
+<EventComposerDialog
+  bind:open={composerOpen}
+  mode="create"
+  defaultStart={composerDefaultStart}
+  onClose={clearHighlight}
+  onSaved={refreshEvents}
+/>
