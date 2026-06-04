@@ -147,7 +147,7 @@ func (c *coreImpl) Auth() coreapi.Auth {
 		manifest:    c.manifest,
 	}
 }
-func (c *coreImpl) UI() coreapi.UI                       { return c.app.uiRegistry }
+func (c *coreImpl) UI() coreapi.UI                       { return uiCoreImpl{app: c.app} }
 func (c *coreImpl) Notifications() coreapi.Notifications { return notificationsCoreImpl{app: c.app} }
 func (c *coreImpl) Storage() coreapi.Storage             { return storageCoreImpl{app: c.app} }
 func (c *coreImpl) Events() coreapi.EventBus             { return c.app.coreEventBus() }
@@ -429,7 +429,39 @@ func (z zerologStr) Info(msg string)  { z.l.Info().Msg(msg) }
 func (z zerologStr) Warn(msg string)  { z.l.Warn().Msg(msg) }
 func (z zerologStr) Error(msg string) { z.l.Error().Msg(msg) }
 
+// uiCoreImpl wraps the host's extension UI Registry so extensions consume
+// a single `coreapi.UI` surface that owns both registration methods AND
+// platform actions like OpenURL. The Registry stays focused on
+// registrations; platform-specific concerns live here.
+type uiCoreImpl struct {
+	app *App
+}
+
+func (u uiCoreImpl) RegisterRailTab(req coreapi.RailTabRequest) (coreapi.Unregister, error) {
+	return u.app.uiRegistry.RegisterRailTab(req)
+}
+func (u uiCoreImpl) RegisterSettingsTab(req coreapi.SettingsTabRequest) (coreapi.Unregister, error) {
+	return u.app.uiRegistry.RegisterSettingsTab(req)
+}
+func (u uiCoreImpl) RegisterContextMenuItem(req coreapi.ContextMenuRequest) (coreapi.Unregister, error) {
+	return u.app.uiRegistry.RegisterContextMenuItem(req)
+}
+func (u uiCoreImpl) RegisterInboxView(req coreapi.InboxViewRequest) (coreapi.Unregister, error) {
+	return u.app.uiRegistry.RegisterInboxView(req)
+}
+func (u uiCoreImpl) RegisterAccountSetupHook(req coreapi.AccountSetupHookRequest) (coreapi.Unregister, error) {
+	return u.app.uiRegistry.RegisterAccountSetupHook(req)
+}
+
+// OpenURL delegates to App.OpenURL which owns the protocol allowlist +
+// Linux portal-first path + xdg-open fallback. The extension never sees
+// internal/platform directly.
+func (u uiCoreImpl) OpenURL(url string) error {
+	return u.app.OpenURL(url)
+}
+
 // compile-time check: coreImpl satisfies coreapi.Core, extensionAuth satisfies coreapi.Auth
 var _ coreapi.Core = (*coreImpl)(nil)
 var _ coreapi.Auth = (*extensionAuth)(nil)
 var _ coreapi.Logger = loggerCoreImpl{}
+var _ coreapi.UI = uiCoreImpl{}

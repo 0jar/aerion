@@ -113,6 +113,20 @@ async function setColor(calendarID: string, hex: string) {
   calendarsBySource = { ...calendarsBySource }
 }
 
+// sourceTypeOf returns the type of the source that owns this calendar
+// ('caldav' or 'local'), or '' if not found. EventDetail uses it to gate
+// the Edit/Delete buttons to local-source events only (CalDAV writes are
+// Phase 2).
+function sourceTypeOf(calendarID: string): string {
+  for (const src of sources) {
+    const cals = calendarsBySource[src.id] || []
+    for (const cal of cals) {
+      if (cal.id === calendarID) return src.type
+    }
+  }
+  return ''
+}
+
 function colorOf(calendarID: string): string {
   for (const sid of Object.keys(calendarsBySource)) {
     const cals = calendarsBySource[sid]
@@ -198,4 +212,5 @@ export const calendarSources = {
   setColor,
   colorOf,
   colorOfHex,
+  sourceTypeOf,
 }

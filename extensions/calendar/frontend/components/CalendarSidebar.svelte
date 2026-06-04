@@ -13,17 +13,16 @@
   import { _ } from 'svelte-i18n'
   import Icon from '@iconify/svelte'
   import SidebarFrame from '$lib/components/kit/SidebarFrame.svelte'
-  import SidebarAddItem from '$lib/components/kit/SidebarAddItem.svelte'
+  import AddCalendarMenu from './AddCalendarMenu.svelte'
   import { calendarSources } from '$extensions/calendar/frontend/stores/calendarSources.svelte'
   // @ts-ignore - wailsjs bindings
   import type { backend } from '$wailsjs/go/models'
 
   interface Props {
-    onAddSource?: () => void
     onOpenSettings?: () => void
   }
 
-  let { onAddSource, onOpenSettings }: Props = $props()
+  let { onOpenSettings }: Props = $props()
 
   // Sections derived from the sources store. Empty when no sources are
   // configured yet — the bottom-strip "Add CalDAV" button is the entry point.
@@ -102,11 +101,9 @@
         </div>
       {/each}
 
-      <!-- Add-source entry at the bottom of the scrollable list, matching mail. -->
-      <SidebarAddItem
-        label={$_('calendar.sidebar.addSource')}
-        onclick={() => onAddSource?.()}
-      />
+      <!-- "+ Add Calendar" inline-expanding picker. Owns its own dialogs
+           for Local + CalDAV; Phase 2 entries appear disabled until wired. -->
+      <AddCalendarMenu />
     </div>
   {/snippet}
 

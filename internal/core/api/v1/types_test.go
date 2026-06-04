@@ -97,6 +97,7 @@ func (stubUI) RegisterInboxView(InboxViewRequest) (Unregister, error)           
 func (stubUI) RegisterAccountSetupHook(AccountSetupHookRequest) (Unregister, error) {
 	return func() {}, ErrUnimplemented
 }
+func (stubUI) OpenURL(string) error { return ErrUnimplemented }
 
 type stubStorage struct{}
 

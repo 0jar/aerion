@@ -172,6 +172,14 @@ func NewStore(dataDir string) (*Store, error) {
 	return &Store{Store: s}, nil
 }
 
+// Source-type constants. Stored as plain strings in calendar_sources.type
+// (no enum / DB CHECK constraint) so future Phase 2 OAuth providers
+// (google, microsoft) just add new constants without a schema migration.
+const (
+	SourceTypeCalDAV = "caldav"
+	SourceTypeLocal  = "local"
+)
+
 // Source is the Go type returned by the API + Wails methods for a calendar
 // source row. JSON tags drive the TS binding shape — keep stable.
 type Source struct {
@@ -307,6 +315,38 @@ func (s *Store) DeleteSource(id string) error {
 		return fmt.Errorf("delete calendar_source: %w", err)
 	}
 	return nil
+}
+
+// DeleteCalendar removes a single calendars row. CASCADE walks down to
+// events → event_recurrence_overrides → event_alarms. Idempotent.
+func (s *Store) DeleteCalendar(id string) error {
+	_, err := s.DB().Exec(`DELETE FROM calendars WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete calendar: %w", err)
+	}
+	return nil
+}
+
+// GetCalendar reads a single calendars row by ID. Returns nil + nil error
+// when missing.
+func (s *Store) GetCalendar(id string) (*Calendar, error) {
+	row := s.DB().QueryRow(`
+		SELECT id, source_id, url, display_name, COALESCE(description, ''),
+		       COALESCE(color, ''), visible, COALESCE(ctag, ''),
+		       COALESCE(last_synced_at, 0), created_at
+		FROM calendars WHERE id = ?`, id)
+	var c Calendar
+	var visibleInt int
+	err := row.Scan(&c.ID, &c.SourceID, &c.URL, &c.DisplayName, &c.Description,
+		&c.Color, &visibleInt, &c.Ctag, &c.LastSyncedAt, &c.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get calendar: %w", err)
+	}
+	c.Visible = visibleInt != 0
+	return &c, nil
 }
 
 // CreateCalendarTx inserts a calendars row inside an existing transaction.

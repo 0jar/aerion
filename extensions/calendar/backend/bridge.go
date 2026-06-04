@@ -165,6 +165,108 @@ func (b *CalendarBridge) Calendar_AddCalDAVSource(name, url, username, password 
 	return sourceID, nil
 }
 
+// Calendar_AddLocalSource creates a local (non-CalDAV) source. Calendars
+// added under it via Calendar_AddLocalCalendar live entirely in the
+// extension's SQLite — no remote sync. Idempotent on (name).
+func (b *CalendarBridge) Calendar_AddLocalSource(name string) (string, error) {
+	if !b.gateEnabled() {
+		return "", errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return "", err
+	}
+	return b.api.AddLocalSource(name)
+}
+
+// Calendar_AddLocalCalendar inserts a new calendar under the local source.
+// Color is optional; empty falls back to the frontend's deterministic HSL
+// hash via colorOfHex.
+func (b *CalendarBridge) Calendar_AddLocalCalendar(sourceID, displayName, color string) (string, error) {
+	if !b.gateEnabled() {
+		return "", errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return "", err
+	}
+	return b.api.AddLocalCalendar(sourceID, displayName, color)
+}
+
+// Calendar_DeleteCalendar removes a local calendar and CASCADEs through
+// its events, recurrence overrides, and alarms. Only local-source
+// calendars are deletable from Aerion. Idempotent.
+func (b *CalendarBridge) Calendar_DeleteCalendar(calendarID string) error {
+	if !b.gateEnabled() {
+		return errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	if err := b.api.DeleteCalendar(calendarID); err != nil {
+		return err
+	}
+	if b.alarms != nil {
+		_ = b.alarms.Reevaluate()
+	}
+	return nil
+}
+
+// Calendar_CreateEvent inserts a locally-composed event. Returns the new
+// event's ID. After persist, re-arms the alarm scheduler so a fresh
+// reminder fires at the right moment without waiting for the next sync.
+func (b *CalendarBridge) Calendar_CreateEvent(in EventCreateInput) (string, error) {
+	if !b.gateEnabled() {
+		return "", errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return "", err
+	}
+	eventID, err := b.api.CreateEvent(in)
+	if err != nil {
+		return "", err
+	}
+	if b.alarms != nil {
+		_ = b.alarms.Reevaluate()
+	}
+	return eventID, nil
+}
+
+// Calendar_UpdateEvent updates an existing locally-composed event.
+// Scope controls recurring semantics: "this" | "this-and-future" | "all".
+// Non-recurring events ignore the scope argument.
+func (b *CalendarBridge) Calendar_UpdateEvent(in EventUpdateInput, scope string) error {
+	if !b.gateEnabled() {
+		return errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	if err := b.api.UpdateEvent(in, EditScope(scope)); err != nil {
+		return err
+	}
+	if b.alarms != nil {
+		_ = b.alarms.Reevaluate()
+	}
+	return nil
+}
+
+// Calendar_DeleteEvent removes an event. Scope semantics mirror
+// Calendar_UpdateEvent.
+func (b *CalendarBridge) Calendar_DeleteEvent(eventID, scope string) error {
+	if !b.gateEnabled() {
+		return errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	if err := b.api.DeleteEvent(eventID, EditScope(scope)); err != nil {
+		return err
+	}
+	if b.alarms != nil {
+		_ = b.alarms.Reevaluate()
+	}
+	return nil
+}
+
 // Calendar_ListSources returns all configured calendar sources. Returns
 // nil (empty result) when the extension is disabled — consistent with
 // Contacts_ListSources's behavior.
@@ -356,6 +458,25 @@ func (b *CalendarBridge) Calendar_DismissAlarm(alarmID string) error {
 		return err
 	}
 	return b.api.store.MarkAlarmDismissed(alarmID)
+}
+
+// Calendar_OpenURL opens the given URL in the user's system browser via
+// coreapi.UI.OpenURL → the host's hardened resolver (protocol allowlist,
+// Linux portal-first, xdg-open fallback). Used by EventDetail to make
+// URLs in summary/location/description clickable.
+//
+// Gated by gateEnabled() per R16. ensureInit() is intentionally NOT called
+// — OpenURL touches no lazy-initialized state (no store, no syncer, no
+// alarm scheduler), so calling ensureInit would burn the sync.Once for
+// nothing. Only the host's stateless URL resolver is invoked.
+func (b *CalendarBridge) Calendar_OpenURL(url string) error {
+	if !b.gateEnabled() {
+		return errors.New("calendar: extension disabled")
+	}
+	if b.deps.Core == nil {
+		return errors.New("calendar: core not available")
+	}
+	return b.deps.Core.UI().OpenURL(url)
 }
 
 // Calendar_LogFrontend emits a log message from the calendar extension's

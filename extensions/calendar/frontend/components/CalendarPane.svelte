@@ -21,7 +21,6 @@
   import DayView from './views/DayView.svelte'
   import AgendaView from './views/AgendaView.svelte'
   import EventDetail from './EventDetail.svelte'
-  import AddCalDAVSourceDialog from './AddCalDAVSourceDialog.svelte'
   import { calendarSources } from '$extensions/calendar/frontend/stores/calendarSources.svelte'
   import { calendarView } from '$extensions/calendar/frontend/stores/calendarView.svelte'
   import { events } from '$extensions/calendar/frontend/stores/events.svelte'
@@ -29,8 +28,6 @@
   import { openExtensionSettings } from '$lib/stores/extensionRegistry.svelte'
   import { consumePendingDeepLink } from '$lib/stores/extensionDeepLink.svelte'
   import { KEY } from '$extensions/calendar/frontend/keyboard/shortcuts'
-
-  let showAddSource = $state(false)
 
   // Subscribe to `calendar:sync-complete` once, on mount.
   //
@@ -106,7 +103,7 @@
 </script>
 
 <PaneLayout>
-  <CalendarSidebar onAddSource={() => { showAddSource = true }} onOpenSettings={openSettings} />
+  <CalendarSidebar onOpenSettings={openSettings} />
   <div class="flex-1 flex flex-col min-w-0 bg-background">
     <ViewSwitcher />
     {#if calendarView.viewKind === 'month'}<MonthView />{/if}
@@ -128,4 +125,3 @@
   {/snippet}
 </DetailOverlay>
 
-<AddCalDAVSourceDialog bind:open={showAddSource} />

@@ -8,6 +8,17 @@
   import { calendarSources } from '$extensions/calendar/frontend/stores/calendarSources.svelte'
   import { calendarSettings } from '$extensions/calendar/frontend/stores/calendarSettings.svelte'
   import { toTzDate } from '$extensions/calendar/frontend/lib/tzMath'
+  import { calendarView } from '$extensions/calendar/frontend/stores/calendarView.svelte'
+  import { events } from '$extensions/calendar/frontend/stores/events.svelte'
+  import { Button } from '$lib/components/ui/button'
+  import Icon from '@iconify/svelte'
+  import ConfirmDialog from '$lib/components/kit/ConfirmDialog.svelte'
+  import EventComposerDialog from './EventComposerDialog.svelte'
+  import RecurrenceScopeDialog from './RecurrenceScopeDialog.svelte'
+  import Linkified from './Linkified.svelte'
+  import { toasts } from '$lib/stores/toast'
+  // @ts-ignore - wailsjs bindings
+  import { Calendar_DeleteEvent } from '$wailsjs/go/app/App.js'
   // @ts-ignore - wailsjs bindings
   import { Calendar_GetEvent } from '$wailsjs/go/app/App.js'
   // @ts-ignore - wailsjs bindings
@@ -170,6 +181,84 @@
     if (m[4] === undefined) return new Date(Date.UTC(y, mo, d))
     return new Date(Date.UTC(y, mo, d, Number(m[5]), Number(m[6]), Number(m[7])))
   }
+
+  // --- Edit / Delete (local events only) -------------------------------------
+
+  const isLocal = $derived.by(() => {
+    if (!event) return false
+    return calendarSources.sourceTypeOf(event.calendarId) === 'local'
+  })
+
+  const isRecurring = $derived(!!event?.rruleText && event.rruleText !== '')
+
+  let showComposer = $state(false)
+  let composerScope = $state<'this' | 'this-and-future' | 'all'>('all')
+  let showConfirmDelete = $state(false)
+  let deleting = $state(false)
+  let showScopeDialog = $state(false)
+  let scopeAction = $state<'edit' | 'delete'>('edit')
+
+  function startEdit() {
+    if (!event) return
+    if (isRecurring) {
+      scopeAction = 'edit'
+      showScopeDialog = true
+      return
+    }
+    composerScope = 'all'
+    showComposer = true
+  }
+
+  function startDelete() {
+    if (!event) return
+    if (isRecurring) {
+      scopeAction = 'delete'
+      showScopeDialog = true
+      return
+    }
+    showConfirmDelete = true
+  }
+
+  function onScopePicked(scope: 'this' | 'this-and-future' | 'all') {
+    showScopeDialog = false
+    if (scopeAction === 'edit') {
+      composerScope = scope
+      showComposer = true
+      return
+    }
+    composerScope = scope
+    showConfirmDelete = true
+  }
+
+  async function performDelete() {
+    if (!event) return
+    deleting = true
+    try {
+      await Calendar_DeleteEvent(event.id, composerScope)
+      toasts.success($_('calendar.composer.toastDeleted'))
+      // Refresh and close overlay.
+      void events.fetchRange(
+        calendarSources.visibleCalendarIDs,
+        calendarView.visibleRange.fromUnix,
+        calendarView.visibleRange.toUnix,
+      )
+      calendarView.selectEvent(null)
+    } catch (err) {
+      toasts.error((err as Error)?.message ?? String(err))
+    } finally {
+      deleting = false
+      showConfirmDelete = false
+    }
+  }
+
+  function onComposerSaved() {
+    // Refresh the visible window so the edit is reflected.
+    void events.fetchRange(
+      calendarSources.visibleCalendarIDs,
+      calendarView.visibleRange.fromUnix,
+      calendarView.visibleRange.toUnix,
+    )
+  }
 </script>
 
 {#if loading}
@@ -187,7 +276,12 @@
     <!-- Header: summary + calendar color tag -->
     <div>
       <h1 class="text-base font-semibold text-foreground break-words">
-        {event.summary || $_('calendar.detail.noTitle')}
+        {#if event.summary}
+          <Linkified text={event.summary} />
+        {/if}
+        {#if !event.summary}
+          {$_('calendar.detail.noTitle')}
+        {/if}
       </h1>
       <div class="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
         <span
@@ -195,10 +289,28 @@
           style:background-color={color}
           aria-hidden="true"
         ></span>
-        <span class="truncate">
+        <span class="truncate flex-1">
           {calendarInfo?.source.name ?? ''} / {calendarInfo?.calendar.displayName ?? ''}
         </span>
       </div>
+
+      {#if isLocal}
+        <div class="flex items-center gap-2 mt-3">
+          <Button variant="outline" size="sm" onclick={startEdit}>
+            <Icon icon="mdi:pencil" class="w-3.5 h-3.5 mr-1" />
+            {$_('calendar.detail.editButton')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="text-destructive hover:text-destructive"
+            onclick={startDelete}
+          >
+            <Icon icon="mdi:delete-outline" class="w-3.5 h-3.5 mr-1" />
+            {$_('calendar.detail.deleteButton')}
+          </Button>
+        </div>
+      {/if}
     </div>
 
     <div class="space-y-3 text-sm">
@@ -219,7 +331,9 @@
           <div class="text-xs uppercase tracking-wide text-muted-foreground mb-0.5">
             {$_('calendar.detail.whereLabel')}
           </div>
-          <div class="text-foreground break-words">{event.location}</div>
+          <div class="text-foreground break-words">
+            <Linkified text={event.location} />
+          </div>
         </div>
       {/if}
 
@@ -244,7 +358,9 @@
           <div class="text-xs uppercase tracking-wide text-muted-foreground mb-0.5">
             {$_('calendar.detail.aboutLabel')}
           </div>
-          <div class="text-foreground whitespace-pre-wrap break-words text-sm">{event.description}</div>
+          <div class="text-foreground whitespace-pre-wrap break-words text-sm">
+            <Linkified text={event.description} />
+          </div>
         </div>
       {/if}
 
@@ -276,3 +392,28 @@
     </div>
   </div>
 {/if}
+
+<EventComposerDialog
+  bind:open={showComposer}
+  mode="edit"
+  existing={event}
+  scope={composerScope}
+  onSaved={onComposerSaved}
+/>
+
+<RecurrenceScopeDialog
+  bind:open={showScopeDialog}
+  action={scopeAction}
+  onPicked={onScopePicked}
+/>
+
+<ConfirmDialog
+  bind:open={showConfirmDelete}
+  title={$_('calendar.composer.deleteConfirmTitle')}
+  description={$_('calendar.composer.deleteConfirmDescription')}
+  confirmLabel={$_('calendar.common.delete')}
+  cancelLabel={$_('calendar.common.cancel')}
+  variant="destructive"
+  loading={deleting}
+  onConfirm={performDelete}
+/>

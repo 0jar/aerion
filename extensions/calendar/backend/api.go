@@ -75,7 +75,7 @@ func (a *API) AddCalDAVSource(name, serverURL, username, password string) (strin
 	err = a.store.WithTx(func(tx *sql.Tx) error {
 		if err := a.store.CreateSourceTx(tx, Source{
 			ID:              sourceID,
-			Type:            "caldav",
+			Type:            SourceTypeCalDAV,
 			Name:            name,
 			URL:             homePath,
 			Username:        username,
@@ -157,4 +157,122 @@ func (a *API) SetSyncInterval(sourceID string, minutes int) error {
 		return fmt.Errorf("calendar: invalid sync interval %d (allowed: 5/15/30/60/120/240/720)", minutes)
 	}
 	return a.store.UpdateSyncInterval(sourceID, minutes)
+}
+
+// AddLocalSource creates a `calendar_sources` row with type='local'. Unlike
+// AddCalDAVSource, there's no network probe, no password, and no
+// auto-discovered calendars — local sources start empty and the user adds
+// calendars under them via AddLocalCalendar.
+//
+// Idempotent on (name, type='local'): if a local source with the same
+// display name already exists, returns its ID. Lets the frontend safely
+// call AddLocalSource("Local") repeatedly without creating duplicates.
+func (a *API) AddLocalSource(name string) (string, error) {
+	if name == "" {
+		return "", errors.New("calendar: name required")
+	}
+
+	// Look up by name + type. If found, return existing ID.
+	existing, err := a.store.ListSources()
+	if err != nil {
+		return "", fmt.Errorf("list sources: %w", err)
+	}
+	for _, s := range existing {
+		if s.Type == SourceTypeLocal && s.Name == name {
+			return s.ID, nil
+		}
+	}
+
+	sourceID := uuid.New().String()
+	now := time.Now().Unix()
+	err = a.store.WithTx(func(tx *sql.Tx) error {
+		return a.store.CreateSourceTx(tx, Source{
+			ID:              sourceID,
+			Type:            SourceTypeLocal,
+			Name:            name,
+			URL:             "",
+			Username:        "",
+			SyncIntervalMin: 0, // unused for local
+			Enabled:         true,
+			CreatedAt:       now,
+		})
+	})
+	if err != nil {
+		return "", fmt.Errorf("persist local source: %w", err)
+	}
+	return sourceID, nil
+}
+
+// DeleteCalendar removes a calendar. Only local-source calendars are
+// deletable from Aerion — CalDAV calendars belong to the remote server
+// and would be re-synced. CASCADE removes all events + overrides + alarms
+// belonging to the calendar.
+func (a *API) DeleteCalendar(calendarID string) error {
+	if calendarID == "" {
+		return errors.New("calendar: calendar ID required")
+	}
+	cal, err := a.store.GetCalendar(calendarID)
+	if err != nil {
+		return fmt.Errorf("look up calendar: %w", err)
+	}
+	if cal == nil {
+		return nil // idempotent
+	}
+	src, err := a.store.GetSource(cal.SourceID)
+	if err != nil {
+		return fmt.Errorf("look up source: %w", err)
+	}
+	if src == nil {
+		return errors.New("calendar: source not found for calendar")
+	}
+	if src.Type != SourceTypeLocal {
+		return fmt.Errorf("calendar: only local calendars can be deleted from Aerion (source type=%q)", src.Type)
+	}
+	return a.store.DeleteCalendar(calendarID)
+}
+
+// AddLocalCalendar inserts a `calendars` row under a local source. Validates
+// that the source exists and is type='local'. Color is optional — empty
+// string falls back to the frontend's HSL hash via colorOfHex/colorOf.
+func (a *API) AddLocalCalendar(sourceID, displayName, color string) (string, error) {
+	if sourceID == "" {
+		return "", errors.New("calendar: source ID required")
+	}
+	if displayName == "" {
+		return "", errors.New("calendar: display name required")
+	}
+	src, err := a.store.GetSource(sourceID)
+	if err != nil {
+		return "", fmt.Errorf("look up source: %w", err)
+	}
+	if src == nil {
+		return "", errors.New("calendar: source not found")
+	}
+	if src.Type != SourceTypeLocal {
+		return "", fmt.Errorf("calendar: source %q is not a local source (type=%q)", sourceID, src.Type)
+	}
+
+	calendarID := uuid.New().String()
+	now := time.Now().Unix()
+	err = a.store.WithTx(func(tx *sql.Tx) error {
+		return a.store.CreateCalendarTx(tx, Calendar{
+			ID:       calendarID,
+			SourceID: sourceID,
+			// Per-calendar synthetic URL so the (source_id, url) UNIQUE
+			// constraint stays satisfied across multiple local calendars
+			// under the same source. CalDAV calendars use the server path;
+			// local calendars use "local:<uuid>" — opaque to the user and
+			// guaranteed unique by the UUID.
+			URL:         "local:" + calendarID,
+			DisplayName: displayName,
+			Description: "",
+			Color:       color,
+			Visible:     true,
+			CreatedAt:   now,
+		})
+	})
+	if err != nil {
+		return "", fmt.Errorf("persist local calendar: %w", err)
+	}
+	return calendarID, nil
 }

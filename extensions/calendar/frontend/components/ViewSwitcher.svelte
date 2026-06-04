@@ -9,9 +9,11 @@
   import Icon from '@iconify/svelte'
   import { Button } from '$lib/components/ui/button'
   import TimezonePicker from './TimezonePicker.svelte'
+  import EventComposerDialog from './EventComposerDialog.svelte'
   import { calendarView, type ViewKind } from '$extensions/calendar/frontend/stores/calendarView.svelte'
   import { calendarSources } from '$extensions/calendar/frontend/stores/calendarSources.svelte'
   import { calendarSettings } from '$extensions/calendar/frontend/stores/calendarSettings.svelte'
+  import { events } from '$extensions/calendar/frontend/stores/events.svelte'
 
   interface ViewOption {
     kind: ViewKind
@@ -37,6 +39,18 @@
   })
 
   let syncing = $state(false)
+  let showComposer = $state(false)
+
+  // Visible only when at least one local calendar exists. CalDAV writes
+  // require Phase 2 OAuth + PUT logic.
+  const hasLocalCalendar = $derived.by(() => {
+    for (const src of calendarSources.sources) {
+      if (src.type === 'local' && (calendarSources.calendarsBySource[src.id] || []).length > 0) {
+        return true
+      }
+    }
+    return false
+  })
 
   async function handleSync() {
     if (syncing) return
@@ -46,6 +60,14 @@
     } finally {
       syncing = false
     }
+  }
+
+  function refreshEvents() {
+    void events.fetchRange(
+      calendarSources.visibleCalendarIDs,
+      calendarView.visibleRange.fromUnix,
+      calendarView.visibleRange.toUnix,
+    )
   }
 </script>
 
@@ -97,11 +119,22 @@
     <h2 class="text-sm font-semibold text-foreground ml-2 truncate">{title}</h2>
   </div>
 
-  <!-- Right: tz picker + sync. -->
+  <!-- Right: tz picker + new event + sync. -->
   <div class="flex items-center gap-2 shrink-0">
     <div class="hidden sm:inline">
       <TimezonePicker />
     </div>
+    {#if hasLocalCalendar}
+      <Button
+        size="sm"
+        variant="outline"
+        class="h-7 px-2 text-xs"
+        onclick={() => { showComposer = true }}
+      >
+        <Icon icon="mdi:plus" class="w-3.5 h-3.5 mr-1" />
+        {$_('calendar.viewSwitcher.newEvent')}
+      </Button>
+    {/if}
     <Button
       size="sm"
       variant="outline"
@@ -118,3 +151,9 @@
     </Button>
   </div>
 </div>
+
+<EventComposerDialog
+  bind:open={showComposer}
+  mode="create"
+  onSaved={refreshEvents}
+/>

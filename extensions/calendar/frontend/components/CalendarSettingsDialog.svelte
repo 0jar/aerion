@@ -12,6 +12,7 @@
   import { Button } from '$lib/components/ui/button'
   import ConfirmDialog from '$lib/components/kit/ConfirmDialog.svelte'
   import ColorPicker from '$lib/components/kit/ColorPicker.svelte'
+  import AddLocalCalendarDialog from './AddLocalCalendarDialog.svelte'
   import Icon from '@iconify/svelte'
   import { toasts } from '$lib/stores/toast'
   import { dialogGuardOpen, dialogGuardClose } from '$lib/stores/dialogGuard'
@@ -19,7 +20,7 @@
   import { calendarSettings } from '$extensions/calendar/frontend/stores/calendarSettings.svelte'
   import AddCalDAVSourceDialog from './AddCalDAVSourceDialog.svelte'
   // @ts-ignore - wailsjs bindings
-  import { Calendar_SetSyncInterval } from '$wailsjs/go/app/App.js'
+  import { Calendar_SetSyncInterval, Calendar_DeleteCalendar } from '$wailsjs/go/app/App.js'
   // @ts-ignore - wailsjs bindings
   import type { backend } from '$wailsjs/go/models'
 
@@ -32,6 +33,27 @@
 
   // Add-source dialog opens from inside this one.
   let showAddSource = $state(false)
+  let showAddLocalCalendar = $state(false)
+  let deleteCalendarTarget = $state<{ id: string; displayName: string } | null>(null)
+  let deletingCalendar = $state(false)
+
+  // Local calendars surface separately from CalDAV sources — they don't
+  // have sync intervals or Sync Now buttons. Derived for clean rendering.
+  const localCalendars = $derived.by(() => {
+    const out: { sourceId: string; id: string; displayName: string }[] = []
+    for (const src of calendarSources.sources) {
+      if (src.type !== 'local') continue
+      for (const cal of calendarSources.calendarsBySource[src.id] || []) {
+        out.push({ sourceId: src.id, id: cal.id, displayName: cal.displayName })
+      }
+    }
+    return out
+  })
+
+  // CalDAV sources only — the existing "Sources" section list.
+  const calDavSources = $derived(
+    calendarSources.sources.filter(s => s.type === 'caldav')
+  )
 
   // Per-row state — pending delete + per-source spinner for Sync Now.
   let deleteTarget = $state<backend.Source | null>(null)
@@ -105,6 +127,23 @@
     }
   }
 
+  async function handleConfirmDeleteCalendar() {
+    if (!deleteCalendarTarget) return
+    deletingCalendar = true
+    const name = deleteCalendarTarget.displayName
+    try {
+      await Calendar_DeleteCalendar(deleteCalendarTarget.id)
+      await calendarSources.load()
+      toasts.success($_('calendar.settings.calendarDeleted', { values: { name } }))
+      deleteCalendarTarget = null
+    } catch (err) {
+      const msg = (err as Error)?.message ?? String(err)
+      toasts.error(msg)
+    } finally {
+      deletingCalendar = false
+    }
+  }
+
   function close() {
     open = false
     onClose?.()
@@ -137,19 +176,63 @@
     </Dialog.Header>
 
     <div class="space-y-6 mt-2 max-h-[60vh] overflow-y-auto pr-1">
-      <!-- Sources section -->
+      <!-- Local calendars section -->
+      <section class="space-y-2">
+        <h3 class="text-sm font-semibold text-foreground">
+          {$_('calendar.settings.localCalendarsSection')}
+        </h3>
+
+        {#if localCalendars.length === 0}
+          <p class="text-sm text-muted-foreground py-2">
+            {$_('calendar.settings.noLocalCalendars')}
+          </p>
+        {/if}
+
+        {#each localCalendars as cal (cal.id)}
+          <div class="flex items-center gap-3 p-3 border border-border rounded-md">
+            <ColorPicker
+              value={calendarSources.colorOfHex(cal.id)}
+              onchange={(hex) => { void calendarSources.setColor(cal.id, hex) }}
+            />
+            <span class="flex-1 min-w-0 truncate text-sm text-foreground">
+              {cal.displayName}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-8 text-destructive hover:text-destructive shrink-0"
+              onclick={() => { deleteCalendarTarget = cal }}
+              aria-label={$_('calendar.common.delete')}
+            >
+              <Icon icon="mdi:delete-outline" class="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        {/each}
+
+        <Button
+          variant="outline"
+          size="sm"
+          class="mt-2"
+          onclick={() => { showAddLocalCalendar = true }}
+        >
+          <Icon icon="mdi:plus" class="w-4 h-4 mr-1" />
+          {$_('calendar.settings.addLocalCalendar')}
+        </Button>
+      </section>
+
+      <!-- Sources section (CalDAV only) -->
       <section class="space-y-2">
         <h3 class="text-sm font-semibold text-foreground">
           {$_('calendar.settings.sourcesSection')}
         </h3>
 
-        {#if calendarSources.sources.length === 0}
+        {#if calDavSources.length === 0}
           <p class="text-sm text-muted-foreground py-3">
             {$_('calendar.settings.noSources')}
           </p>
         {/if}
 
-        {#each calendarSources.sources as src (src.id)}
+        {#each calDavSources as src (src.id)}
           <div class="flex flex-col gap-2 p-3 border border-border rounded-md">
             <!-- Source header row -->
             <div class="flex items-start justify-between gap-3">
@@ -263,6 +346,8 @@
 
 <AddCalDAVSourceDialog bind:open={showAddSource} onClose={() => { void calendarSources.load() }} />
 
+<AddLocalCalendarDialog bind:open={showAddLocalCalendar} onCreated={() => { void calendarSources.load() }} />
+
 <ConfirmDialog
   open={deleteTarget !== null}
   title={deleteTarget ? $_('calendar.settings.deleteConfirmTitle', { values: { name: deleteTarget.name } }) : ''}
@@ -273,4 +358,16 @@
   loading={deleting}
   onConfirm={handleConfirmDelete}
   onCancel={() => { deleteTarget = null }}
+/>
+
+<ConfirmDialog
+  open={deleteCalendarTarget !== null}
+  title={deleteCalendarTarget ? $_('calendar.settings.deleteCalendarConfirmTitle', { values: { name: deleteCalendarTarget.displayName } }) : ''}
+  description={$_('calendar.settings.deleteCalendarConfirmDescription')}
+  confirmLabel={$_('calendar.common.delete')}
+  cancelLabel={$_('calendar.common.cancel')}
+  variant="destructive"
+  loading={deletingCalendar}
+  onConfirm={handleConfirmDeleteCalendar}
+  onCancel={() => { deleteCalendarTarget = null }}
 />

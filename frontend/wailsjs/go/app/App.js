@@ -42,6 +42,26 @@ export function Calendar_AddCalDAVSource(arg1, arg2, arg3, arg4) {
   return window['go']['app']['App']['Calendar_AddCalDAVSource'](arg1, arg2, arg3, arg4);
 }
 
+export function Calendar_AddLocalCalendar(arg1, arg2, arg3) {
+  return window['go']['app']['App']['Calendar_AddLocalCalendar'](arg1, arg2, arg3);
+}
+
+export function Calendar_AddLocalSource(arg1) {
+  return window['go']['app']['App']['Calendar_AddLocalSource'](arg1);
+}
+
+export function Calendar_CreateEvent(arg1) {
+  return window['go']['app']['App']['Calendar_CreateEvent'](arg1);
+}
+
+export function Calendar_DeleteCalendar(arg1) {
+  return window['go']['app']['App']['Calendar_DeleteCalendar'](arg1);
+}
+
+export function Calendar_DeleteEvent(arg1, arg2) {
+  return window['go']['app']['App']['Calendar_DeleteEvent'](arg1, arg2);
+}
+
 export function Calendar_DeleteSource(arg1) {
   return window['go']['app']['App']['Calendar_DeleteSource'](arg1);
 }
@@ -70,6 +90,10 @@ export function Calendar_LogFrontend(arg1, arg2) {
   return window['go']['app']['App']['Calendar_LogFrontend'](arg1, arg2);
 }
 
+export function Calendar_OpenURL(arg1) {
+  return window['go']['app']['App']['Calendar_OpenURL'](arg1);
+}
+
 export function Calendar_SetCalendarColor(arg1, arg2) {
   return window['go']['app']['App']['Calendar_SetCalendarColor'](arg1, arg2);
 }
@@ -88,6 +112,10 @@ export function Calendar_SyncAllSources() {
 
 export function Calendar_SyncSource(arg1) {
   return window['go']['app']['App']['Calendar_SyncSource'](arg1);
+}
+
+export function Calendar_UpdateEvent(arg1, arg2) {
+  return window['go']['app']['App']['Calendar_UpdateEvent'](arg1, arg2);
 }
 
 export function CanUndo() {

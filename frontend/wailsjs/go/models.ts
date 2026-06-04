@@ -766,6 +766,80 @@ export namespace backend {
 	        this.rruleText = source["rruleText"];
 	    }
 	}
+	export class ReminderSpec {
+	    offsetMinutes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReminderSpec(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.offsetMinutes = source["offsetMinutes"];
+	    }
+	}
+	export class RecurrenceSpec {
+	    freq: string;
+	    untilUnix: number;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecurrenceSpec(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.freq = source["freq"];
+	        this.untilUnix = source["untilUnix"];
+	        this.count = source["count"];
+	    }
+	}
+	export class EventInput {
+	    calendarId: string;
+	    summary: string;
+	    description?: string;
+	    location?: string;
+	    dtstartUnix: number;
+	    dtendUnix: number;
+	    isAllDay?: boolean;
+	    recurrence?: RecurrenceSpec;
+	    reminder?: ReminderSpec;
+	
+	    static createFrom(source: any = {}) {
+	        return new EventInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.calendarId = source["calendarId"];
+	        this.summary = source["summary"];
+	        this.description = source["description"];
+	        this.location = source["location"];
+	        this.dtstartUnix = source["dtstartUnix"];
+	        this.dtendUnix = source["dtendUnix"];
+	        this.isAllDay = source["isAllDay"];
+	        this.recurrence = this.convertValues(source["recurrence"], RecurrenceSpec);
+	        this.reminder = this.convertValues(source["reminder"], ReminderSpec);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class EventInstance {
 	    id: string;
 	    calendarId: string;
@@ -808,6 +882,56 @@ export namespace backend {
 	        this.isRecurrenceOverride = source["isRecurrenceOverride"];
 	    }
 	}
+	export class EventUpdateInput {
+	    eventId: string;
+	    calendarId: string;
+	    summary: string;
+	    description?: string;
+	    location?: string;
+	    dtstartUnix: number;
+	    dtendUnix: number;
+	    isAllDay?: boolean;
+	    recurrence?: RecurrenceSpec;
+	    reminder?: ReminderSpec;
+	
+	    static createFrom(source: any = {}) {
+	        return new EventUpdateInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.eventId = source["eventId"];
+	        this.calendarId = source["calendarId"];
+	        this.summary = source["summary"];
+	        this.description = source["description"];
+	        this.location = source["location"];
+	        this.dtstartUnix = source["dtstartUnix"];
+	        this.dtendUnix = source["dtendUnix"];
+	        this.isAllDay = source["isAllDay"];
+	        this.recurrence = this.convertValues(source["recurrence"], RecurrenceSpec);
+	        this.reminder = this.convertValues(source["reminder"], ReminderSpec);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
 	export class ResizedContactPhoto {
 	    data: string;
 	    mediaType: string;

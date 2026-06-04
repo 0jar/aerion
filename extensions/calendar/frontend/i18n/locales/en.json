@@ -26,7 +26,8 @@
       "next": "Next",
       "sync": "Sync",
       "comingSoon": "{view} view coming soon",
-      "tzLabel": "tz: {tz}"
+      "tzLabel": "tz: {tz}",
+      "newEvent": "Event"
     },
     "month": {
       "weekdayShort": {
@@ -85,7 +86,9 @@
       "focusEnter": "Enter focus mode",
       "focusExit": "Exit focus mode",
       "close": "Close",
-      "back": "Back"
+      "back": "Back",
+      "editButton": "Edit",
+      "deleteButton": "Delete"
     },
     "rrule": {
       "daily": "Daily",
@@ -113,6 +116,12 @@
     },
     "settings": {
       "title": "Calendar settings",
+      "localCalendarsSection": "Local calendars",
+      "noLocalCalendars": "No local calendars yet — add one to create events.",
+      "addLocalCalendar": "Add local calendar",
+      "calendarDeleted": "Deleted local calendar \"{name}\"",
+      "deleteCalendarConfirmTitle": "Delete {name}?",
+      "deleteCalendarConfirmDescription": "All events in this calendar will be removed. This cannot be undone.",
       "sourcesSection": "Sources",
       "noSources": "No CalDAV sources yet — add one to start syncing.",
       "calendarCount": "{count} calendars",
@@ -129,6 +138,79 @@
       "intervalHours": "{n} hours",
       "intervalToastSuccess": "Sync interval updated for {name}",
       "intervalToastError": "Failed to update sync interval: {message}"
+    },
+    "localCalendar": {
+      "title": "Add local calendar",
+      "description": "Local calendars live entirely on this device. No server, no sync.",
+      "nameLabel": "Name",
+      "namePlaceholder": "e.g. Personal, Work",
+      "colorLabel": "Color",
+      "colorAuto": "auto",
+      "errorNameRequired": "Calendar name is required.",
+      "toastCreated": "Local calendar \"{name}\" created"
+    },
+    "composer": {
+      "titleCreate": "New event",
+      "titleEdit": "Edit event",
+      "summaryLabel": "Title",
+      "summaryPlaceholder": "What's happening?",
+      "calendarLabel": "Calendar",
+      "noLocalCalendars": "No local calendars yet. Create one in Calendar Settings first.",
+      "allDayLabel": "All day",
+      "startDateLabel": "Start date",
+      "startTimeLabel": "Start time",
+      "endDateLabel": "End date",
+      "endTimeLabel": "End time",
+      "locationLabel": "Location",
+      "descriptionLabel": "Description",
+      "recurrenceLabel": "Repeat",
+      "reminderLabel": "Reminder",
+      "errorSummaryRequired": "Title is required.",
+      "errorCalendarRequired": "Please select a calendar.",
+      "errorStartRequired": "Start date is required.",
+      "errorEndBeforeStart": "End time must be on or after the start time.",
+      "toastCreated": "Event created",
+      "toastUpdated": "Event updated",
+      "toastDeleted": "Event deleted",
+      "deleteConfirmTitle": "Delete this event?",
+      "deleteConfirmDescription": "The event will be removed from this calendar. This cannot be undone.",
+      "recurrence": {
+        "none": "Does not repeat",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly",
+        "yearly": "Yearly",
+        "endNever": "Never ends",
+        "endOnDate": "Ends on date",
+        "endAfterCount": "After N times"
+      },
+      "reminder": {
+        "none": "No reminder",
+        "atTime": "At time of event",
+        "fiveMin": "5 minutes before",
+        "fifteenMin": "15 minutes before",
+        "thirtyMin": "30 minutes before",
+        "oneHour": "1 hour before",
+        "oneDay": "1 day before",
+        "custom": "Custom…",
+        "customLabel": "{n} minutes before",
+        "customMinutesLabel": "Minutes before event"
+      }
+    },
+    "recurrenceScope": {
+      "titleEdit": "Edit recurring event",
+      "titleDelete": "Delete recurring event",
+      "description": "Which occurrences should this apply to?",
+      "this": "Just this event",
+      "thisAndFuture": "This and future events",
+      "all": "All events in the series"
+    },
+    "addCalendar": {
+      "trigger": "Add Calendar",
+      "local": "Local",
+      "caldav": "CalDAV",
+      "google": "Google",
+      "microsoft": "Microsoft"
     }
   }
 }

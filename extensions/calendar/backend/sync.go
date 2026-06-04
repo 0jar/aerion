@@ -163,6 +163,11 @@ func (s *Syncer) SyncSource(ctx context.Context, sourceID string) error {
 		}
 	}
 
+	// Local sources have no remote — sync is a no-op.
+	if src, err := s.store.GetSource(sourceID); err == nil && src != nil && src.Type == SourceTypeLocal {
+		return nil
+	}
+
 	if !s.tryAcquireBusy(sourceID) {
 		return nil // already syncing this source; skip
 	}
@@ -386,6 +391,12 @@ func (s *Syncer) lookupEventIDByUID(calendarID, uid string) (string, error) {
 
 // startSourceLoop starts (or replaces) the per-source ticker goroutine.
 func (s *Syncer) startSourceLoop(sourceID string, interval time.Duration) {
+	// Skip local sources — no remote to poll. Both the bootstrap pass in
+	// Start() and explicit AddSource calls hit this guard.
+	if src, err := s.store.GetSource(sourceID); err == nil && src != nil && src.Type == SourceTypeLocal {
+		return
+	}
+
 	if interval <= 0 {
 		interval = 15 * time.Minute
 	}

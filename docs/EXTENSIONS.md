@@ -451,10 +451,10 @@ This is the complete list of APIs your extension is allowed to consume. Anything
 | `core.Composer()` | ⚠️ | `OpenComposer` (mailto URL form) | `Attachments` and `ReplyTo` in `ComposeRequest` return `ErrUnimplemented`. |
 | `core.Contacts()` | ✅ | `ListSources`, `LinkAccountSource`, `ListAddressbooks`, `SetSourceWritable`; `ContactSource.AccountID` field surfaced | Source-management surface used by the Contacts extension itself (and available to future cross-extension consumers like Calendar). Contact CRUD methods (`Search`/`Get`/`List`/`Create`/`Update`/`Delete`) still return `ErrUnimplemented` at this surface — they're owned by the Contacts extension's Bridge (CRUD lives behind the `Contacts_*` Wails methods, not on `coreapi.Contacts`). Phase 2b.3 added `SetSourceWritable` so the incremental-consent flow can flip a source's writable flag after the user grants OAuth write scope. |
 | `core.Auth()` | ✅ | `HTTPClient(accountID, scopes)` — bearer + transparent refresh; `StartIncrementalConsent(req StartIncrementalConsentRequest)` — synchronous OAuth consent flow that persists tokens against either an account or a standalone contacts source (see [§ Write-access grant flow](#write-access-grant-flow-account-picker-model)) | `IMAPClient` and `SMTPClient` return `ErrUnimplemented`. |
-| `core.UI()` | ⚠️ | `RegisterRailTab`, `RegisterAccountSetupHook` | `RegisterSettingsTab`, `RegisterContextMenuItem`, `RegisterInboxView` accept registrations but no consumer reads them yet. |
-| `core.Storage()` | ✅ | `KV(extensionID)` backed by per-extension `ext_kv` table | Per-extension SQLite (your own `*sql.DB`) is the parallel persistence path — see [§ Per-extension storage](#per-extension-storage). |
-| `core.Notifications()` | 🚧 | — | `Show` interface only; no consumer wired. |
-| `core.Events()` | 🚧 | — | `Publish` / `Subscribe` interface only; no event bus wired. |
+| `core.UI()` | ⚠️ | `RegisterRailTab`, `RegisterAccountSetupHook`, `OpenURL` | `RegisterSettingsTab`, `RegisterContextMenuItem`, `RegisterInboxView` accept registrations but no consumer reads them yet. `OpenURL` opens URLs in the system browser via the host's hardened resolver (protocol allowlist, Linux portal-first). |
+| `core.Storage()` | ⚠️ | `Secrets(extensionID)` — keyring-first with AES-encrypted DB fallback | `KV(extensionID)` still returns `stubKV` (all methods `ErrUnimplemented`) — wires up when a real consumer arrives. Per-extension SQLite (your own `*sql.DB`) is the parallel persistence path — see [§ Per-extension storage](#per-extension-storage). |
+| `core.Notifications()` | ✅ | `Show(NotifyRequest)` — dispatches to the host's platform notifier; click routing supports `open-extension` (raises window + emits Wails `extension:open`) | Calendar's VALARM scheduler is the first concrete consumer. |
+| `core.Events()` | ✅ | `Publish` (fan-out to Go subscribers + Wails frontend) + `Subscribe` (in-process Go handlers); host publishes `system:wake` and `system:network-online` for sleep/wake + network state | Lazy singleton via `sync.Once` — disabled-only configs pay nothing. Calendar consumes both system events. |
 | `core.Extension(id)` | 🚧 | Returns `(nil, false)` always | Typed cross-extension handles not wired yet. |
 
 Each subsection below documents the interface signatures + behavior in detail.
@@ -676,7 +676,13 @@ type Notifications interface {
 }
 ```
 
-Phase 1: interface only. Phase 3+ wires to the existing `internal/notification` package. `NotifyClickAction` supports `open-extension`, `open-deep-link`, and `custom` handlers.
+Concrete impl: `notificationsCoreImpl` in [`app/coreimpl.go`](../app/coreimpl.go). Wired. `Show` constructs an `internal/notification.Notification` from the request (Title, Body, Icon, plus a `NotificationData` carrying ExtensionID + Path) and hands it to the host's `Notifier.Show`, which routes through the platform-native channel (D-Bus on Linux, NSUserNotification on macOS, etc.).
+
+**Click routing.** When the user clicks a notification, the host's `ClickHandler` reads back `NotificationData`:
+- `ExtensionID != ""` → raises the window + emits a Wails `extension:open` event with `{extensionId, path}`. App.svelte stashes the deep link via the pending-deep-link buffer and switches the rail tab; the extension's pane drains the link on mount.
+- `ExtensionID == ""` → falls through to mail's existing `notification:clicked` event (AccountID/FolderID/ThreadID).
+
+`NotifyClickAction` documents three kinds — `open-extension` is fully wired; `open-deep-link` is encoded the same way (extension owns its path scheme); `custom` is reserved for a future host-side handler registry. Calendar's VALARM scheduler is the first concrete consumer — see [`extensions/calendar/backend/alarm_scheduler.go`](../extensions/calendar/backend/alarm_scheduler.go).
 
 ### `UI`
 
@@ -684,15 +690,45 @@ Phase 1: interface only. Phase 3+ wires to the existing `internal/notification` 
 
 ```go
 type UI interface {
+    // Registrations
     RegisterRailTab(req RailTabRequest) (Unregister, error)
     RegisterSettingsTab(req SettingsTabRequest) (Unregister, error)
     RegisterContextMenuItem(req ContextMenuRequest) (Unregister, error)
     RegisterInboxView(req InboxViewRequest) (Unregister, error)
     RegisterAccountSetupHook(req AccountSetupHookRequest) (Unregister, error)
+
+    // UI actions
+    OpenURL(url string) error
 }
 ```
 
-Concrete impl: [`internal/extensions/ui/registry.go`](../internal/extensions/ui/registry.go) (Phase 2a). All five registration methods are wired and concurrency-safe (`RWMutex`-protected map per kind). `RailTab` and `AccountSetupHook` have real frontend consumers in v0.3.x; the other three (`SettingsTab`, `ContextMenuItem`, `InboxView`) accept registrations but no consumer reads them yet. See [§ UI registration](#ui-registration).
+Two halves: the five `Register*` methods that extensions use to publish UI surface descriptions to the host, and `OpenURL` for triggering a host-mediated user-facing action.
+
+**Registrations.** Concrete impl: [`internal/extensions/ui/registry.go`](../internal/extensions/ui/registry.go) (Phase 2a). All five registration methods are wired and concurrency-safe (`RWMutex`-protected map per kind). `RailTab` and `AccountSetupHook` have real frontend consumers in v0.3.x; the other three (`SettingsTab`, `ContextMenuItem`, `InboxView`) accept registrations but no consumer reads them yet. See [§ UI registration](#ui-registration).
+
+**`OpenURL(url string) error`** opens the given URL in the user's system browser via the host's hardened resolver. Behavior:
+
+- **Protocol allowlist** — only common safe schemes (http, https, mailto, etc.) are permitted; `file://` and other dangerous schemes are rejected with `"URL protocol not allowed for security reasons"`.
+- **Linux:** tries the XDG `OpenURI` portal first (works inside Flatpak where `xdg-open` can't reach host browsers), falls back to `xdg-open`.
+- **Other platforms:** delegates to the platform's standard URL handler.
+
+Extensions consume this instead of reaching for Wails' `BrowserOpenURL` directly so the security gates stay centralized. Calendar's `EventDetail` uses it to make URLs in event summary / location / description clickable; pattern is reusable from any extension's frontend through its own `<Extension>_OpenURL` Wails wrapper.
+
+Pattern from `extensions/calendar/backend/bridge.go`:
+
+```go
+func (b *CalendarBridge) Calendar_OpenURL(url string) error {
+    if !b.gateEnabled() {
+        return errors.New("calendar: extension disabled")
+    }
+    if b.deps.Core == nil {
+        return errors.New("calendar: core not available")
+    }
+    return b.deps.Core.UI().OpenURL(url)
+}
+```
+
+Gated per R16; `ensureInit()` is intentionally NOT called because `OpenURL` touches none of the lazy-initialized extension state (no store, no syncer, no scheduler). Stateless host delegation only.
 
 ### `Storage`
 
@@ -701,6 +737,7 @@ Concrete impl: [`internal/extensions/ui/registry.go`](../internal/extensions/ui/
 ```go
 type Storage interface {
     KV(extensionID string) KVStore
+    Secrets(extensionID string) Secrets
 }
 
 type KVStore interface {
@@ -709,9 +746,26 @@ type KVStore interface {
     Delete(key string) error
     List(prefix string) ([]string, error)
 }
+
+type Secrets interface {
+    Set(key, value string) error    // empty value treated as Delete
+    Get(key string) (string, error) // returns "" + nil error when missing
+    Delete(key string) error        // idempotent
+    DeleteAll() error               // uninstall cleanup
+}
 ```
 
-For small config (per-extension preferences, sync tokens, etc.) that doesn't warrant SQL tables. Per-extension SQLite is implicit: each extension's `store.go` opens its own DB. See [§ Per-extension storage](#per-extension-storage).
+Two scoped surfaces, each extension-isolated by the `extensionID` parameter so two extensions can use the same key string without colliding.
+
+**`KV` — Phase 1 stub.** `storageCoreImpl.KV(extensionID)` returns a `stubKV` whose four methods return `ErrUnimplemented`. The interface is stable, but no consumer needs it today: every first-party extension that has settled storage needs either uses its own per-extension SQLite (Calendar's `meta` table for the display tz; Contacts via its existing schema) or uses `Secrets` for credential material. KV gets wired (likely via a shared `ext_kv` table indexed on extensionID) when a real consumer arrives.
+
+**`Secrets` — wired.** `storageCoreImpl.Secrets(extensionID)` returns a `secretsCoreImpl` that delegates to `internal/credentials.Store`'s extension-scoped helpers, which run keyring-first with an AES-encrypted DB-table fallback when the OS keyring is unavailable. Extensions never import `internal/credentials` directly — the four methods cover the whole credential lifecycle:
+- `Set` — empty value short-circuits to `Delete`.
+- `Get` — `("", nil)` for missing; callers distinguish from errors by checking the string.
+- `Delete` — idempotent.
+- `DeleteAll` — used during uninstall to clean up all of an extension's secrets at once.
+
+Used today by the Calendar extension for CalDAV passwords (`extensions/calendar/backend/bridge.go`'s `b.deps.Core.Storage().Secrets("calendar")`). Per-extension SQLite is the parallel persistence path for domain data — see [§ Per-extension storage](#per-extension-storage).
 
 ### `EventBus`
 
@@ -724,7 +778,18 @@ type EventBus interface {
 }
 ```
 
-Phase 1: interface only. Phase 3+ ships a concrete impl for cross-extension loose coupling.
+Concrete impl: `eventBusCoreImpl` in [`app/eventbus.go`](../app/eventbus.go). Wired. Two consumer audiences are served from a single Publish call:
+
+1. **Go-side subscribers** registered via `core.Events().Subscribe(name, handler)` get fan-out as in-process function calls. The host snapshots the subscriber list under a mutex, then invokes handlers outside the lock so a handler that re-subscribes / unsubscribes doesn't deadlock.
+2. **Frontend** — every Publish also calls `wailsRuntime.EventsEmit` so the Svelte side can subscribe to the same event names via `EventsOn()`. EXCEPTION: `system:*` events stay Go-side only — they're infrastructure for sync engines; the frontend uses its own event names for the equivalent UX-level signals.
+
+**System events the host publishes today** (consumable by any extension):
+- `system:wake` — emitted from `app/background.go::processSleepWakeEvents` when the platform's sleep monitor reports a wake. Calendar's Syncer + AlarmScheduler subscribe to it (resync after sleep, mark missed alarms `fired`, re-arm future ones).
+- `system:network-online` — emitted when the platform's network monitor reports the link came up. Calendar's Syncer triggers an immediate `SyncAllSources`.
+
+**Lightweight-by-default (R15) is preserved.** The EventBus is a lazy singleton via `sync.Once`; first `Publish` or `Subscribe` constructs it. `Publish` on an empty subscriber list is one map-lookup + zero-length loop (~10ns) — no extra goroutines, no extra D-Bus subscriptions, no cost to mail or to disabled-extension configurations.
+
+Aside from `system:*`, extensions publish their own namespaced events (e.g. Calendar publishes `calendar:sync-complete` and `calendar:source-error`). Other extensions can subscribe via `core.Events().Subscribe(...)` for cross-extension loose coupling.
 
 ### Shared types
 
