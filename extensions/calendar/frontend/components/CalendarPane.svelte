@@ -88,15 +88,35 @@
   const unregSync = registerExtensionShortcut('calendar', KEY.CALENDAR_SYNC, () => {
     void calendarSources.syncAll()
   })
+  const unregSyncAll = registerExtensionShortcut('calendar', KEY.CALENDAR_SYNC_ALL, () => {
+    void calendarSources.syncAll()
+  })
   const unregFocus = registerExtensionShortcut('calendar', KEY.CALENDAR_FOCUS_TOGGLE, () => {
     calendarView.toggleEventFocus()
+  })
+  const unregViewMonth = registerExtensionShortcut('calendar', KEY.CALENDAR_VIEW_MONTH, () => {
+    calendarView.setViewKind('month')
+  })
+  const unregViewWeek = registerExtensionShortcut('calendar', KEY.CALENDAR_VIEW_WEEK, () => {
+    calendarView.setViewKind('week')
+  })
+  const unregViewDay = registerExtensionShortcut('calendar', KEY.CALENDAR_VIEW_DAY, () => {
+    calendarView.setViewKind('day')
+  })
+  const unregViewAgenda = registerExtensionShortcut('calendar', KEY.CALENDAR_VIEW_AGENDA, () => {
+    calendarView.setViewKind('agenda')
   })
   onDestroy(() => {
     unregToday()
     unregPrev()
     unregNext()
     unregSync()
+    unregSyncAll()
     unregFocus()
+    unregViewMonth()
+    unregViewWeek()
+    unregViewDay()
+    unregViewAgenda()
   })
 
   function openSettings() {

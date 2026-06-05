@@ -40,6 +40,11 @@
   })
 
   let syncing = $state(false)
+  // Animate whenever this button's own RPC is awaiting OR a background
+  // sync (ticker / wake / network-online) is in progress. The local
+  // `syncing` flag still gates button-disable so users can't double-click
+  // — we only spread the spinner trigger.
+  const animateSpin = $derived(syncing || calendarSources.isAnySyncing)
   let showComposer = $state(false)
 
   // "+ Event" button is visible when at least one writable calendar exists.
@@ -143,7 +148,7 @@
       onclick={handleSync}
       disabled={syncing}
     >
-      {#if syncing}
+      {#if animateSpin}
         <Icon icon="mdi:loading" class="w-4 h-4 mr-1 animate-spin" />
       {:else}
         <Icon icon="mdi:sync" class="w-4 h-4 mr-1" />

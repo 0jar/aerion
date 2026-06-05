@@ -174,6 +174,19 @@ func (s *Syncer) SyncSource(ctx context.Context, sourceID string) error {
 	}
 	defer s.releaseBusy(sourceID)
 
+	// Tell the frontend that this source's sync is starting. Paired with
+	// calendar:sync-complete (success) or calendar:source-error (failure),
+	// both already fired below. Best-effort: a missing source lookup just
+	// emits an empty name — the source-id alone is enough for UI gating.
+	startedName := ""
+	if src, err := s.store.GetSource(sourceID); err == nil && src != nil {
+		startedName = src.Name
+	}
+	_ = s.events.Publish("calendar:sync-started", map[string]any{
+		"sourceId":   sourceID,
+		"sourceName": startedName,
+	})
+
 	if err := s.syncSourceInner(ctx, sourceID); err != nil {
 		_ = s.store.UpdateSourceSyncStatus(sourceID, err.Error())
 		_ = s.events.Publish("calendar:source-error", map[string]any{
@@ -210,10 +223,20 @@ func (s *Syncer) syncSourceInner(ctx context.Context, sourceID string) error {
 		return fmt.Errorf("list calendars: %w", err)
 	}
 
-	for _, cal := range calendars {
+	for i, cal := range calendars {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// Per-calendar progress event — drives the sidebar footer's
+		// "Syncing Murena · Personal (2/4)" label. 1-indexed for UX.
+		_ = s.events.Publish("calendar:sync-progress", map[string]any{
+			"sourceId":        sourceID,
+			"sourceName":      src.Name,
+			"calendarId":      cal.ID,
+			"calendarName":    cal.DisplayName,
+			"currentCalendar": i + 1,
+			"totalCalendars":  len(calendars),
+		})
 		if err := provider.SyncCalendar(ctx, *src, cal); err != nil {
 			// One bad calendar shouldn't block the rest; log via the
 			// source-error event but keep going.

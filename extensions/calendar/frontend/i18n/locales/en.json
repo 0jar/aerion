@@ -40,7 +40,11 @@
       "lastSync": "Synced {time}",
       "lastSyncNever": "Not synced yet",
       "noCalendars": "No calendars yet. Add a CalDAV source to get started.",
-      "syncNow": "Sync now"
+      "syncNow": "Sync now",
+      "syncing": "Syncing {name}…",
+      "syncingCalendar": "Syncing {source} · {name} ({n}/{total})",
+      "syncingGeneric": "Syncing…",
+      "syncError": "Sync failed"
     },
     "viewSwitcher": {
       "month": "Month",

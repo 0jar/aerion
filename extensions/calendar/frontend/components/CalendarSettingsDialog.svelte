@@ -291,6 +291,12 @@
                 <div class="text-xs text-muted-foreground mt-0.5">
                   {calendarCountLabel(src)} · {lastSyncLabel(src)}
                 </div>
+                {#if src.lastError}
+                  <div class="flex items-start gap-1 text-xs text-destructive mt-1 min-w-0" title={src.lastError}>
+                    <Icon icon="mdi:alert-circle" class="w-3 h-3 shrink-0 mt-0.5" />
+                    <span class="truncate">{src.lastError}</span>
+                  </div>
+                {/if}
               </div>
 
               <div class="flex items-center gap-2 shrink-0">

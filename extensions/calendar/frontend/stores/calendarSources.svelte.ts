@@ -15,15 +15,139 @@ import {
   Calendar_SetCalendarColor,
 } from '$wailsjs/go/app/App.js'
 // @ts-ignore - wailsjs bindings
+import { EventsOn } from '$wailsjs/runtime/runtime.js'
+// @ts-ignore - wailsjs bindings
 import type { backend } from '$wailsjs/go/models'
 
 type Source = backend.Source
 type Calendar = backend.Calendar
 
+// Per-source sync lifecycle state driven by backend events. The four
+// lifecycle events from sync.go:
+//   calendar:sync-started    → phase = 'started'
+//   calendar:sync-progress   → phase = 'progress' (+calendarName, n/total)
+//   calendar:sync-complete   → delete the entry (back to idle)
+//   calendar:source-error    → phase = 'error' (+errorMessage), auto-clears
+//                              after 8s so the sidebar doesn't pin a stale
+//                              error forever (settings dialog shows the
+//                              persistent last_error from the row instead).
+export type SyncPhase = 'started' | 'progress' | 'error'
+export interface SourceSyncState {
+  phase: SyncPhase
+  sourceName: string
+  calendarName?: string
+  currentCalendar?: number
+  totalCalendars?: number
+  errorMessage?: string
+}
+
 let sources = $state<Source[]>([])
 let calendarsBySource = $state<Record<string, Calendar[]>>({})
 let loading = $state(false)
 let lastError = $state<string | null>(null)
+let syncStates = $state<Record<string, SourceSyncState>>({})
+
+let subscribed = false
+
+interface SyncStartedPayload {
+  sourceId: string
+  sourceName: string
+}
+
+interface SyncProgressPayload {
+  sourceId: string
+  sourceName: string
+  calendarId: string
+  calendarName: string
+  currentCalendar: number
+  totalCalendars: number
+}
+
+interface SyncCompletePayload {
+  sourceId: string
+}
+
+interface SourceErrorPayload {
+  sourceId: string
+  message: string
+}
+
+function deleteSyncState(sourceId: string) {
+  const next = { ...syncStates }
+  delete next[sourceId]
+  syncStates = next
+}
+
+function ensureSyncSubscriptions() {
+  if (subscribed) return
+  subscribed = true
+
+  EventsOn('calendar:sync-started', (d: SyncStartedPayload) => {
+    syncStates = {
+      ...syncStates,
+      [d.sourceId]: { phase: 'started', sourceName: d.sourceName },
+    }
+  })
+
+  EventsOn('calendar:sync-progress', (d: SyncProgressPayload) => {
+    syncStates = {
+      ...syncStates,
+      [d.sourceId]: {
+        phase: 'progress',
+        sourceName: d.sourceName,
+        calendarName: d.calendarName,
+        currentCalendar: d.currentCalendar,
+        totalCalendars: d.totalCalendars,
+      },
+    }
+  })
+
+  EventsOn('calendar:sync-complete', (d: SyncCompletePayload) => {
+    deleteSyncState(d.sourceId)
+  })
+
+  EventsOn('calendar:source-error', (d: SourceErrorPayload) => {
+    const prior = syncStates[d.sourceId]
+    syncStates = {
+      ...syncStates,
+      [d.sourceId]: {
+        phase: 'error',
+        sourceName: prior?.sourceName ?? '',
+        errorMessage: d.message,
+      },
+    }
+    // Auto-clear the inline error after 8s — the persistent last_error
+    // column still shows in the settings dialog row.
+    setTimeout(() => {
+      if (syncStates[d.sourceId]?.phase !== 'error') return
+      deleteSyncState(d.sourceId)
+    }, 8000)
+  })
+}
+
+const isAnySyncing = $derived.by(() => {
+  for (const k of Object.keys(syncStates)) {
+    const s = syncStates[k]
+    if (s.phase === 'started' || s.phase === 'progress') return true
+  }
+  return false
+})
+
+const currentSyncState = $derived.by<SourceSyncState | null>(() => {
+  for (const k of Object.keys(syncStates)) {
+    const s = syncStates[k]
+    if (s.phase === 'started' || s.phase === 'progress') return s
+  }
+  return null
+})
+
+const currentErrorState = $derived.by<SourceSyncState | null>(() => {
+  for (const k of Object.keys(syncStates)) {
+    const s = syncStates[k]
+    if (s.phase === 'error') return s
+  }
+  return null
+})
 
 // Flatten all visible calendar IDs across all sources. Used as the input
 // to Calendar_ListEventsInRange so the events store knows which calendars
@@ -40,6 +164,9 @@ const visibleCalendarIDs = $derived.by(() => {
 })
 
 async function load() {
+  // First load wires the sync-lifecycle subscriptions. Guarded against
+  // double-bind via the module-level `subscribed` flag.
+  ensureSyncSubscriptions()
   loading = true
   lastError = null
   try {
@@ -205,6 +332,17 @@ export const calendarSources = {
   get loading() { return loading },
   get lastError() { return lastError },
   get visibleCalendarIDs() { return visibleCalendarIDs },
+
+  // Sync-lifecycle observability — driven by backend events. The sidebar
+  // footer uses isAnySyncing / currentSyncState to render the animated
+  // indicator + phase-aware label; currentErrorState backs the transient
+  // red banner that auto-clears after 8s.
+  get isAnySyncing() { return isAnySyncing },
+  get currentSyncState() { return currentSyncState },
+  get currentErrorState() { return currentErrorState },
+  syncStateFor(sourceId: string): SourceSyncState | null {
+    return syncStates[sourceId] ?? null
+  },
 
   load,
   addCalDAVSource,
