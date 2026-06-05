@@ -83,7 +83,15 @@
   const unregEdit = registerExtensionShortcut('contacts', KEY.CONTACT_EDIT, () => {
     openEdit(contactsView.detail)
   })
+  // Ctrl/Cmd+N opens the new-contact dialog. AddContactDialog's own
+  // autoFillFromSidebar reads contactsView.selectedSourceId, so the
+  // pre-selected addressbook tracks whatever the sidebar has focused
+  // — same path the "+" button takes today.
+  const unregNew = registerExtensionShortcut('contacts', KEY.CONTACT_NEW, () => {
+    showAdd = true
+  })
   onDestroy(unregEdit)
+  onDestroy(unregNew)
 </script>
 
 <PaneLayout>

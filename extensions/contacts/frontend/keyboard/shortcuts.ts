@@ -12,12 +12,22 @@
 // dispatchExtensionShortcut when the Contacts extension is the active rail
 // pane.
 
-import { noMods } from '$lib/keyboard/shortcuts'
+import { noMods, ctrlOrMeta } from '$lib/keyboard/shortcuts'
 
 /** `e` — edit the currently-focused contact. */
 export const CONTACT_EDIT = (e: KeyboardEvent): boolean =>
   e.key === 'e' && noMods(e)
 
+/** `Ctrl/Cmd+N` — open the new-contact dialog, pre-targeted to the
+ *  sidebar-focused addressbook (the dialog's own `autoFillFromSidebar`
+ *  reads `contactsView.selectedSourceId` and falls back to local when
+ *  the focused source isn't writable). Routed by the extension shortcut
+ *  registry before App.svelte's mail-domain switch — only fires when
+ *  contacts is the active rail. */
+export const CONTACT_NEW = (e: KeyboardEvent): boolean =>
+  e.key.toLowerCase() === 'n' && ctrlOrMeta(e) && !e.shiftKey && !e.altKey
+
 export const KEY = {
   CONTACT_EDIT,
+  CONTACT_NEW,
 }
