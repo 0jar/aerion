@@ -442,9 +442,12 @@ func (p caldavProvider) PushInstance(ctx context.Context, src Source, cal Calend
 }
 
 // caldavPut issues a PUT with optional If-Match (for updates) or
-// If-None-Match: * (for create-only). Returns the new ETag from the
-// response header (may be empty if the server doesn't return one — the
-// next sync picks it up).
+// If-None-Match: * (for create-only). Returns the new ETag — from the
+// response header when the server includes one (RFC 4791 SHOULD), or
+// from a follow-up HEAD when it doesn't (common on Nextcloud). Empty
+// ETag would force every subsequent conditional write through the
+// retry-unconditional fallback, so we trade one HEAD round trip per
+// non-compliant server for correct conflict detection on the next write.
 func caldavPut(ctx context.Context, client webdav.HTTPClient, url, blob, ifMatch string, createOnly bool) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, strings.NewReader(blob))
 	if err != nil {
@@ -466,7 +469,11 @@ func caldavPut(ctx context.Context, client webdav.HTTPClient, url, blob, ifMatch
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
-		return resp.Header.Get("ETag"), nil
+		etag := resp.Header.Get("ETag")
+		if etag == "" {
+			etag = fetchETagViaHEAD(ctx, client, url)
+		}
+		return etag, nil
 	case http.StatusPreconditionFailed:
 		return "", ErrConflict
 	}

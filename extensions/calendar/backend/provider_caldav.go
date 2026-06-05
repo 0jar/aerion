@@ -277,10 +277,16 @@ func (p caldavProvider) PushEvent(ctx context.Context, src Source, cal Calendar,
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
-		// The server's response may not include the new ETag (RFC 4791
-		// recommends but doesn't require it). If absent, we'll pick it
-		// up on the next sync. Empty ETag is non-fatal.
-		return PushResult{ETag: resp.Header.Get("ETag")}, nil
+		// RFC 4791 says the response SHOULD carry the new ETag but
+		// doesn't require it; Nextcloud often omits it. When absent,
+		// HEAD the resource so the local copy has a fresh ETag for the
+		// next conditional write — otherwise If-Match on the next edit
+		// or delete 412s until the periodic sync catches up.
+		etag := resp.Header.Get("ETag")
+		if etag == "" {
+			etag = fetchETagViaHEAD(ctx, httpClient, href)
+		}
+		return PushResult{ETag: etag}, nil
 	case http.StatusPreconditionFailed:
 		// 412 paths split by what we sent:
 		//   - Update with If-Match (stale local ETag — most common cause):
@@ -322,7 +328,11 @@ func (p caldavProvider) retryPutUnconditional(ctx context.Context, httpClient we
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
-		return PushResult{ETag: resp.Header.Get("ETag")}, nil
+		etag := resp.Header.Get("ETag")
+		if etag == "" {
+			etag = fetchETagViaHEAD(ctx, httpClient, href)
+		}
+		return PushResult{ETag: etag}, nil
 	case http.StatusPreconditionFailed:
 		// Unconditional PUT still rejected — something else is wrong
 		// (rare; possibly server-side resource lock). Surface as conflict.
@@ -331,6 +341,30 @@ func (p caldavProvider) retryPutUnconditional(ctx context.Context, httpClient we
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return PushResult{}, fmt.Errorf("caldav retry PUT %d %s: %s",
 		resp.StatusCode, resp.Status, strings.TrimSpace(string(body)))
+}
+
+// fetchETagViaHEAD issues a HEAD against href and returns the ETag header
+// value, or "" on any failure / non-2xx / missing header. Called after a
+// successful PUT whose response had no ETag — common on Nextcloud, which
+// RFC 4791 permits (SHOULD, not MUST) but breaks our If-Match path on the
+// next write. One extra round trip per server-that-doesn't-return-ETag-on-PUT;
+// servers that DO return ETag inline pay nothing. Failure is non-fatal:
+// the retry-unconditional fallbacks on PUT/DELETE still catch the resulting
+// 412 the next time the user writes to the resource.
+func fetchETagViaHEAD(ctx context.Context, httpClient webdav.HTTPClient, href string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, href, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ""
+	}
+	return resp.Header.Get("ETag")
 }
 
 // --- Delete ---------------------------------------------------------------
