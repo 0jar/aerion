@@ -451,7 +451,7 @@ This is the complete list of APIs your extension is allowed to consume. Anything
 |---|---|---|---|
 | `core.Mail()` | ⚠️ | `ListMessages`, `GetMessage`, `ListFolders`, `GetSpecialFolder` | Mutators (`MoveMessage`, `Archive`, `Trash`, `SetFlags`, `AppendMessage`) and `SubscribeToMailEvents` return `ErrUnimplemented`. |
 | `core.Composer()` | ⚠️ | `OpenComposer` (mailto URL form) | `Attachments` and `ReplyTo` in `ComposeRequest` return `ErrUnimplemented`. |
-| `core.Contacts()` | ✅ | `ListSources`, `LinkAccountSource`, `ListAddressbooks`, `SetSourceWritable`; `ContactSource.AccountID` field surfaced | Source-management surface used by the Contacts extension itself (and available to future cross-extension consumers like Calendar). Contact CRUD methods (`Search`/`Get`/`List`/`Create`/`Update`/`Delete`) still return `ErrUnimplemented` at this surface — they're owned by the Contacts extension's Bridge (CRUD lives behind the `Contacts_*` Wails methods, not on `coreapi.Contacts`). Phase 2b.3 added `SetSourceWritable` so the incremental-consent flow can flip a source's writable flag after the user grants OAuth write scope. |
+| `core.Contacts()` | ✅ | `ListSources`, `LinkAccountSource`, `ListAddressbooks`, `SetSourceWritable`, `SearchContacts`; `ContactSource.AccountID` field surfaced | Source-management surface used by the Contacts extension itself + the first read-side cross-extension method (`SearchContacts`). `SearchContacts` was wired in v0.3.0 to back the Calendar extension's attendee-picker autocomplete — see [§ Cross-extension consumption (Search example)](#cross-extension-consumption-search-example) below. Remaining contact CRUD methods (`GetContact`/`ListContacts`/`Create`/`Update`/`Delete`/`ListAddressbooks`) still return `ErrUnimplemented` — no cross-extension consumer queries those yet, and routing them through coreImpl would force the Contacts extension to initialize even when disabled. They get wired in when a real consumer arrives. |
 | `core.Auth()` | ✅ | `HTTPClient(accountID, scopes)` — bearer + transparent refresh; `StartIncrementalConsent(req StartIncrementalConsentRequest)` — synchronous OAuth consent flow that persists tokens against either an account or a standalone contacts source (see [§ Write-access grant flow](#write-access-grant-flow-account-picker-model)) | `IMAPClient` and `SMTPClient` return `ErrUnimplemented`. |
 | `core.UI()` | ⚠️ | `RegisterRailTab`, `RegisterAccountSetupHook`, `OpenURL` | `RegisterSettingsTab`, `RegisterContextMenuItem`, `RegisterInboxView` accept registrations but no consumer reads them yet. `OpenURL` opens URLs in the system browser via the host's hardened resolver (protocol allowlist, Linux portal-first). |
 | `core.Storage()` | ⚠️ | `Secrets(extensionID)` — keyring-first with AES-encrypted DB fallback | `KV(extensionID)` still returns `stubKV` (all methods `ErrUnimplemented`) — wires up when a real consumer arrives. Per-extension SQLite (your own `*sql.DB`) is the parallel persistence path — see [§ Per-extension storage](#per-extension-storage). |
@@ -460,6 +460,71 @@ This is the complete list of APIs your extension is allowed to consume. Anything
 | `core.Extension(id)` | 🚧 | Returns `(nil, false)` always | Typed cross-extension handles not wired yet. |
 
 Each subsection below documents the interface signatures + behavior in detail.
+
+### Cross-extension consumption (Search example)
+
+The canonical pattern for one extension to consume another's data is a
+**Wails wrapper method on the consuming extension's bridge that delegates
+through `coreapi`**. Consuming extensions DO NOT import the producing
+extension's Go package, and the frontend DOES NOT call the producing
+extension's `<Producer>_*` bridge methods directly.
+
+Concrete example (landed for v0.3.0): the Calendar extension needs
+contact-autocomplete suggestions in its attendee picker. Mail's composer
+already calls `Contacts_SearchContacts` via the Contacts extension's
+bridge — but Calendar can't (cleanly) reach into Contacts' bridge from
+its own frontend. The pattern:
+
+1. **Coreapi method**: `coreapi.Contacts.SearchContacts(query, limit)
+   ([]Contact, error)` is defined on the contacts interface in
+   `internal/core/api/v1/types.go`.
+2. **Host implementation**: `app/coreimpl.go`'s `contactsCoreImpl.SearchContacts`
+   delegates to the same host `App.SearchContacts` that the
+   `Contacts_SearchContacts` bridge method uses. Same backend
+   function, just behind the typed interface.
+3. **Consumer-side bridge wrapper**: Calendar's bridge exposes
+   `Calendar_SearchContacts(query, limit)` (a ~10-line wrapper at
+   `extensions/calendar/backend/bridge.go::Calendar_SearchContacts`)
+   that calls `b.deps.Core.Contacts().SearchContacts(...)`. Wails
+   generates a TypeScript binding under the calendar namespace, which
+   Calendar's frontend (`AttendeeInput.svelte`) imports directly.
+
+The result: Calendar has no hard dependency on Contacts being enabled
+(coreapi returns a no-op when Contacts is disabled), Mail's composer
+still works unchanged, and the `<Extension>_` prefix rule keeps the
+Wails namespace collision-free. The same pattern applies to any future
+cross-extension consumption — extend the relevant `coreapi.<Producer>`
+interface, implement it in `coreimpl`, expose a wrapper in the
+consumer's bridge.
+
+### Self-match via identities (RSVP example)
+
+Several extension flows need to know "did the current user perform this
+action / appear in this list?" — e.g., calendar's RSVP buttons on
+EventDetail only appear when the user is one of the event's attendees.
+The canonical pattern is **identity union match**:
+
+1. Frontend gathers the lowercase union of `Account.Email +
+   Identity.Email` across every account from `accountStore`.
+2. Frontend passes that union into the consuming Wails method as a
+   `[]string` parameter (e.g., `Calendar_UpdateMyAttendeeStatus(eventId,
+   selfEmails, partStat)`).
+3. Backend probes its data with that set as a `map[string]struct{}` for
+   O(1) lookup against each candidate row.
+
+This keeps account/identity state out of the extension's own database
+(no duplication, no cache-staleness) while letting the extension still
+make per-user decisions. First wired examples:
+
+- `Calendar_UpdateMyAttendeeStatus` at
+  `extensions/calendar/backend/bridge.go` (delegates to
+  `api.UpdateMyAttendeeStatus` at
+  `extensions/calendar/backend/api_attendees.go`) — RSVP self-match.
+- `Calendar_QueryFreeBusy` at the same bridge (delegates to
+  `api.QueryFreeBusyForAttendees` →
+  `freebusy_aggregator.go::QueryAggregatedFreeBusy`) — routes self
+  emails to a local DB scan (no remote query) and non-self emails to
+  Google `freeBusy.query` or Microsoft `getSchedule` via fan-out.
 
 ### Stability
 
@@ -602,7 +667,8 @@ type ContactPatch struct {
   - **Microsoft** → [`extensions/contacts/backend/microsoft_api.go`](../extensions/contacts/backend/microsoft_api.go) (Phase 2b.3 Track C). Uses Graph via [`extensions/contacts/backend/microsoft_write.go`](../extensions/contacts/backend/microsoft_write.go); `recordToMicrosoftContact` in [`extensions/contacts/backend/microsoft_convert.go`](../extensions/contacts/backend/microsoft_convert.go). Effectively last-writer-wins (Graph contacts don't strictly enforce `If-Match`); etag stored for telemetry only. Multi-URL records collapse to `businessHomePage` (single field on Graph) with a log warn — documented lossy mapping.
   - `SubscribeToContactEvents` returns `ErrUnimplemented` until a core event bus exists.
 - **Source management** (`ListSources`/`LinkAccountSource`/`SetSourceWritable`): implemented in [`app/coreimpl.go`](../app/coreimpl.go) `contactsCoreImpl`, wrapping `app.carddavStore.ListSources()` + the existing `App.LinkAccountContactSource` + `carddavStore.SetSourceWritable`. These live host-side because `contact_sources` is a host-owned table (mail's autocomplete also reads it). The Contacts extension's bridge proxies through `b.deps.Core.Contacts().*`.
-- The `Search`/`Get`/`List`/`Create`/`Update`/`Delete` methods on `app/coreimpl.go contactsCoreImpl` are intentionally `ErrUnimplemented`: routing them through coreImpl would force the Contacts extension's stores to initialize even when disabled, breaking the lightweight invariant. They get filled in when a cross-extension consumer actually needs them.
+- The `Get`/`List`/`Create`/`Update`/`Delete` methods on `app/coreimpl.go contactsCoreImpl` are intentionally `ErrUnimplemented`: routing them through coreImpl would force the Contacts extension's stores to initialize even when disabled, breaking the lightweight invariant. They get filled in when a cross-extension consumer actually needs them.
+- **`SearchContacts` IS wired** (v0.3.0) — delegates to `App.SearchContacts`, the same backend mail's composer hits via the `Contacts_SearchContacts` bridge method. The host-level search doesn't touch the Contacts extension's own state (it queries the shared `contact.Store` + `contact_sources`-derived OAuth providers directly), so it's lightweight-safe. First cross-extension consumer: the Calendar extension's `Calendar_SearchContacts` bridge wrapper (see [§ Cross-extension consumption](#cross-extension-consumption-search-example)).
 
 **Addressbook synthetic IDs (Phase 2b.3)**:
 

@@ -114,6 +114,14 @@ export function Calendar_OpenURL(arg1) {
   return window['go']['app']['App']['Calendar_OpenURL'](arg1);
 }
 
+export function Calendar_QueryFreeBusy(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['Calendar_QueryFreeBusy'](arg1, arg2, arg3, arg4);
+}
+
+export function Calendar_SearchContacts(arg1, arg2) {
+  return window['go']['app']['App']['Calendar_SearchContacts'](arg1, arg2);
+}
+
 export function Calendar_SetCalendarColor(arg1, arg2) {
   return window['go']['app']['App']['Calendar_SetCalendarColor'](arg1, arg2);
 }
@@ -136,6 +144,10 @@ export function Calendar_SyncSource(arg1) {
 
 export function Calendar_UpdateEvent(arg1, arg2) {
   return window['go']['app']['App']['Calendar_UpdateEvent'](arg1, arg2);
+}
+
+export function Calendar_UpdateMyAttendeeStatus(arg1, arg2, arg3) {
+  return window['go']['app']['App']['Calendar_UpdateMyAttendeeStatus'](arg1, arg2, arg3);
 }
 
 export function CanUndo() {

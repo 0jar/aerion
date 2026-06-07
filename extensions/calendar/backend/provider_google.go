@@ -260,9 +260,17 @@ func (p googleProvider) lookupEventIDByUID(calendarID, uid string) (string, erro
 }
 
 // fillDenormalizedFieldsFromICS parses the just-built ICS blob to populate
-// dtstart_unix / dtend_unix / is_all_day / tz_name on the row. The Google
-// JSON has the canonical values; we re-parse through the ICS path so the
-// same code that powers CalDAV+local also sets these fields.
+// dtstart_unix / dtend_unix / is_all_day / tz_name AND attendees /
+// organizer on the row. The provider JSON has the canonical values; we
+// re-parse through the ICS path so the same code that powers CalDAV+local
+// also sets these fields.
+//
+// Attendees + organizer matter for the JSON columns + side index that
+// EventDetail / EventComposerDialog read from — without copying them
+// here, every Google/Microsoft sync overwrites the local row with empty
+// attendees, even though the parsed ICS has them (since buildEvent calls
+// parseAttendeesFromVEVENT). Same shape bug as the create-time / update
+// paths in event_crud.go, just on the sync side.
 func fillDenormalizedFieldsFromICS(ev *Event, blob string) {
 	parsed, err := ParseCalendarObject(blob)
 	if err != nil {
@@ -272,6 +280,8 @@ func fillDenormalizedFieldsFromICS(ev *Event, blob string) {
 	ev.DTEndUnix = parsed.Master.DTEndUnix
 	ev.IsAllDay = parsed.Master.IsAllDay
 	ev.TZName = parsed.Master.TZName
+	ev.Attendees = parsed.Master.Attendees
+	ev.Organizer = parsed.Master.Organizer
 }
 
 // --- Write (PUT) -----------------------------------------------------------
@@ -300,6 +310,12 @@ func (p googleProvider) PushEvent(ctx context.Context, src Source, cal Calendar,
 		method = http.MethodPatch
 		endpoint += "/" + url.PathEscape(ev.ProviderEventID)
 	}
+	// Phase E: per-event sendUpdates honors the user's choice. Empty (or
+	// unset) falls through to Google's default — no `sendUpdates` query
+	// param. Validated values: "all" | "externalOnly" | "none".
+	if su := ev.SendUpdates; su == "all" || su == "externalOnly" || su == "none" {
+		endpoint += "?sendUpdates=" + url.QueryEscape(su)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(payload))
 	if err != nil {
@@ -322,13 +338,46 @@ func (p googleProvider) PushEvent(ctx context.Context, src Source, cal Calendar,
 		if derr := json.NewDecoder(resp.Body).Decode(&out); derr != nil {
 			return PushResult{}, fmt.Errorf("decode google response: %w", derr)
 		}
-		return PushResult{ETag: out.ETag, ProviderEventID: out.ID}, nil
+		// Extract authoritative attendees/organizer from the response so
+		// updateAllAndPush can persist the server's view (e.g., responseStatus
+		// resets to needsAction on significant changes like time moves).
+		// We reuse the sync-time ICS round-trip path so the same parser
+		// produces both flows' Attendees / Organizer.
+		atts, org := googleEventToAttendees(out)
+		return PushResult{
+			ETag:            out.ETag,
+			ProviderEventID: out.ID,
+			Attendees:       atts,
+			Organizer:       org,
+		}, nil
 	case http.StatusPreconditionFailed, http.StatusConflict:
 		return PushResult{}, ErrConflict
 	}
 	body2, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return PushResult{}, fmt.Errorf("google %s event %d %s: %s",
 		strings.ToLower(method), resp.StatusCode, resp.Status, strings.TrimSpace(string(body2)))
+}
+
+// googleEventToAttendees converts the Google response's attendees +
+// organizer fields into Aerion's shape. Reuses the existing translation
+// by going through the ICS round-trip — same path sync uses — so the
+// PartStat / Role / CUType normalization stays in one place.
+//
+// Returns nil/nil when the source has no attendees AND no organizer (the
+// common local-event shape).
+func googleEventToAttendees(out googleEvent) ([]Attendee, *Organizer) {
+	if len(out.Attendees) == 0 && out.Organizer == nil {
+		return nil, nil
+	}
+	blob, err := translateGoogleEventToICS(out)
+	if err != nil {
+		return nil, nil
+	}
+	parsed, perr := ParseCalendarObject(blob)
+	if perr != nil {
+		return nil, nil
+	}
+	return parsed.Master.Attendees, parsed.Master.Organizer
 }
 
 // --- Delete ---------------------------------------------------------------

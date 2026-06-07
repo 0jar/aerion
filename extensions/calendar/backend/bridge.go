@@ -658,3 +658,68 @@ func (b *CalendarBridge) Calendar_GrantCalendarAccess(provider, accountID, expec
 	}
 	return b.deps.Core.Auth().StartIncrementalConsent(req)
 }
+
+// Calendar_QueryFreeBusy returns busy-block lists for the given attendee
+// emails over the supplied window. selfEmails is the current user's
+// account+identity email union; the aggregator uses it to route self
+// lookups to the local DB instead of a remote query.
+//
+// Used by the EventComposerDialog's "Find a time" affordance. Routes
+// per-email by provider domain; falls back across every Google +
+// Microsoft source we have. Empty results per email mean "no data" (the
+// UI renders a tag rather than asserting "free").
+//
+// Documented in docs/EXTENSIONS.md § Wails-bound surface.
+func (b *CalendarBridge) Calendar_QueryFreeBusy(selfEmails, attendeeEmails []string, fromUnix, toUnix int64) ([]FreeBusyResult, error) {
+	if !b.gateEnabled() {
+		return nil, errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return nil, err
+	}
+	return b.api.QueryFreeBusyForAttendees(selfEmails, attendeeEmails, fromUnix, toUnix)
+}
+
+// Calendar_UpdateMyAttendeeStatus changes the current user's PARTSTAT
+// on an event others organized. The frontend passes the union of
+// account-emails + identity-emails (lowercased) as `selfEmails` so the
+// backend can match without re-reading the accountStore.
+//
+// Documented in docs/EXTENSIONS.md § Wails-bound surface — the
+// self-match-via-identities pattern is the canonical way for any
+// extension to detect "actions on the current user's behalf."
+func (b *CalendarBridge) Calendar_UpdateMyAttendeeStatus(eventID string, selfEmails []string, partStat string) error {
+	if !b.gateEnabled() {
+		return errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	return b.api.UpdateMyAttendeeStatus(eventID, selfEmails, partStat)
+}
+
+// Calendar_SearchContacts proxies contact-autocomplete queries from the
+// calendar's attendee picker to coreapi.Contacts.SearchContacts. Same
+// backend function the mail composer's RecipientInput hits (via the
+// Contacts_SearchContacts bridge method on the contacts extension).
+//
+// Cross-extension consumption MUST flow through coreapi — calendar
+// doesn't import contacts directly. If the contacts extension is
+// disabled, coreapi.Contacts() returns a no-op implementation whose
+// SearchContacts yields []. Empty results are not an error; the picker
+// just shows no suggestions.
+//
+// Documented in docs/EXTENSIONS.md § Wails-bound surface as the canonical
+// example of the cross-extension consumer pattern.
+func (b *CalendarBridge) Calendar_SearchContacts(query string, limit int) ([]coreapi.Contact, error) {
+	if !b.gateEnabled() {
+		return nil, errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return nil, err
+	}
+	if b.deps.Core == nil {
+		return nil, errors.New("calendar: core not wired")
+	}
+	return b.deps.Core.Contacts().SearchContacts(query, limit)
+}

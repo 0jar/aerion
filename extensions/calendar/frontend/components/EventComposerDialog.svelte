@@ -26,8 +26,11 @@
   import { fromZonedTime, toZonedTime } from 'date-fns-tz'
   // @ts-ignore - wailsjs bindings
   import { Calendar_CreateEvent, Calendar_UpdateEvent } from '$wailsjs/go/app/App.js'
+  import AttendeesSection from './AttendeesSection.svelte'
+  import SendInvitationsDialog from './SendInvitationsDialog.svelte'
+  import { accountStore } from '$lib/stores/accounts.svelte'
   // @ts-ignore - wailsjs bindings
-  import type { backend } from '$wailsjs/go/models'
+  import { backend } from '$wailsjs/go/models'
 
   type ComposerMode = 'create' | 'edit'
 
@@ -71,6 +74,18 @@
   let reminderChoice = $state('none')
   let reminderCustomMinutes = $state(15)
 
+  // Phase C: attendees + organizer state. AttendeesSection binds these.
+  let attendees = $state<backend.AttendeeInput[]>([])
+  let organizer = $state<backend.OrganizerInput | null>(null)
+  // sendUpdates is the value threaded into EventInput at save time. On
+  // Create it's always "all" — users add attendees because they want
+  // them invited. On Edit it's resolved via SendInvitationsDialog when
+  // the event has attendees (Outlook's "Send update?" pattern).
+  let sendUpdates = $state<string>('all')
+
+  // Edit-only confirmation dialog state.
+  let sendInvitationsOpen = $state(false)
+
   let submitting = $state(false)
   let errorMessage = $state('')
   let errorRef = $state<HTMLElement | null>(null)
@@ -103,6 +118,103 @@
       }
     }
     return out
+  })
+
+  // Self-emails (primary account emails) for AttendeesSection's
+  // self-suggestion suppression + downstream RSVP self-match. Aliases
+  // (account.Identity rows) live on AccountIdentityGroup, not the plain
+  // Account type the accountStore exposes — fetching those would need
+  // GetAllAccountIdentities + an async hydration $effect. Deferred for
+  // v0.3.0: primary emails cover the common case (one identity per account).
+  const selfEmails = $derived.by(() => {
+    const out: string[] = []
+    for (const aw of accountStore.accounts) {
+      if (aw.account?.email) out.push(aw.account.email.toLowerCase())
+    }
+    return out
+  })
+
+  // Identity list for the AttendeesSection organizer picker. One entry per
+  // account; the picker collapses when ≤1.
+  const identityOptions = $derived.by(() => {
+    const out: { email: string; commonName: string }[] = []
+    for (const aw of accountStore.accounts) {
+      const acc = aw.account
+      if (acc?.email) {
+        out.push({ email: acc.email, commonName: acc.name || '' })
+      }
+    }
+    return out
+  })
+
+  // Phase H: day + duration derivations for "Find a time".
+  // dayUnixForFreeBusy is midnight (user's tz) on startDate; the picker
+  // covers 8-20 local; pickedDurationMinutes is the current event
+  // duration so the picked slot calculates DTEND correctly.
+  const dayUnixForFreeBusy = $derived.by(() => {
+    if (!startDate) return 0
+    // startDate is "YYYY-MM-DD". Parse in the user's tz.
+    const parts = startDate.split('-')
+    if (parts.length !== 3) return 0
+    const tz = calendarSettings.effectiveTimezone
+    // Use fromZonedTime to anchor midnight local to the user's tz.
+    const naive = new Date(
+      parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), 0, 0, 0, 0,
+    )
+    try {
+      const utc = fromZonedTime(naive, tz)
+      return Math.floor(utc.getTime() / 1000)
+    } catch {
+      return Math.floor(naive.getTime() / 1000)
+    }
+  })
+
+  const pickedDurationMinutes = $derived.by(() => {
+    if (isAllDay) return 60
+    if (!startTime || !endTime) return 60
+    const [sh, sm] = startTime.split(':').map(Number)
+    const [eh, em] = endTime.split(':').map(Number)
+    if (isNaN(sh) || isNaN(eh)) return 60
+    const mins = (eh * 60 + em) - (sh * 60 + sm)
+    return mins > 0 ? mins : 60
+  })
+
+  function applyPickedSlot(startUnix: number, endUnix: number) {
+    const tz = calendarSettings.effectiveTimezone
+    const startInTz = toZonedTime(new Date(startUnix * 1000), tz)
+    const endInTz = toZonedTime(new Date(endUnix * 1000), tz)
+    startDate = formatYMD(startInTz)
+    startTime = formatHM(startInTz)
+    endDate = formatYMD(endInTz)
+    endTime = formatHM(endInTz)
+    isAllDay = false
+  }
+
+  // sourceKind derived from the picked calendarId → owning source.
+  // Routes through calendarSources's existing lookups. For CalDAV we
+  // refine by the source's `itipMode` so the AttendeesSection toggle's
+  // gating reflects probe results from Phase E.
+  type SourceKind = 'google' | 'microsoft' | 'caldav-server' | 'caldav-none' | 'local' | ''
+  const sourceKind: SourceKind = $derived.by(() => {
+    if (!calendarId) return ''
+    for (const src of calendarSources.sources) {
+      const cals = calendarSources.calendarsBySource[src.id] || []
+      for (const cal of cals) {
+        if (cal.id !== calendarId) continue
+        switch (src.type) {
+          case 'google':
+            return 'google'
+          case 'microsoft':
+            return 'microsoft'
+          case 'local':
+            return 'local'
+          case 'caldav':
+            return src.itipMode === 'none' ? 'caldav-none' : 'caldav-server'
+        }
+        return ''
+      }
+    }
+    return ''
   })
 
   $effect(() => {
@@ -151,6 +263,22 @@
     endTime = formatHM(endInTz)
     parseRRule(ev.rruleText || '')
     reminderChoice = 'none'
+    // Attendees + organizer. backend.Attendee → backend.AttendeeInput
+    // (shape-compatible; createFrom safely cherry-picks fields).
+    attendees = (ev.attendees ?? []).map((a) =>
+      backend.AttendeeInput.createFrom({
+        email: a.email,
+        cn: a.cn,
+        partStat: a.partStat,
+        role: a.role,
+        rsvp: a.rsvp,
+        cuType: a.cuType,
+        delegate: a.delegate,
+      }),
+    )
+    organizer = ev.organizer
+      ? { email: ev.organizer.email, cn: ev.organizer.cn ?? '' }
+      : null
   }
 
   function initCreateDefaults() {
@@ -190,6 +318,14 @@
     recurrenceCount = 10
     reminderChoice = 'none'
     reminderCustomMinutes = 15
+    attendees = []
+    sendUpdates = 'all'
+    // Default organizer to the user's primary account email; user can switch
+    // via AttendeesSection's identity picker when more than one identity
+    // exists.
+    organizer = identityOptions[0]
+      ? { email: identityOptions[0].email.toLowerCase(), cn: identityOptions[0].commonName }
+      : null
   }
 
   function parseRRule(text: string) {
@@ -277,6 +413,20 @@
       return
     }
 
+    // Edit-flow: when the event has attendees, intercept the save with
+    // the "Send update?" dialog. The dialog calls performSave(choice)
+    // after the user picks; Cancel just returns to the composer.
+    // Create-flow skips the dialog entirely — adding attendees on a new
+    // event implies you want them invited.
+    if (mode === 'edit' && existing && attendees.length > 0) {
+      sendInvitationsOpen = true
+      return
+    }
+    sendUpdates = 'all'
+    await performSave()
+  }
+
+  async function performSave() {
     const dtstartUnix = buildUnix(startDate, startTime, isAllDay)
     // For all-day events, DTEND is exclusive (next-day midnight) per
     // RFC 5545 §3.6.1 — so a single-day event on June 5 has DTSTART:20260605
@@ -303,6 +453,9 @@
       tz: isAllDay ? undefined : calendarSettings.effectiveTimezone,
       recurrence: buildRecurrenceSpec(),
       reminder: buildReminderSpec(),
+      attendees: attendees.length > 0 ? attendees : undefined,
+      organizer: attendees.length > 0 && organizer ? organizer : undefined,
+      sendUpdates: attendees.length > 0 ? sendUpdates : undefined,
     } as backend.EventInput
 
     submitting = true
@@ -469,6 +622,17 @@
         ></textarea>
       </div>
 
+      <AttendeesSection
+        bind:attendees
+        bind:organizer
+        selfEmails={selfEmails}
+        identities={identityOptions}
+        dayUnixForFreeBusy={dayUnixForFreeBusy}
+        durationMinutes={pickedDurationMinutes}
+        onFreeBusyPick={applyPickedSlot}
+        disabled={submitting}
+      />
+
       <div>
         <Label>{$_('calendar.composer.recurrenceLabel')}</Label>
         <Select.Root value={recurrenceFreq} onValueChange={(v) => { recurrenceFreq = v ?? '' }}>
@@ -556,3 +720,16 @@
     </div>
   </Dialog.Content>
 </Dialog.Root>
+
+<SendInvitationsDialog
+  bind:open={sendInvitationsOpen}
+  attendeeCount={attendees.length}
+  sourceKind={sourceKind}
+  onConfirm={async (choice) => {
+    sendUpdates = choice
+    await performSave()
+  }}
+  onCancel={() => {
+    // Cancel just returns to the composer; user's edits are intact.
+  }}
+/>

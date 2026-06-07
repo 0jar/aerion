@@ -46,6 +46,25 @@ type googleEvent struct {
 	RecurringEventID  string           `json:"recurringEventId,omitempty"`
 	OriginalStartTime *googleTimePoint `json:"originalStartTime,omitempty"`
 	Reminders         *googleReminders `json:"reminders,omitempty"`
+	Attendees         []googleAttendee `json:"attendees,omitempty"`
+	Organizer         *googleAttendee  `json:"organizer,omitempty"`
+}
+
+// googleAttendee is the shape Google Calendar API v3 returns/accepts.
+// `organizer`/`self` are read-only metadata Google adds on responses; we
+// emit them empty on writes. `resource` is set when CUTYPE=RESOURCE.
+// `additionalGuests` is unused on our side; we round-trip-preserve it
+// from server responses by leaving it on the struct.
+type googleAttendee struct {
+	Email            string `json:"email"`
+	DisplayName      string `json:"displayName,omitempty"`
+	Optional         bool   `json:"optional,omitempty"`
+	ResponseStatus   string `json:"responseStatus,omitempty"` // needsAction|declined|tentative|accepted
+	Organizer        bool   `json:"organizer,omitempty"`      // read-only on responses
+	Self             bool   `json:"self,omitempty"`           // read-only on responses
+	Resource         bool   `json:"resource,omitempty"`
+	Comment          string `json:"comment,omitempty"`
+	AdditionalGuests int    `json:"additionalGuests,omitempty"`
 }
 
 // googleTimePoint represents start/end/originalStartTime. Mutually
@@ -147,6 +166,37 @@ func translateGoogleEventToICS(ev googleEvent) (string, error) {
 		}
 	}
 
+	// Organizer + Attendees from Google → ATTENDEE/ORGANIZER ICS lines.
+	// Emitted via the shared helper so the wire form matches what Phase A's
+	// parser would expect on read-back. Aerion's local DB then carries them
+	// via store.go's attendees_json column.
+	var orgInput *OrganizerInput
+	if ev.Organizer != nil && ev.Organizer.Email != "" {
+		orgInput = &OrganizerInput{
+			Email:      ev.Organizer.Email,
+			CommonName: ev.Organizer.DisplayName,
+		}
+	}
+	if len(ev.Attendees) > 0 || orgInput != nil {
+		atts := make([]AttendeeInput, 0, len(ev.Attendees))
+		for _, a := range ev.Attendees {
+			ai := AttendeeInput{
+				Email:      a.Email,
+				CommonName: a.DisplayName,
+				PartStat:   googlePartStatToICS(a.ResponseStatus),
+				Role:       RoleReqParticipant,
+			}
+			if a.Optional {
+				ai.Role = RoleOptParticipant
+			}
+			if a.Resource {
+				ai.CUType = CUTypeResource
+			}
+			atts = append(atts, ai)
+		}
+		emitAttendeesIntoVEVENT(icalEv, orgInput, atts)
+	}
+
 	cal := ical.NewCalendar()
 	cal.Props.SetText(ical.PropVersion, "2.0")
 	cal.Props.SetText(ical.PropProductID, "-//Aerion//Calendar Extension//EN")
@@ -217,6 +267,25 @@ func translateICSToGoogleJSON(icsBlob string) (googleEvent, error) {
 
 	if rrule := propText(&ev, ical.PropRecurrenceRule); rrule != "" {
 		out.Recurrence = []string{"RRULE:" + rrule}
+	}
+
+	// Attendees + Organizer. Roundtrip via the shared parser so the wire
+	// shape matches whatever Phase A's parser would produce — single source
+	// of truth for ATTENDEE/ORGANIZER property handling.
+	if atts := parseAttendeesFromVEVENT(&ev); len(atts) > 0 {
+		out.Attendees = make([]googleAttendee, 0, len(atts))
+		for _, a := range atts {
+			out.Attendees = append(out.Attendees, googleAttendee{
+				Email:          a.Email,
+				DisplayName:    a.CommonName,
+				Optional:       strings.EqualFold(a.Role, RoleOptParticipant),
+				ResponseStatus: icsPartStatToGoogle(a.PartStat),
+				Resource:       strings.EqualFold(a.CUType, CUTypeResource) || strings.EqualFold(a.CUType, CUTypeRoom),
+			})
+		}
+	}
+	if org := parseOrganizerFromVEVENT(&ev); org != nil {
+		out.Organizer = &googleAttendee{Email: org.Email, DisplayName: org.CommonName}
 	}
 
 	for _, child := range ev.Component.Children {

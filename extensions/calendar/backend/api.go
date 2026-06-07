@@ -79,7 +79,15 @@ func (a *API) AddCalDAVSource(name, serverURL, username, password string) (strin
 	sourceID := uuid.New().String()
 	now := time.Now().Unix()
 
-	// 2. Persist source + calendars atomically.
+	// 2a. Probe RFC 6638 scheduling support so the composer can gate the
+	// "Send invitations" toggle for this source. Best-effort: any error
+	// defaults to "server" — the toggle stays available, and the worst
+	// case is a no-op delivery on a non-6638 server (same as pre-v0.3.0).
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	itipMode := probeCalDAVScheduling(probeCtx, serverURL, username, password)
+	probeCancel()
+
+	// 2b. Persist source + calendars atomically.
 	err = a.store.WithTx(func(tx *sql.Tx) error {
 		if err := a.store.CreateSourceTx(tx, Source{
 			ID:              sourceID,
@@ -91,6 +99,7 @@ func (a *API) AddCalDAVSource(name, serverURL, username, password string) (strin
 			Enabled:         true,
 			Writable:        true, // trust-on-first-write per RFC 4791
 			CreatedAt:       now,
+			ITIPMode:        itipMode,
 		}); err != nil {
 			return err
 		}

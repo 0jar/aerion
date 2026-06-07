@@ -75,6 +75,10 @@ export function Calendar_LogFrontend(arg1:string,arg2:string):Promise<void>;
 
 export function Calendar_OpenURL(arg1:string):Promise<void>;
 
+export function Calendar_QueryFreeBusy(arg1:Array<string>,arg2:Array<string>,arg3:number,arg4:number):Promise<Array<backend.FreeBusyResult>>;
+
+export function Calendar_SearchContacts(arg1:string,arg2:number):Promise<Array<v1.Contact>>;
+
 export function Calendar_SetCalendarColor(arg1:string,arg2:string):Promise<void>;
 
 export function Calendar_SetCalendarVisible(arg1:string,arg2:boolean):Promise<void>;
@@ -86,6 +90,8 @@ export function Calendar_SyncAllSources():Promise<void>;
 export function Calendar_SyncSource(arg1:string):Promise<void>;
 
 export function Calendar_UpdateEvent(arg1:backend.EventUpdateInput,arg2:string):Promise<void>;
+
+export function Calendar_UpdateMyAttendeeStatus(arg1:string,arg2:Array<string>,arg3:string):Promise<void>;
 
 export function CanUndo():Promise<boolean>;
 

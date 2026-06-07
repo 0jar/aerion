@@ -16,6 +16,9 @@
   import EventComposerDialog from './EventComposerDialog.svelte'
   import RecurrenceScopeDialog from './RecurrenceScopeDialog.svelte'
   import Linkified from './Linkified.svelte'
+  import AttendeeListDisplay from './AttendeeListDisplay.svelte'
+  import RSVPControls from './RSVPControls.svelte'
+  import { accountStore } from '$lib/stores/accounts.svelte'
   import { toasts } from '$lib/stores/toast'
   // @ts-ignore - wailsjs bindings
   import { Calendar_DeleteEvent } from '$wailsjs/go/app/App.js'
@@ -76,6 +79,41 @@
   })
 
   const color = $derived(event ? calendarSources.colorOf(event.calendarId) : '#999999')
+
+  // Self-emails for AttendeeListDisplay "(you)" suffix + RSVP self-match.
+  // Same predicate the backend's UpdateMyAttendeeStatus uses on its side.
+  // Identities (account aliases) live on AccountIdentityGroup not the
+  // plain Account; deferred until a follow-up — primary emails cover the
+  // common case.
+  const selfEmails = $derived.by(() => {
+    const out: string[] = []
+    for (const aw of accountStore.accounts) {
+      if (aw.account?.email) out.push(aw.account.email.toLowerCase())
+    }
+    return out
+  })
+
+  const selfAttendee = $derived.by(() => {
+    if (!event?.attendees) return null
+    const lowerSet = new Set(selfEmails)
+    for (const a of event.attendees) {
+      if (lowerSet.has((a.email || '').toLowerCase())) return a
+    }
+    return null
+  })
+
+  // Refresh the detail pane after a successful RSVP so the user sees their
+  // new PartStat in AttendeeListDisplay without close+reopen.
+  function onRSVPed() {
+    if (!eventId) return
+    Calendar_GetEvent(eventId)
+      .then((ev: backend.Event) => {
+        event = ev ?? null
+      })
+      .catch((err: unknown) => {
+        loadError = err instanceof Error ? err.message : String(err)
+      })
+  }
 
   // Locale-aware AND tz-aware formatters: locale via svelte-i18n's $locale,
   // timezone via the user's chosen display timezone.
@@ -377,6 +415,30 @@
           <div class="text-foreground whitespace-pre-wrap break-words text-sm">
             <Linkified text={event.description} />
           </div>
+        </div>
+      {/if}
+
+      <!-- Attendees + organizer (Phase D) -->
+      {#if (event.attendees && event.attendees.length > 0) || event.organizer}
+        <div>
+          <AttendeeListDisplay
+            attendees={event.attendees ?? []}
+            organizer={event.organizer ?? null}
+            selfEmails={selfEmails}
+          />
+          {#if selfAttendee}
+            <div class="mt-3">
+              <div class="text-xs uppercase tracking-wide text-muted-foreground mb-1.5">
+                {$_('calendar.attendees.yourResponse')}
+              </div>
+              <RSVPControls
+                eventId={event.id}
+                currentPartStat={selfAttendee.partStat}
+                selfEmails={selfEmails}
+                onUpdated={onRSVPed}
+              />
+            </div>
+          {/if}
         </div>
       {/if}
 

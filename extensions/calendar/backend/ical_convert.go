@@ -151,6 +151,8 @@ func buildEvent(ev *ical.Event, rawICS string) (Event, error) {
 		TZName:      tzName,
 		RRuleText:   rrule,
 		ICSBlob:     rawICS,
+		Attendees:   parseAttendeesFromVEVENT(ev),
+		Organizer:   parseOrganizerFromVEVENT(ev),
 	}, nil
 }
 

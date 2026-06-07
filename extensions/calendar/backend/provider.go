@@ -96,9 +96,18 @@ type Capabilities struct {
 //     Microsoft Graph's id. Persisted onto events.provider_event_id so
 //     subsequent updates can PATCH/DELETE by that ID. Empty for caldav
 //     (uses href) and local.
+//   - Attendees / Organizer: when non-nil, the server's authoritative
+//     attendee list after the push. updateAllAndPush stitches these onto
+//     ev so the local row reflects the server's view (e.g., a Google
+//     time-change PATCH resets each attendee's responseStatus to
+//     needsAction, and we need to surface that locally without waiting
+//     for the next sync). CalDAV PUT returns no body, so it leaves them
+//     nil and the next sync picks up any server-side changes.
 type PushResult struct {
 	ETag            string
 	ProviderEventID string
+	Attendees       []Attendee
+	Organizer       *Organizer
 }
 
 // InstanceOpKind discriminates update vs delete for per-instance pushes.

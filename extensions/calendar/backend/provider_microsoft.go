@@ -406,7 +406,17 @@ func (p microsoftProvider) PushEvent(ctx context.Context, src Source, cal Calend
 		if derr := json.NewDecoder(resp.Body).Decode(&out); derr != nil {
 			return PushResult{}, fmt.Errorf("decode graph response: %w", derr)
 		}
-		return PushResult{ETag: out.ETag, ProviderEventID: out.ID}, nil
+		// Extract authoritative attendees/organizer from the response so
+		// updateAllAndPush persists Graph's view (e.g., attendee.status
+		// reset to notResponded after a time change). Reuses the
+		// sync-time ICS round-trip so the parser stays in one place.
+		atts, org := graphEventToAttendees(out)
+		return PushResult{
+			ETag:            out.ETag,
+			ProviderEventID: out.ID,
+			Attendees:       atts,
+			Organizer:       org,
+		}, nil
 	case http.StatusPreconditionFailed, http.StatusConflict:
 		return PushResult{}, ErrConflict
 	}
@@ -414,6 +424,25 @@ func (p microsoftProvider) PushEvent(ctx context.Context, src Source, cal Calend
 	body2, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return PushResult{}, fmt.Errorf("graph %s event %d %s: %s",
 		strings.ToLower(method), resp.StatusCode, resp.Status, strings.TrimSpace(string(body2)))
+}
+
+// graphEventToAttendees converts the Graph response's attendees +
+// organizer fields into Aerion's shape. Mirrors googleEventToAttendees
+// in provider_google.go — round-trips through ICS so the parser is the
+// single source of truth.
+func graphEventToAttendees(out graphEvent) ([]Attendee, *Organizer) {
+	if len(out.Attendees) == 0 && out.Organizer == nil {
+		return nil, nil
+	}
+	blob, err := translateGraphEventToICS(out)
+	if err != nil {
+		return nil, nil
+	}
+	parsed, perr := ParseCalendarObject(blob)
+	if perr != nil {
+		return nil, nil
+	}
+	return parsed.Master.Attendees, parsed.Master.Organizer
 }
 
 // --- Delete ---------------------------------------------------------------

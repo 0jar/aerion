@@ -54,6 +54,23 @@ type EventInput struct {
 	TZName      string          `json:"tz,omitempty"`
 	Recurrence  *RecurrenceSpec `json:"recurrence,omitempty"`
 	Reminder    *ReminderSpec   `json:"reminder,omitempty"`
+
+	// Attendees + Organizer. Optional — local single-user events typically
+	// have neither. Phase E adds SendUpdates to control invitation delivery
+	// per-event; for now it's per-source default.
+	Attendees []AttendeeInput `json:"attendees,omitempty"`
+	Organizer *OrganizerInput `json:"organizer,omitempty"`
+
+	// SendUpdates controls invitation email delivery on Google + RFC-6638
+	// CalDAV. Microsoft Graph v1.0 always sends — see plan §6. Empty
+	// string defaults to "all" when attendees are present. Values:
+	//   "all"          — invite all attendees.
+	//   "externalOnly" — only attendees outside the user's domain
+	//                    (Google-specific; CalDAV treats as "all").
+	//   "none"         — suppress (Google: sendUpdates=none; CalDAV:
+	//                    Schedule-Reply: F header; Microsoft: ignored,
+	//                    Graph sends anyway).
+	SendUpdates string `json:"sendUpdates,omitempty"`
 }
 
 // RecurrenceSpec describes the RRULE shape the composer offers in v1.
@@ -124,9 +141,19 @@ func (a *API) CreateEvent(in EventInput) (string, error) {
 		TZName:      in.TZName,
 		RRuleText:   rruleText(in.Recurrence),
 		ICSBlob:     icsBlob,
+		SendUpdates: in.SendUpdates, // transient write-time hint (Phase E)
 		// ETag + Href empty: caldavProvider.PushEvent synthesizes the href
 		// from cal.URL + uid, and captures the server's returned ETag.
 	}
+	// Persist attendees + organizer onto the Event struct so UpsertEventTx
+	// writes them into the attendees_json + organizer_json columns + the
+	// side index. WITHOUT this copy, the ICS blob (which DOES carry the
+	// ATTENDEE lines because the serializer reads from `in`) is the only
+	// place attendee data ends up — EventDetail / EventComposerDialog
+	// read the JSON columns, not the parsed ICS, so attendees disappear
+	// from the UI even though the provider received them and sent
+	// invitations. (Bug: invitee got the email but Aerion's UI lost them.)
+	ev.Attendees, ev.Organizer = attendeesFromInput(in)
 
 	provider := ProviderForSource(*src, ProviderDeps{Store: a.store, Secrets: a.secrets, Auth: a.auth})
 	pushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -137,6 +164,15 @@ func (a *API) CreateEvent(in EventInput) (string, error) {
 		ev.ProviderEventID = result.ProviderEventID
 		if src.Type == SourceTypeCalDAV {
 			ev.Href = joinHref(cal.URL, uid+".ics")
+		}
+		// Server's authoritative attendee/organizer state takes precedence.
+		// On create Google/Microsoft enrich the attendees with self/organizer
+		// flags and may rewrite the organizer entry; capture those.
+		if result.Attendees != nil {
+			ev.Attendees = result.Attendees
+		}
+		if result.Organizer != nil {
+			ev.Organizer = result.Organizer
 		}
 	}
 	if err != nil {
@@ -522,6 +558,12 @@ func (a *API) updateAllAndPush(src Source, cal Calendar, master Event, in EventI
 	ev.TZName = in.TZName
 	ev.RRuleText = rruleText(in.Recurrence)
 	ev.ICSBlob = icsBlob
+	ev.SendUpdates = in.SendUpdates // transient write-time hint (Phase E)
+	// Overwrite master's persisted attendees + organizer with the user's
+	// edit. Same reason as CreateEvent: without this copy the JSON columns
+	// keep stale values (or empty), even though the new ICS blob carries
+	// the right ATTENDEE lines and the provider receives them.
+	ev.Attendees, ev.Organizer = attendeesFromInput(in)
 
 	provider := ProviderForSource(src, ProviderDeps{Store: a.store, Secrets: a.secrets, Auth: a.auth})
 	pushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -531,6 +573,20 @@ func (a *API) updateAllAndPush(src Source, cal Calendar, master Event, in EventI
 		ev.ETag = result.ETag
 		if result.ProviderEventID != "" {
 			ev.ProviderEventID = result.ProviderEventID
+		}
+		// Server's authoritative attendee/organizer state takes precedence
+		// over what we sent — Google + Microsoft reset attendee
+		// responseStatus to needsAction on significant changes (time
+		// moves, summary edits), and we want that reset to surface
+		// locally without waiting for the next sync. CalDAV PUT returns
+		// no body so result.Attendees/.Organizer are nil there; the
+		// existing values from attendeesFromInput stay in place and the
+		// next sync reconciles any server-side changes.
+		if result.Attendees != nil {
+			ev.Attendees = result.Attendees
+		}
+		if result.Organizer != nil {
+			ev.Organizer = result.Organizer
 		}
 	}
 	if err != nil {
@@ -692,6 +748,10 @@ func serializeVEVENT(uid string, in EventInput) (string, error) {
 		alarm.Props.SetText(ical.PropDescription, in.Summary)
 		event.Component.Children = append(event.Component.Children, alarm)
 	}
+
+	// ORGANIZER + ATTENDEE properties. Emitted after the base props so they
+	// land in a consistent position in the wire form.
+	emitAttendeesIntoVEVENT(event, in.Organizer, in.Attendees)
 
 	cal := ical.NewCalendar()
 	cal.Props.SetText(ical.PropVersion, "2.0")

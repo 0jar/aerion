@@ -46,6 +46,35 @@ type graphEvent struct {
 	SeriesMasterID              string             `json:"seriesMasterId,omitempty"`
 	Type                        string             `json:"type,omitempty"` // "singleInstance" | "seriesMaster" | "exception" | "occurrence"
 	Status                      *graphEventStatus  `json:"@removed,omitempty"`
+	Attendees                   []graphAttendee    `json:"attendees,omitempty"`
+	Organizer                   *graphRecipient    `json:"organizer,omitempty"`
+}
+
+// graphAttendee is Graph's per-attendee shape:
+//   { emailAddress: { address, name }, type: "required"|"optional"|"resource",
+//     status: { response, time } }
+// status.response: none|organizer|tentativelyAccepted|accepted|declined|notResponded.
+type graphAttendee struct {
+	EmailAddress graphEmailAddress    `json:"emailAddress"`
+	Type         string               `json:"type,omitempty"`
+	Status       *graphResponseStatus `json:"status,omitempty"`
+}
+
+// graphRecipient is Graph's organizer shape — same nested emailAddress
+// as graphAttendee but without type/status. Modeled separately to match
+// the wire form precisely.
+type graphRecipient struct {
+	EmailAddress graphEmailAddress `json:"emailAddress"`
+}
+
+type graphEmailAddress struct {
+	Address string `json:"address"`
+	Name    string `json:"name,omitempty"`
+}
+
+type graphResponseStatus struct {
+	Response string `json:"response,omitempty"` // see graphPartStatToICS
+	Time     string `json:"time,omitempty"`
 }
 
 // graphEventStatus is set on delta-removed entries (Graph's delta
@@ -168,6 +197,33 @@ func translateICSToGraphEvent(icsBlob string) (graphEvent, error) {
 		out.ReminderMinutesBeforeStart = &m
 		out.IsReminderOn = &reminderOn
 		break
+	}
+
+	// Attendees + Organizer via the shared ICS parser. Role
+	// REQ-PARTICIPANT → required (Graph default); OPT-PARTICIPANT →
+	// optional; CUTYPE=RESOURCE|ROOM → resource. PartStat via the
+	// centralized map.
+	if atts := parseAttendeesFromVEVENT(&ev); len(atts) > 0 {
+		out.Attendees = make([]graphAttendee, 0, len(atts))
+		for _, a := range atts {
+			ga := graphAttendee{
+				EmailAddress: graphEmailAddress{Address: a.Email, Name: a.CommonName},
+				Type:         "required",
+				Status:       &graphResponseStatus{Response: icsPartStatToGraph(a.PartStat)},
+			}
+			if strings.EqualFold(a.Role, RoleOptParticipant) {
+				ga.Type = "optional"
+			}
+			if strings.EqualFold(a.CUType, CUTypeResource) || strings.EqualFold(a.CUType, CUTypeRoom) {
+				ga.Type = "resource"
+			}
+			out.Attendees = append(out.Attendees, ga)
+		}
+	}
+	if org := parseOrganizerFromVEVENT(&ev); org != nil {
+		out.Organizer = &graphRecipient{
+			EmailAddress: graphEmailAddress{Address: org.Email, Name: org.CommonName},
+		}
 	}
 
 	return out, nil
@@ -475,6 +531,38 @@ func translateGraphEventToICS(ev graphEvent) (string, error) {
 			alarm.Props.SetText(ical.PropDescription, ev.Subject)
 		}
 		icalEv.Component.Children = append(icalEv.Component.Children, alarm)
+	}
+
+	// Organizer + Attendees → ATTENDEE/ORGANIZER ICS lines via the shared
+	// emit helper. Graph's `type` enum maps to ROLE; `status.response` to
+	// PARTSTAT via the centralized map.
+	var orgInput *OrganizerInput
+	if ev.Organizer != nil && ev.Organizer.EmailAddress.Address != "" {
+		orgInput = &OrganizerInput{
+			Email:      ev.Organizer.EmailAddress.Address,
+			CommonName: ev.Organizer.EmailAddress.Name,
+		}
+	}
+	if len(ev.Attendees) > 0 || orgInput != nil {
+		atts := make([]AttendeeInput, 0, len(ev.Attendees))
+		for _, a := range ev.Attendees {
+			ai := AttendeeInput{
+				Email:      a.EmailAddress.Address,
+				CommonName: a.EmailAddress.Name,
+				Role:       RoleReqParticipant,
+			}
+			if strings.EqualFold(a.Type, "optional") {
+				ai.Role = RoleOptParticipant
+			}
+			if strings.EqualFold(a.Type, "resource") {
+				ai.CUType = CUTypeResource
+			}
+			if a.Status != nil {
+				ai.PartStat = graphPartStatToICS(a.Status.Response)
+			}
+			atts = append(atts, ai)
+		}
+		emitAttendeesIntoVEVENT(icalEv, orgInput, atts)
 	}
 
 	cal := ical.NewCalendar()

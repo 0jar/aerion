@@ -67,8 +67,35 @@ type contactsCoreImpl struct {
 	app *App
 }
 
-func (contactsCoreImpl) SearchContacts(string, int) ([]coreapi.Contact, error) {
-	return nil, coreapi.ErrUnimplemented
+// SearchContacts delegates to App.SearchContacts (the same backend mail's
+// composer uses via `Contacts_SearchContacts`) and adapts the flat host
+// contact.Contact shape into the richer coreapi.Contact shape used by
+// cross-extension consumers. First wired for the Calendar extension's
+// attendee picker (Phase C of the v0.3.0 attendees feature) — see
+// docs/EXTENSIONS.md §"Wails-bound surface" for the consumer pattern.
+//
+// Empty query yields []; errors flow through unchanged.
+func (c contactsCoreImpl) SearchContacts(query string, limit int) ([]coreapi.Contact, error) {
+	if c.app == nil {
+		return nil, nil
+	}
+	results, err := c.app.SearchContacts(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]coreapi.Contact, 0, len(results))
+	for _, r := range results {
+		if r == nil || r.Email == "" {
+			continue
+		}
+		out = append(out, coreapi.Contact{
+			ID:        r.Email, // host's flat Contact uses email as identity
+			Name:      r.DisplayName,
+			Emails:    []string{r.Email},
+			UpdatedAt: r.LastUsed,
+		})
+	}
+	return out, nil
 }
 func (contactsCoreImpl) GetContact(string) (*coreapi.Contact, error) {
 	return nil, coreapi.ErrUnimplemented

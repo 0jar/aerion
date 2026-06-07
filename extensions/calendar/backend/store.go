@@ -2,6 +2,7 @@ package backend
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -212,6 +213,60 @@ var migrations = []extensions.Migration{
 			ALTER TABLE calendars ADD COLUMN writable INTEGER NOT NULL DEFAULT 1;
 		`,
 	},
+	{
+		Version: 7,
+		SQL: `
+			-- Attendees + organizer for events. JSON column carries the full
+			-- shape (mirrors the ICS blob as source-of-truth); the side index
+			-- exists so "events where I'm an attendee awaiting RSVP" and
+			-- similar queries don't have to scan + parse every event row's
+			-- JSON. The index is purely derived from attendees_json and is
+			-- rebuilt wholesale on every UpsertEventTx — never written
+			-- independently.
+			--
+			-- attendees_json defaults to '[]' so existing rows after the v7
+			-- migration are well-formed without a backfill; the next sync
+			-- re-parses each event's ics_blob and populates real attendees.
+			-- organizer_json stays NULL when the event has no ORGANIZER (the
+			-- common case for local single-user calendars).
+
+			ALTER TABLE events ADD COLUMN attendees_json TEXT NOT NULL DEFAULT '[]';
+			ALTER TABLE events ADD COLUMN organizer_json TEXT;
+
+			CREATE TABLE event_attendee_index (
+				event_id   TEXT NOT NULL,
+				email_lc   TEXT NOT NULL,
+				is_self    INTEGER NOT NULL DEFAULT 0,
+				part_stat  TEXT NOT NULL,
+				PRIMARY KEY (event_id, email_lc),
+				FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+			);
+			CREATE INDEX idx_event_attendee_email ON event_attendee_index(email_lc);
+		`,
+	},
+	{
+		Version: 8,
+		SQL: `
+			-- Per-source iTIP delivery mode. Probed at source-add time:
+			--   'server' → provider handles invitation delivery (Google +
+			--              Microsoft always; CalDAV servers with RFC 6638's
+			--              calendar-auto-schedule feature).
+			--   'none'   → CalDAV server that doesn't support 6638; the user's
+			--              attendees won't receive invitations from Aerion in
+			--              this release. (SMTP-only 'client' mode is out of
+			--              scope per the v0.3.0 plan.)
+			--
+			-- DEFAULT 'server' makes the migration safe: existing Google and
+			-- Microsoft sources stay correct without re-probing; existing
+			-- CalDAV sources will be re-probed lazily when the user next
+			-- touches an attendee-bearing event (Phase E: probe runs at
+			-- source-add; existing rows fall through to 'server' which works
+			-- if the server supports it, or surfaces as silent no-delivery
+			-- if it doesn't — same as the pre-v0.3.0 behavior).
+
+			ALTER TABLE calendar_sources ADD COLUMN itip_mode TEXT NOT NULL DEFAULT 'server';
+		`,
+	},
 }
 
 // Store wraps the per-extension DB for the Calendar extension. Lives in an
@@ -266,6 +321,12 @@ type Source struct {
 	Enabled         bool   `json:"enabled"`
 	Writable        bool   `json:"writable"`
 	CreatedAt       int64  `json:"createdAt"`
+
+	// ITIPMode: "server" | "none". Probed at source-add time for CalDAV
+	// sources (Phase E). Google + Microsoft are always "server" (provider
+	// handles iTIP delivery natively). Frontend's "Send invitations"
+	// toggle on AttendeesSection grays its choices when this is "none".
+	ITIPMode string `json:"itipMode,omitempty"`
 }
 
 // Calendar is the Go type for one calendar row within a source.
@@ -316,15 +377,19 @@ func (s *Store) CreateSourceTx(tx *sql.Tx, src Source) error {
 	if src.SyncIntervalMin == 0 {
 		src.SyncIntervalMin = 15
 	}
+	if src.ITIPMode == "" {
+		src.ITIPMode = "server"
+	}
 	_, err := tx.Exec(`
 		INSERT INTO calendar_sources (
 			id, type, name, url, username, sync_interval_min,
 			last_synced_at, last_error, last_error_at,
-			account_id, enabled, writable, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			account_id, enabled, writable, created_at, itip_mode
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		src.ID, src.Type, src.Name, src.URL, src.Username, src.SyncIntervalMin,
 		nullIfZero(src.LastSyncedAt), nullIfEmpty(src.LastError), nullIfZero(src.LastErrorAt),
 		nullIfEmpty(src.AccountID), boolToInt(src.Enabled), boolToInt(src.Writable), src.CreatedAt,
+		src.ITIPMode,
 	)
 	if err != nil {
 		return fmt.Errorf("insert calendar_source: %w", err)
@@ -352,14 +417,14 @@ func (s *Store) GetSource(id string) (*Source, error) {
 	row := s.DB().QueryRow(`
 		SELECT id, type, name, url, username, sync_interval_min,
 		       COALESCE(last_synced_at, 0), COALESCE(last_error, ''), COALESCE(last_error_at, 0),
-		       COALESCE(account_id, ''), enabled, writable, created_at
+		       COALESCE(account_id, ''), enabled, writable, created_at, COALESCE(itip_mode, 'server')
 		FROM calendar_sources WHERE id = ?`, id)
 	src := &Source{}
 	var enabled, writable int
 	if err := row.Scan(
 		&src.ID, &src.Type, &src.Name, &src.URL, &src.Username, &src.SyncIntervalMin,
 		&src.LastSyncedAt, &src.LastError, &src.LastErrorAt,
-		&src.AccountID, &enabled, &writable, &src.CreatedAt,
+		&src.AccountID, &enabled, &writable, &src.CreatedAt, &src.ITIPMode,
 	); err != nil {
 		return nil, err
 	}
@@ -373,7 +438,7 @@ func (s *Store) ListSources() ([]Source, error) {
 	rows, err := s.DB().Query(`
 		SELECT id, type, name, url, username, sync_interval_min,
 		       COALESCE(last_synced_at, 0), COALESCE(last_error, ''), COALESCE(last_error_at, 0),
-		       COALESCE(account_id, ''), enabled, writable, created_at
+		       COALESCE(account_id, ''), enabled, writable, created_at, COALESCE(itip_mode, 'server')
 		FROM calendar_sources ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query calendar_sources: %w", err)
@@ -387,7 +452,7 @@ func (s *Store) ListSources() ([]Source, error) {
 		if err := rows.Scan(
 			&src.ID, &src.Type, &src.Name, &src.URL, &src.Username, &src.SyncIntervalMin,
 			&src.LastSyncedAt, &src.LastError, &src.LastErrorAt,
-			&src.AccountID, &enabled, &writable, &src.CreatedAt,
+			&src.AccountID, &enabled, &writable, &src.CreatedAt, &src.ITIPMode,
 		); err != nil {
 			return nil, fmt.Errorf("scan calendar_source: %w", err)
 		}
@@ -562,6 +627,20 @@ type Event struct {
 	TZName          string `json:"tzName,omitempty"`
 	RRuleText       string `json:"rruleText,omitempty"`
 	ICSBlob         string `json:"-"` // not exposed to frontend; used by rrule_expand
+
+	// Attendees + Organizer. Populated by the ICS parser on read; written
+	// back into the JSON columns by UpsertEventTx. Types defined in
+	// attendee_types.go.
+	Attendees []Attendee `json:"attendees,omitempty"`
+	Organizer *Organizer `json:"organizer,omitempty"`
+
+	// SendUpdates is a transient write-time hint copied from EventInput by
+	// the create/update flows; providers append it to their request URL or
+	// header as appropriate. NOT persisted (excluded from JSON for the
+	// frontend; not written by UpsertEventTx). Values: "all" |
+	// "externalOnly" | "none" | "". Empty falls through to the provider's
+	// default behavior. Phase E of the v0.3.0 attendees plan.
+	SendUpdates string `json:"-"`
 }
 
 // EventInstance is one occurrence of an Event in a queried time window.
@@ -588,6 +667,8 @@ type EventOverride struct {
 
 // UpsertEventTx inserts or replaces an events row inside a transaction.
 // On conflict (calendar_id + uid), all mutable columns are updated.
+// Attendees + Organizer are serialized to their JSON columns, then the
+// derived event_attendee_index rows are rebuilt wholesale (delete + insert).
 func (s *Store) UpsertEventTx(tx *sql.Tx, ev Event) error {
 	if ev.ID == "" {
 		return errors.New("calendar.Store: event ID required")
@@ -598,13 +679,32 @@ func (s *Store) UpsertEventTx(tx *sql.Tx, ev Event) error {
 	if ev.UID == "" {
 		return errors.New("calendar.Store: event UID required")
 	}
-	_, err := tx.Exec(`
+
+	attendeesJSON, err := json.Marshal(ev.Attendees)
+	if err != nil {
+		return fmt.Errorf("marshal attendees: %w", err)
+	}
+	if len(ev.Attendees) == 0 {
+		// Normalize nil slices to "[]" so the column never holds NULL or
+		// "null" — keeps downstream consumers from branching.
+		attendeesJSON = []byte("[]")
+	}
+	var organizerJSON sql.NullString
+	if ev.Organizer != nil {
+		b, err := json.Marshal(ev.Organizer)
+		if err != nil {
+			return fmt.Errorf("marshal organizer: %w", err)
+		}
+		organizerJSON = sql.NullString{String: string(b), Valid: true}
+	}
+
+	_, err = tx.Exec(`
 		INSERT INTO events (
 			id, calendar_id, uid, etag, href, provider_event_id,
 			summary, description, location,
 			dtstart_unix, dtend_unix, is_all_day, tz_name,
-			rrule_text, ics_blob
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			rrule_text, ics_blob, attendees_json, organizer_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(calendar_id, uid) DO UPDATE SET
 			etag = excluded.etag,
 			href = excluded.href,
@@ -617,14 +717,46 @@ func (s *Store) UpsertEventTx(tx *sql.Tx, ev Event) error {
 			is_all_day = excluded.is_all_day,
 			tz_name = excluded.tz_name,
 			rrule_text = excluded.rrule_text,
-			ics_blob = excluded.ics_blob`,
+			ics_blob = excluded.ics_blob,
+			attendees_json = excluded.attendees_json,
+			organizer_json = excluded.organizer_json`,
 		ev.ID, ev.CalendarID, ev.UID, ev.ETag, ev.Href, ev.ProviderEventID,
 		ev.Summary, nullIfEmpty(ev.Description), nullIfEmpty(ev.Location),
 		ev.DTStartUnix, ev.DTEndUnix, boolToInt(ev.IsAllDay), nullIfEmpty(ev.TZName),
-		nullIfEmpty(ev.RRuleText), ev.ICSBlob,
+		nullIfEmpty(ev.RRuleText), ev.ICSBlob, string(attendeesJSON), organizerJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert event: %w", err)
+	}
+
+	// Rebuild the side index from the freshly-stored attendees. The
+	// `events` row's ID may have just been inserted, but we use the
+	// caller-supplied ID — which matches ON CONFLICT semantics (the
+	// stored ID survives on update too).
+	if _, err := tx.Exec(`DELETE FROM event_attendee_index WHERE event_id = ?`, ev.ID); err != nil {
+		return fmt.Errorf("rebuild attendee index: %w", err)
+	}
+	for _, a := range ev.Attendees {
+		email := strings.ToLower(strings.TrimSpace(a.Email))
+		if email == "" {
+			continue
+		}
+		partStat := a.PartStat
+		if partStat == "" {
+			partStat = PartStatNeedsAction
+		}
+		// is_self is populated to 0 here; the API layer (Phase D) sets it
+		// based on the union of account + identity emails when it loads the
+		// event for RSVP UI. The index is just a query accelerator; the
+		// is_self flag is a denormalization the caller can refresh on
+		// demand.
+		if _, err := tx.Exec(`
+			INSERT INTO event_attendee_index (event_id, email_lc, is_self, part_stat)
+			VALUES (?, ?, 0, ?)
+			ON CONFLICT(event_id, email_lc) DO UPDATE SET part_stat = excluded.part_stat
+		`, ev.ID, email, partStat); err != nil {
+			return fmt.Errorf("insert attendee index: %w", err)
+		}
 	}
 	return nil
 }
@@ -671,19 +803,34 @@ func (s *Store) GetEvent(id string) (*Event, error) {
 		SELECT id, calendar_id, uid, etag, href, provider_event_id,
 		       summary, COALESCE(description, ''), COALESCE(location, ''),
 		       dtstart_unix, dtend_unix, is_all_day, COALESCE(tz_name, ''),
-		       COALESCE(rrule_text, ''), ics_blob
+		       COALESCE(rrule_text, ''), ics_blob,
+		       attendees_json, organizer_json
 		FROM events WHERE id = ?`, id)
 	ev := &Event{}
 	var isAllDay int
+	var attendeesJSON string
+	var organizerJSON sql.NullString
 	if err := row.Scan(
 		&ev.ID, &ev.CalendarID, &ev.UID, &ev.ETag, &ev.Href, &ev.ProviderEventID,
 		&ev.Summary, &ev.Description, &ev.Location,
 		&ev.DTStartUnix, &ev.DTEndUnix, &isAllDay, &ev.TZName,
-		&ev.RRuleText, &ev.ICSBlob,
+		&ev.RRuleText, &ev.ICSBlob, &attendeesJSON, &organizerJSON,
 	); err != nil {
 		return nil, err
 	}
 	ev.IsAllDay = isAllDay != 0
+	if attendeesJSON != "" && attendeesJSON != "null" {
+		if err := json.Unmarshal([]byte(attendeesJSON), &ev.Attendees); err != nil {
+			return nil, fmt.Errorf("unmarshal attendees: %w", err)
+		}
+	}
+	if organizerJSON.Valid && organizerJSON.String != "" && organizerJSON.String != "null" {
+		var org Organizer
+		if err := json.Unmarshal([]byte(organizerJSON.String), &org); err != nil {
+			return nil, fmt.Errorf("unmarshal organizer: %w", err)
+		}
+		ev.Organizer = &org
+	}
 	return ev, nil
 }
 
@@ -705,7 +852,8 @@ func (s *Store) ListEventsForExpansion(calendarIDs []string) ([]Event, error) {
 		SELECT id, calendar_id, uid, etag, href, provider_event_id,
 		       summary, COALESCE(description, ''), COALESCE(location, ''),
 		       dtstart_unix, dtend_unix, is_all_day, COALESCE(tz_name, ''),
-		       COALESCE(rrule_text, ''), ics_blob
+		       COALESCE(rrule_text, ''), ics_blob,
+		       attendees_json, organizer_json
 		FROM events WHERE calendar_id IN (%s)`,
 		strings.Join(placeholders, ","))
 
@@ -719,15 +867,29 @@ func (s *Store) ListEventsForExpansion(calendarIDs []string) ([]Event, error) {
 	for rows.Next() {
 		var ev Event
 		var isAllDay int
+		var attendeesJSON string
+		var organizerJSON sql.NullString
 		if err := rows.Scan(
 			&ev.ID, &ev.CalendarID, &ev.UID, &ev.ETag, &ev.Href, &ev.ProviderEventID,
 			&ev.Summary, &ev.Description, &ev.Location,
 			&ev.DTStartUnix, &ev.DTEndUnix, &isAllDay, &ev.TZName,
-			&ev.RRuleText, &ev.ICSBlob,
+			&ev.RRuleText, &ev.ICSBlob, &attendeesJSON, &organizerJSON,
 		); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		ev.IsAllDay = isAllDay != 0
+		if attendeesJSON != "" && attendeesJSON != "null" {
+			if err := json.Unmarshal([]byte(attendeesJSON), &ev.Attendees); err != nil {
+				return nil, fmt.Errorf("unmarshal attendees: %w", err)
+			}
+		}
+		if organizerJSON.Valid && organizerJSON.String != "" && organizerJSON.String != "null" {
+			var org Organizer
+			if err := json.Unmarshal([]byte(organizerJSON.String), &org); err != nil {
+				return nil, fmt.Errorf("unmarshal organizer: %w", err)
+			}
+			ev.Organizer = &org
+		}
 		out = append(out, ev)
 	}
 	if err := rows.Err(); err != nil {

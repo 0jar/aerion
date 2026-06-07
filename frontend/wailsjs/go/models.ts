@@ -752,6 +752,56 @@ export namespace appstate {
 
 export namespace backend {
 	
+	export class Attendee {
+	    email: string;
+	    cn?: string;
+	    partStat?: string;
+	    role?: string;
+	    rsvp?: boolean;
+	    cuType?: string;
+	    delegate?: string;
+	    scheduleStatus?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Attendee(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.cn = source["cn"];
+	        this.partStat = source["partStat"];
+	        this.role = source["role"];
+	        this.rsvp = source["rsvp"];
+	        this.cuType = source["cuType"];
+	        this.delegate = source["delegate"];
+	        this.scheduleStatus = source["scheduleStatus"];
+	    }
+	}
+	export class AttendeeInput {
+	    email: string;
+	    cn?: string;
+	    partStat?: string;
+	    role?: string;
+	    rsvp?: boolean;
+	    cuType?: string;
+	    delegate?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AttendeeInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.cn = source["cn"];
+	        this.partStat = source["partStat"];
+	        this.role = source["role"];
+	        this.rsvp = source["rsvp"];
+	        this.cuType = source["cuType"];
+	        this.delegate = source["delegate"];
+	    }
+	}
 	export class Calendar {
 	    id: string;
 	    sourceId: string;
@@ -784,6 +834,20 @@ export namespace backend {
 	        this.createdAt = source["createdAt"];
 	    }
 	}
+	export class Organizer {
+	    email: string;
+	    cn?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Organizer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.cn = source["cn"];
+	    }
+	}
 	export class Event {
 	    id: string;
 	    calendarId: string;
@@ -799,6 +863,8 @@ export namespace backend {
 	    isAllDay: boolean;
 	    tzName?: string;
 	    rruleText?: string;
+	    attendees?: Attendee[];
+	    organizer?: Organizer;
 	
 	    static createFrom(source: any = {}) {
 	        return new Event(source);
@@ -820,6 +886,40 @@ export namespace backend {
 	        this.isAllDay = source["isAllDay"];
 	        this.tzName = source["tzName"];
 	        this.rruleText = source["rruleText"];
+	        this.attendees = this.convertValues(source["attendees"], Attendee);
+	        this.organizer = this.convertValues(source["organizer"], Organizer);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OrganizerInput {
+	    email: string;
+	    cn?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrganizerInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.cn = source["cn"];
 	    }
 	}
 	export class ReminderSpec {
@@ -861,6 +961,9 @@ export namespace backend {
 	    tz?: string;
 	    recurrence?: RecurrenceSpec;
 	    reminder?: ReminderSpec;
+	    attendees?: AttendeeInput[];
+	    organizer?: OrganizerInput;
+	    sendUpdates?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new EventInput(source);
@@ -878,6 +981,9 @@ export namespace backend {
 	        this.tz = source["tz"];
 	        this.recurrence = this.convertValues(source["recurrence"], RecurrenceSpec);
 	        this.reminder = this.convertValues(source["reminder"], ReminderSpec);
+	        this.attendees = this.convertValues(source["attendees"], AttendeeInput);
+	        this.organizer = this.convertValues(source["organizer"], OrganizerInput);
+	        this.sendUpdates = source["sendUpdates"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -913,6 +1019,8 @@ export namespace backend {
 	    isAllDay: boolean;
 	    tzName?: string;
 	    rruleText?: string;
+	    attendees?: Attendee[];
+	    organizer?: Organizer;
 	    instanceStartUnix: number;
 	    instanceEndUnix: number;
 	    isRecurrenceOverride?: boolean;
@@ -937,10 +1045,30 @@ export namespace backend {
 	        this.isAllDay = source["isAllDay"];
 	        this.tzName = source["tzName"];
 	        this.rruleText = source["rruleText"];
+	        this.attendees = this.convertValues(source["attendees"], Attendee);
+	        this.organizer = this.convertValues(source["organizer"], Organizer);
 	        this.instanceStartUnix = source["instanceStartUnix"];
 	        this.instanceEndUnix = source["instanceEndUnix"];
 	        this.isRecurrenceOverride = source["isRecurrenceOverride"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class EventUpdateInput {
 	    eventId: string;
@@ -954,6 +1082,9 @@ export namespace backend {
 	    tz?: string;
 	    recurrence?: RecurrenceSpec;
 	    reminder?: ReminderSpec;
+	    attendees?: AttendeeInput[];
+	    organizer?: OrganizerInput;
+	    sendUpdates?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new EventUpdateInput(source);
@@ -972,6 +1103,61 @@ export namespace backend {
 	        this.tz = source["tz"];
 	        this.recurrence = this.convertValues(source["recurrence"], RecurrenceSpec);
 	        this.reminder = this.convertValues(source["reminder"], ReminderSpec);
+	        this.attendees = this.convertValues(source["attendees"], AttendeeInput);
+	        this.organizer = this.convertValues(source["organizer"], OrganizerInput);
+	        this.sendUpdates = source["sendUpdates"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FreeBusyBlock {
+	    email: string;
+	    startUnix: number;
+	    endUnix: number;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FreeBusyBlock(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.startUnix = source["startUnix"];
+	        this.endUnix = source["endUnix"];
+	        this.status = source["status"];
+	    }
+	}
+	export class FreeBusyResult {
+	    email: string;
+	    blocks: FreeBusyBlock[];
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FreeBusyResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.blocks = this.convertValues(source["blocks"], FreeBusyBlock);
+	        this.source = source["source"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1068,6 +1254,8 @@ export namespace backend {
 	}
 	
 	
+	
+	
 	export class ResizedContactPhoto {
 	    data: string;
 	    mediaType: string;
@@ -1096,6 +1284,7 @@ export namespace backend {
 	    enabled: boolean;
 	    writable: boolean;
 	    createdAt: number;
+	    itipMode?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Source(source);
@@ -1116,6 +1305,7 @@ export namespace backend {
 	        this.enabled = source["enabled"];
 	        this.writable = source["writable"];
 	        this.createdAt = source["createdAt"];
+	        this.itipMode = source["itipMode"];
 	    }
 	}
 

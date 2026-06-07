@@ -25,6 +25,7 @@
   import { toasts } from '$lib/stores/toast'
   // @ts-ignore - wailsjs bindings
   import { Calendar_UpdateEvent } from '$wailsjs/go/app/App.js'
+  import SendInvitationsDialog from '$extensions/calendar/frontend/components/SendInvitationsDialog.svelte'
   // @ts-ignore - wailsjs bindings
   import type { backend } from '$wailsjs/go/models'
 
@@ -396,9 +397,42 @@
     masterCalendarID: string
     masterIsAllDay: boolean
     masterTZName: string
+    // Attendees + organizer snapshot so drag-drop preserves them across
+    // the save (without these, the backend's updateAllAndPush wipes the
+    // attendee list because it always overwrites ev.Attendees from in.Attendees).
+    masterAttendees: backend.AttendeeInput[]
+    masterOrganizer: backend.OrganizerInput | null
+    // sourceKind for the SendInvitationsDialog provider note.
+    masterSourceKind: 'google' | 'microsoft' | 'caldav-server' | 'caldav-none' | 'local' | ''
   }
 
   let dragState = $state<DragState | null>(null)
+
+  // Pending dragState held while SendInvitationsDialog is open — once the
+  // user picks Send / Don't send, we fire performDragSave with the
+  // chosen sendUpdates value. Cancel just clears dragState (visual snap
+  // back to original position via the block.instance fallback).
+  let pendingDragSave = $state<{ ds: DragState; newStartUnix: number; newEndUnix: number } | null>(null)
+  let sendInvitationsOpen = $state(false)
+
+  // sourceKind for the dragged event's calendar — used by the dialog's
+  // provider note (matches EventComposerDialog's derivation logic).
+  function sourceKindOf(calendarId: string): DragState['masterSourceKind'] {
+    for (const src of calendarSources.sources) {
+      const cals = calendarSources.calendarsBySource[src.id] || []
+      for (const cal of cals) {
+        if (cal.id !== calendarId) continue
+        switch (src.type) {
+          case 'google':    return 'google'
+          case 'microsoft': return 'microsoft'
+          case 'local':     return 'local'
+          case 'caldav':    return src.itipMode === 'none' ? 'caldav-none' : 'caldav-server'
+        }
+        return ''
+      }
+    }
+    return ''
+  }
   let wasDragged = $state(false)
   let saving = $state(false)
 
@@ -452,6 +486,23 @@
       masterCalendarID: block.instance.calendarId,
       masterIsAllDay: !!block.instance.isAllDay,
       masterTZName: block.instance.tzName ?? '',
+      // Snapshot attendees + organizer so the save preserves them. Drop
+      // server-side fields like scheduleStatus when remapping Attendee →
+      // AttendeeInput (those are output-only and would break Wails
+      // serialization).
+      masterAttendees: (block.instance.attendees ?? []).map(a => ({
+        email: a.email,
+        cn: a.cn ?? '',
+        partStat: a.partStat ?? 'NEEDS-ACTION',
+        role: a.role ?? 'REQ-PARTICIPANT',
+        rsvp: a.rsvp ?? false,
+        cuType: a.cuType ?? '',
+        delegate: a.delegate ?? '',
+      })) as unknown as backend.AttendeeInput[],
+      masterOrganizer: block.instance.organizer
+        ? { email: block.instance.organizer.email, cn: block.instance.organizer.cn ?? '' }
+        : null,
+      masterSourceKind: sourceKindOf(block.instance.calendarId),
     }
   }
 
@@ -545,8 +596,23 @@
       }
     }
 
-    // saving = true already set synchronously by onWindowPointerUp; we
-    // keep dragState set so the block stays visually at the snapped target.
+    // If the event has attendees, intercept with SendInvitationsDialog
+    // (same UX as Edit-via-composer). Cancel reverts the visual snap.
+    // Otherwise save directly.
+    if (ds.masterAttendees.length > 0) {
+      pendingDragSave = { ds, newStartUnix, newEndUnix }
+      sendInvitationsOpen = true
+      return
+    }
+    await performDragSave(ds, newStartUnix, newEndUnix, 'all')
+  }
+
+  async function performDragSave(
+    ds: DragState,
+    newStartUnix: number,
+    newEndUnix: number,
+    sendUpdates: string,
+  ) {
     try {
       await Calendar_UpdateEvent({
         eventId: ds.eventId,
@@ -561,6 +627,13 @@
         // event must not silently re-label it as UTC just because the drag
         // touchpoint happens to live in the user's effective-tz grid.
         tz: ds.masterTZName || undefined,
+        // Preserve attendees + organizer across the drag. Without these,
+        // the backend's updateAllAndPush would wipe the attendee list
+        // (in.Attendees absent → in.Attendees is nil → backend overwrites
+        // ev.Attendees with nil).
+        attendees: ds.masterAttendees,
+        organizer: ds.masterOrganizer ?? undefined,
+        sendUpdates: ds.masterAttendees.length > 0 ? sendUpdates : undefined,
       } as unknown as backend.EventUpdateInput, 'all')
       // Wait for the events store to reflect the new state BEFORE clearing
       // dragState — otherwise the block would briefly snap back to its old
@@ -574,7 +647,24 @@
     } finally {
       saving = false
       dragState = null
+      pendingDragSave = null
     }
+  }
+
+  async function onSendInvitationsConfirm(sendUpdates: string) {
+    const pending = pendingDragSave
+    if (!pending) return
+    await performDragSave(pending.ds, pending.newStartUnix, pending.newEndUnix, sendUpdates)
+  }
+
+  function onSendInvitationsCancel() {
+    // User backed out of the move — revert the visual snap. Clearing
+    // dragState makes the block render at block.instance's original
+    // position (no commit happened, so the master event still has the
+    // old times).
+    saving = false
+    dragState = null
+    pendingDragSave = null
   }
 
   // Hover-cursor handler: switches between grab (body) and ns-resize
@@ -816,3 +906,11 @@
     </div>
   </div>
 </div>
+
+<SendInvitationsDialog
+  bind:open={sendInvitationsOpen}
+  attendeeCount={pendingDragSave?.ds.masterAttendees.length ?? 0}
+  sourceKind={pendingDragSave?.ds.masterSourceKind ?? ''}
+  onConfirm={onSendInvitationsConfirm}
+  onCancel={onSendInvitationsCancel}
+/>
