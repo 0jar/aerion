@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -603,4 +604,57 @@ func (b *CalendarBridge) Calendar_AddMicrosoftSource(accountID, name string, sel
 	}
 	b.syncer.AddSource(sourceID, 15)
 	return sourceID, nil
+}
+
+// Calendar_GrantCalendarAccess runs an interactive incremental-consent OAuth
+// flow that adds the Calendar scope to the given mail account's existing
+// OAuth grant. The account's mail OAuth flow doesn't request any calendar
+// scopes by default, so the first time the user tries to add a Google /
+// Outlook calendar source we surface ErrAdditionalConsentRequired; the
+// frontend's consent banner offers a button that calls this method.
+//
+// After the OAuth window closes, the account's tokens carry the new scope
+// under the calendar client config; the next Calendar_List*ForAccount call
+// succeeds and the picker UI populates. Mirrors contacts'
+// Contacts_EnableWriteAccess flow shape.
+//
+// `provider` is "google" or "microsoft"; `accountID` is the existing Aerion
+// mail account; `expectedEmail` is the email that the OAuth grant must
+// match (defense against the user picking a different account in the IdP
+// window).
+func (b *CalendarBridge) Calendar_GrantCalendarAccess(provider, accountID, expectedEmail string) error {
+	if !b.gateEnabled() {
+		return errors.New("calendar: extension disabled")
+	}
+	if accountID == "" {
+		return errors.New("calendar: accountID is required")
+	}
+	if expectedEmail == "" {
+		return errors.New("calendar: expectedEmail is required")
+	}
+	if b.deps.Core == nil {
+		return errors.New("calendar: core handle not wired")
+	}
+
+	var clientConfigID coreapi.ClientConfigID
+	var scope string
+	switch provider {
+	case "google":
+		clientConfigID = "google-calendar"
+		scope = "https://www.googleapis.com/auth/calendar"
+	case "microsoft":
+		clientConfigID = "microsoft-calendar"
+		scope = "https://graph.microsoft.com/Calendars.ReadWrite"
+	default:
+		return fmt.Errorf("calendar: unsupported provider %q", provider)
+	}
+
+	req := coreapi.StartIncrementalConsentRequest{
+		ClientConfigID: clientConfigID,
+		AccountID:      accountID,
+		Scopes:         []coreapi.AuthScope{{Resource: scope}},
+		ExpectedEmail:  expectedEmail,
+		LoginHint:      expectedEmail,
+	}
+	return b.deps.Core.Auth().StartIncrementalConsent(req)
 }

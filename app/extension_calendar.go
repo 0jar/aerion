@@ -1,9 +1,7 @@
 package app
 
 import (
-	"github.com/hkdb/aerion/extensions/calendar"
 	extcalendarbe "github.com/hkdb/aerion/extensions/calendar/backend"
-	"github.com/hkdb/aerion/internal/oauth2"
 )
 
 // initCalendarExtension wires the Calendar extension's Bridge into App
@@ -32,10 +30,7 @@ func (a *App) initCalendarExtension() {
 		Core:          calendarCore,
 	})
 
-	// Register the extension's declared OAuth client configs with the global
-	// resolver. Phase 1A: both slots have empty client IDs (unless ldflag-
-	// injected at build time); the resolver returns (zero, false) for empty
-	// slots and the chain falls through normally. Phase 2 wires Google /
-	// Microsoft providers behind these slots.
-	oauth2.RegisterCredentialsProvider(extensionOAuthProvider(calendar.OAuthClients()))
+	// All OAuth slot resolution lives in internal/oauth2/core_provider.go
+	// now — google-calendar and microsoft-calendar are owned there. The
+	// calendar extension package carries no OAuth client vars of its own.
 }

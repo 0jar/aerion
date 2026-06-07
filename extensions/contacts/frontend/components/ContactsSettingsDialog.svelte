@@ -141,11 +141,13 @@
         <div class="space-y-3">
           <OAuthCredsSlotEditor
             configID="google-contacts"
+            extensionID="contacts"
             label={$_('contacts.settings.googleLabel')}
             secretRequired={true}
           />
           <OAuthCredsSlotEditor
             configID="microsoft-contacts"
+            extensionID="contacts"
             label={$_('contacts.settings.microsoftLabel')}
             secretRequired={false}
           />

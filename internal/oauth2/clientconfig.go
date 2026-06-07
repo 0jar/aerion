@@ -35,6 +35,14 @@ type CredentialsProvider interface {
 // store package; can be nil during tests or if user-overrides are unused.
 var UserOverrideLookup func(configID string) (ClientCredentials, bool)
 
+// SlotAliasLookup is an optional pluggable hook that maps one slot id onto
+// another (Settings → OAuth Credentials → pick "Aerion mail client"). When
+// non-nil and the user has set an alias for the given configID, the lookup
+// resolves to the aliased target instead of the slot's own creds. Checked
+// AFTER UserOverrideLookup (custom creds win over an alias) and BEFORE the
+// provider chain. Set during App.Startup by the credentials store package.
+var SlotAliasLookup func(configID string) (target string, ok bool)
+
 var (
 	providersMu sync.RWMutex
 	providers   []CredentialsProvider
@@ -56,22 +64,64 @@ func RegisterCredentialsProvider(p CredentialsProvider) {
 // ClientConfigForID returns the credentials registered for the given client
 // config id. Resolution order:
 //
-//  1. User override from credentials.Store (Settings UI override), if any
-//  2. Walk registered CredentialsProviders in registration order
-//  3. (zero, false) if nothing matches
+//  1. User override from credentials.Store (Settings UI "Custom" choice).
+//  2. User-set slot alias (Settings UI "Aerion mail client" or similar
+//     non-default shipped choice) — recursive lookup on the target slot.
+//  3. Walk registered CredentialsProviders in registration order.
+//  4. (zero, false) if nothing matches.
 //
-// Known config ids today: 'google-mail' / 'microsoft-mail' (Aerion core),
-// 'google-contacts' / 'microsoft-contacts' (Contacts extension), and
-// (future) 'google-calendar' / 'microsoft-calendar' (Calendar extension).
-// Extension provider registration happens in each extension's package; if
-// the extension hasn't been compiled in (or its credentials aren't yet
-// provisioned), its slots return (zero, false) gracefully.
+// Known config ids today: 'google-mail' / 'microsoft-mail' (Aerion core
+// owns both, plus microsoft-contacts + microsoft-calendar which are
+// registered as core aliases of microsoft-mail), 'google-contacts'
+// (Contacts extension), 'google-calendar' (Calendar extension).
 func ClientConfigForID(id string) (ClientCredentials, bool) {
-	if UserOverrideLookup != nil {
-		if creds, ok := UserOverrideLookup(id); ok {
+	return clientConfigForIDDepth(id, 0)
+}
+
+// clientConfigForIDDepth caps recursive alias resolution at one hop so a
+// misconfigured cycle (e.g., A→B→A) terminates safely. Depth 0 is the
+// initial call; depth ≥1 means we're already resolving an alias and
+// further aliases are ignored.
+//
+// The package-level hook variables (UserOverrideLookup, SlotAliasLookup)
+// are captured into locals before nil-checking + calling. Without that
+// capture the compiler is free to re-read the global between the nil
+// check and the call, and a concurrent writer to the variable (settings
+// UI probing shipped creds) could surface a nil dereference here. Today
+// nothing else writes to these globals at runtime, but the local capture
+// also makes intent explicit and survives future refactors.
+func clientConfigForIDDepth(id string, depth int) (ClientCredentials, bool) {
+	if override := UserOverrideLookup; override != nil {
+		if creds, ok := override(id); ok {
 			return creds, true
 		}
 	}
+	if depth == 0 {
+		if alias := SlotAliasLookup; alias != nil {
+			if target, ok := alias(id); ok && target != "" && target != id {
+				return clientConfigForIDDepth(target, depth+1)
+			}
+		}
+	}
+	providersMu.RLock()
+	defer providersMu.RUnlock()
+	for _, p := range providers {
+		if creds, ok := p.Lookup(id); ok {
+			return creds, true
+		}
+	}
+	return ClientCredentials{}, false
+}
+
+// ShippedClientConfigForID returns whatever the registered provider chain
+// resolves for the given id, bypassing any user override and any user-set
+// slot alias. Used by the settings UI when it needs to know whether the
+// slot's own shipped creds exist independent of the user's current pick.
+//
+// This exists so probing for "is there a shipped option?" doesn't have to
+// mutate the global hook variables — that pattern was racy against
+// concurrent ClientConfigForID readers (every OAuth refresh).
+func ShippedClientConfigForID(id string) (ClientCredentials, bool) {
 	providersMu.RLock()
 	defer providersMu.RUnlock()
 	for _, p := range providers {

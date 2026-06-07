@@ -463,6 +463,19 @@ func (a *App) Preflight() error {
 		return oauth2.ClientCredentials{ClientID: clientID, ClientSecret: clientSecret}, true
 	}
 
+	// Wire user-picked slot aliases into the oauth2 resolver chain. When the
+	// user has chosen a non-default shipped option for a given config id
+	// (e.g., contacts settings → "Aerion mail client" reroutes google-contacts
+	// onto google-mail), the resolver consults this hook after the user-
+	// override step and before the provider chain.
+	oauth2.SlotAliasLookup = func(configID string) (string, bool) {
+		target, ok, err := credStore.GetOAuthSlotAlias(configID)
+		if err != nil || !ok {
+			return "", false
+		}
+		return target, true
+	}
+
 	return nil
 }
 
@@ -584,6 +597,14 @@ func (a *App) Startup(ctx context.Context) {
 	a.carddavSyncer = carddav.NewSyncer(a.carddavStore, a.credStore)
 	a.carddavScheduler = carddav.NewScheduler(a.carddavSyncer, a.carddavStore)
 
+	// Initialize the OAuth2 manager BEFORE constructing the Auth Broker — the
+	// broker captures a.oauth2Manager into bearerRefreshTransport at construction
+	// time, so a later assignment would leave every extension's HTTP client with
+	// a nil oauthManager and SIGSEGV on the first 401-triggered token refresh.
+	if a.oauth2Manager == nil {
+		a.oauth2Manager = oauth2.NewManager()
+	}
+
 	// Extension system (Phase 1 infrastructure). Per the lightweight-by-default
 	// invariant, NO extension stores are opened here. Each extension's Bridge
 	// lazy-initializes its stores + per-extension SQLite + API on the first
@@ -655,8 +676,8 @@ func (a *App) Startup(ctx context.Context) {
 	// Initialize undo stack (max 50 commands, 30 second timeout)
 	a.undoStack = undo.NewStack(50, 30*time.Second)
 
-	// Initialize OAuth2 manager for token refresh
-	a.oauth2Manager = oauth2.NewManager()
+	// OAuth2 manager was constructed earlier (before the Auth Broker, which
+	// captures it). See the earlier guarded init above for the rationale.
 
 	// Initialize shared compose operations (used by both App and ComposerApp)
 	a.composeOps = composeOps{

@@ -1,34 +1,9 @@
 package app
 
 import (
-	"github.com/hkdb/aerion/extensions/contacts"
 	extcontactsbe "github.com/hkdb/aerion/extensions/contacts/backend"
-	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
-	"github.com/hkdb/aerion/internal/oauth2"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
-
-// extensionOAuthProvider adapts a slice of coreapi.OAuthProviderRegistration
-// entries into an oauth2.CredentialsProvider. Used to register a single
-// extension's OAuth client configs into the global resolver chain without
-// the extension itself having to import internal/oauth2.
-type extensionOAuthProvider []coreapi.OAuthProviderRegistration
-
-func (p extensionOAuthProvider) Lookup(configID string) (oauth2.ClientCredentials, bool) {
-	for _, r := range p {
-		if r.ConfigID != configID {
-			continue
-		}
-		if r.ClientID == "" {
-			return oauth2.ClientCredentials{}, false
-		}
-		return oauth2.ClientCredentials{
-			ClientID:     r.ClientID,
-			ClientSecret: r.ClientSecret,
-		}, true
-	}
-	return oauth2.ClientCredentials{}, false
-}
 
 // initContactsExtension wires the Contacts extension's Bridge into App
 // during Startup. All bridge logic lives in extensions/contacts/backend/
@@ -68,11 +43,7 @@ func (a *App) initContactsExtension() {
 		Core: contactsCore,
 	})
 
-	// Register the extension's declared OAuth client configs with the
-	// global resolver. The extension declares pairs as
-	// coreapi.OAuthProviderRegistration entries — the host wraps them in
-	// an oauth2.CredentialsProvider adapter so the extension never imports
-	// internal/oauth2 directly. Replaces the prior package-init registration
-	// that lived inside the extension's creds.go.
-	oauth2.RegisterCredentialsProvider(extensionOAuthProvider(contacts.OAuthClients()))
+	// All OAuth slot resolution lives in internal/oauth2/core_provider.go
+	// now — google-contacts and microsoft-contacts are owned there. The
+	// contacts extension package carries no OAuth client vars of its own.
 }

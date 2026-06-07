@@ -1908,10 +1908,16 @@ microsoft-calendar     ← Calendar extension (future)
 Each extension's package contains:
 - `extensions/<name>/manifest.json` — declares the extension
 - `extensions/<name>/manifest.go` — embeds the manifest JSON
-- `extensions/<name>/creds.go` — package-level `GoogleClientID` / `GoogleClientSecret` / `MicrosoftClientID` vars + a `CredentialsProvider` registered with `oauth2.RegisterCredentialsProvider`
-- `extensions/<name>/.env.example` — template for build-time injection of those vars
 
-See [`extensions/contacts/creds.go`](../extensions/contacts/creds.go) for the canonical pattern. Vars can be injected via Makefile ldflags from `extensions/<name>/.env` or a per-extension shim binary; if both are empty, the slot resolves to `(zero, false)` and the consent prompt fires.
+**No per-extension OAuth credentials live in extension packages.** All slot resolution is centralized in [`internal/oauth2/core_provider.go`](../internal/oauth2/core_provider.go), backed by three build-time ldflags variable pairs in `internal/oauth2/config.go`:
+
+| Variable | Slots backed | Surfaced in picker as | Notes |
+|---|---|---|---|
+| `GoogleClientID` / `GoogleClientSecret` | `google-mail` | "Aerion - Google" | Mail's Google-verified project. Also routable for scopes that an extension manifest lists in `first_party_uses_core_for_scopes` (today: contacts.readonly). |
+| `GoogleTestingClientID` / `GoogleTestingClientSecret` | `google-contacts`, `google-calendar` | "Aerion - Google (Testing)" | **Single shared un-Google-verified test project** that backs every first-party extension needing broader Google scopes (contacts.readwrite, full Calendar). When the mail project eventually gets verified for those scopes, the default in the picker UI switches to "Aerion - Google" and this slot becomes a fallback. |
+| `MicrosoftClientID` | `microsoft-mail`, `microsoft-contacts`, `microsoft-calendar` | "Aerion - Microsoft" | One Azure AD app registration covers all three surfaces. Microsoft Graph doesn't gate scopes behind verification, so adding `Contacts.ReadWrite` / `Calendars.ReadWrite` to the existing mail registration is free. |
+
+ldflags injection happens via the root `Makefile`'s LDFLAGS rules from the root `.env` / `.env.local`. Extension packages stay focused on domain logic — no `creds.go`, no `OAuthClients()`, no per-extension env file. If a slot's underlying variable is empty, the slot resolves to `(zero, false)` and the picker UI omits the corresponding option.
 
 ### Manifest OAuth routing — `first_party_uses_core_for_scopes`
 
@@ -1952,18 +1958,22 @@ Users can paste their own Client ID + Secret per slot via Aerion's settings:
 - **Aerion core's `*-mail` slots** → Settings → Accounts → "OAuth Credentials (advanced)" disclosure (collapsed by default). See [`AerionCoreOAuthSection.svelte`](../frontend/src/lib/components/settings/AerionCoreOAuthSection.svelte).
 - **Per-extension slots** → that extension's own settings dialog. See [`ContactsSettingsDialog.svelte`](../extensions/contacts/frontend/components/ContactsSettingsDialog.svelte) for the canonical layout.
 
-Both UIs use the same shared primitive [`kit/OAuthCredsSlotEditor.svelte`](../frontend/src/lib/components/kit/OAuthCredsSlotEditor.svelte) (composed from existing `ui/input`, `ui/button`, `ui/select`, `ui/confirm-dialog` — no new low-level inputs). Each slot supports:
+Both UIs use the same shared primitive [`kit/OAuthCredsSlotEditor.svelte`](../frontend/src/lib/components/kit/OAuthCredsSlotEditor.svelte) (composed from existing `ui/input`, `ui/button`, `ui/select`, `ui/confirm-dialog` — no new low-level inputs). The picker shows an enumerated set of choices returned by `App.GetOAuthCredsChoices(configID, extensionID)`. The choice IDs are stable and persisted via `App.SetOAuthCredsChoice(configID, choiceID)`:
 
-- A mode dropdown — **Custom** (default; user-supplied Client ID + Secret) and, when the build embeds shipped credentials for the slot's provider, **Aerion - Google** / **Aerion - Microsoft**. The Aerion option only appears in matching `google-*` / `microsoft-*` slots. Switching to it calls `ClearOAuthCreds` so the resolver falls through to shipped values via the provider chain; switching back to Custom reveals a blank edit form.
-- Edit (paste Client ID + Secret in Custom mode; values are password-masked and never read back to the frontend)
-- Reset (clear the override and revert to shipped defaults)
+- **`custom`** — user-supplied Client ID + Secret. Always available. Selecting reveals the edit form; saving writes to the `user_oauth_clients` table.
+- **`aerion-shipped`** — the slot's own built-in client (compiled in via the extension's `.env` ldflags). Only listed when the slot's shipped creds are populated. Label is per-slot:
+  - `google-contacts` / `google-calendar` → **"Aerion testing"** (un-Google-verified).
+  - `microsoft-*` slots → **"Aerion - Microsoft"** (backed by mail's client after the core consolidation).
+  - `<provider>-mail` → **"Aerion - Google"** / **"Aerion - Microsoft"** (mail's own settings UI).
+- **`aerion-mail`** — reuse the core `<provider>-mail` slot's client for this extension. Only listed when the extension's manifest declares the provider's scopes in `first_party_uses_core_for_scopes` AND the mail slot has shipped creds. Today only Google contacts qualifies (mail's verified client carries `contacts.readonly`).
 
 Resolution order in `oauth2.ClientConfigForID(configID)`:
-1. User override from `credentials.Store` (Settings UI override) via `oauth2.UserOverrideLookup`
-2. Registered `CredentialsProvider` chain (Aerion core's, then each extension's own)
-3. `(zero, false)` → triggers `ErrAdditionalConsentRequired` or "no creds available" UX
+1. User override (`oauth2.UserOverrideLookup`) — Settings UI `custom` choice.
+2. User-set slot alias (`oauth2.SlotAliasLookup`) — Settings UI `aerion-mail` choice. Recursive lookup on the target slot id, capped at one hop.
+3. Registered `CredentialsProvider` chain (Aerion core's, then each extension's).
+4. `(zero, false)` → triggers `ErrAdditionalConsentRequired` or "no creds available" UX.
 
-Storage: encrypted via `credentials.Store` (OS keyring primary, encrypted DB fallback in the `user_oauth_clients` table). See [`internal/credentials/oauth_user_creds.go`](../internal/credentials/oauth_user_creds.go).
+Storage: encrypted via `credentials.Store` (OS keyring primary, encrypted DB fallback). Custom Client IDs/Secrets live in `user_oauth_clients` ([`internal/credentials/oauth_user_creds.go`](../internal/credentials/oauth_user_creds.go)); slot aliases live in `user_oauth_slot_aliases` ([`internal/credentials/oauth_slot_alias.go`](../internal/credentials/oauth_slot_alias.go)).
 
 ### Per-extension settings dialog
 

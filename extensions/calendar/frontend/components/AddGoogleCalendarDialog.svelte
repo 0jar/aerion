@@ -26,7 +26,7 @@
   import AddCalendarDefaultsControl from './AddCalendarDefaultsControl.svelte'
   import { applyDefaultsAfterAdd } from '$extensions/calendar/frontend/lib/defaultsApply'
   // @ts-ignore - wailsjs bindings
-  import { GetAccounts, Calendar_ListGoogleCalendarsForAccount, Calendar_AddGoogleSource } from '$wailsjs/go/app/App.js'
+  import { GetAccounts, Calendar_ListGoogleCalendarsForAccount, Calendar_AddGoogleSource, Calendar_GrantCalendarAccess } from '$wailsjs/go/app/App.js'
   // @ts-ignore - wailsjs bindings
   import type { account, backend } from '$wailsjs/go/models'
 
@@ -47,6 +47,7 @@
   let loadingAccounts = $state(false)
   let loadingCalendars = $state(false)
   let submitting = $state(false)
+  let granting = $state(false)
   let errorMessage = $state('')
   let needsConsent = $state(false)
 
@@ -117,6 +118,29 @@
     }
   }
 
+  // grantAccess runs the incremental-consent OAuth flow to add Calendar
+  // scope to the selected Gmail account, then re-runs the calendar list
+  // fetch so the picker populates inline without forcing the user to
+  // dismiss + re-open the dialog.
+  async function grantAccess() {
+    if (!selectedAccountId || granting) return
+    const acct = accounts.find((a) => a.id === selectedAccountId)
+    if (!acct) return
+    granting = true
+    errorMessage = ''
+    try {
+      await Calendar_GrantCalendarAccess('google', selectedAccountId, acct.email)
+      // Consent granted; re-fetch the calendar list.
+      needsConsent = false
+      await onAccountChange()
+    } catch (err) {
+      const msg = (err as Error)?.message ?? String(err)
+      errorMessage = $_('calendar.settings.addGoogleConsentFailed', { values: { message: msg } })
+    } finally {
+      granting = false
+    }
+  }
+
   function toggleCalendar(id: string) {
     const next = new Set(selectedIds)
     if (next.has(id)) {
@@ -127,6 +151,24 @@
     next.add(id)
     selectedIds = next
   }
+
+  // toggleSelectAll flips between "all calendars selected" and "none". Read-only
+  // calendars are included — picker semantics match the backend, which stores
+  // per-calendar writability so a read-only subscription works fine.
+  function toggleSelectAll() {
+    if (selectedIds.size === calendars.length) {
+      selectedIds = new Set()
+      return
+    }
+    selectedIds = new Set(calendars.map((c) => c.id))
+  }
+
+  const allSelected = $derived(calendars.length > 0 && selectedIds.size === calendars.length)
+  const someSelected = $derived(selectedIds.size > 0 && selectedIds.size < calendars.length)
+  let selectAllEl = $state<HTMLInputElement | null>(null)
+  $effect(() => {
+    if (selectAllEl) selectAllEl.indeterminate = someSelected
+  })
 
   async function handleSave() {
     if (submitting) return
@@ -215,8 +257,11 @@
       </div>
 
       {#if needsConsent}
-        <div class="rounded-md border border-yellow-400/40 bg-yellow-400/10 p-3 text-xs text-yellow-700 dark:text-yellow-300">
-          {$_('calendar.settings.addGoogleConsentNeeded')}
+        <div class="rounded-md border border-yellow-400/40 bg-yellow-400/10 p-3 text-xs text-yellow-700 dark:text-yellow-300 space-y-2">
+          <div>{$_('calendar.settings.addGoogleConsentNeeded')}</div>
+          <Button size="sm" variant="outline" onclick={grantAccess} disabled={granting}>
+            {#if granting}{$_('calendar.settings.addGoogleGranting')}{:else}{$_('calendar.settings.addGoogleGrantButton')}{/if}
+          </Button>
         </div>
       {/if}
 
@@ -229,17 +274,27 @@
         <div class="space-y-1">
           <Label>{$_('calendar.settings.addGoogleCalendarsLabel')}</Label>
           <div class="max-h-48 overflow-y-auto rounded-md border border-border">
+            <label
+              class="flex items-center gap-2 px-3 py-2 text-sm border-b border-border bg-muted/30 cursor-pointer hover:bg-muted/50"
+            >
+              <input
+                type="checkbox"
+                bind:this={selectAllEl}
+                checked={allSelected}
+                onchange={toggleSelectAll}
+              />
+              <span class="font-medium">{$_('calendar.settings.addGoogleSelectAll')}</span>
+            </label>
             {#each calendars as cal (cal.id)}
               <div
                 class="flex items-center gap-2 px-3 py-2 text-sm border-b border-border last:border-b-0
-                       hover:bg-muted/40 {!cal.writable ? 'opacity-60' : ''}"
+                       hover:bg-muted/40"
                 title={!cal.writable ? $_('calendar.settings.addGoogleReadOnly') : ''}
               >
                 <label class="flex items-center gap-2 flex-1 cursor-pointer min-w-0">
                   <input
                     type="checkbox"
                     checked={selectedIds.has(cal.id)}
-                    disabled={!cal.writable}
                     onchange={() => toggleCalendar(cal.id)}
                   />
                   <span class="truncate flex-1">{cal.summary}</span>

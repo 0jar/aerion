@@ -82,6 +82,10 @@ export function Calendar_GetEvent(arg1) {
   return window['go']['app']['App']['Calendar_GetEvent'](arg1);
 }
 
+export function Calendar_GrantCalendarAccess(arg1, arg2, arg3) {
+  return window['go']['app']['App']['Calendar_GrantCalendarAccess'](arg1, arg2, arg3);
+}
+
 export function Calendar_ListCalendars(arg1) {
   return window['go']['app']['App']['Calendar_ListCalendars'](arg1);
 }
@@ -492,6 +496,10 @@ export function GetMicrosoftSharedMailboxes(arg1) {
 
 export function GetNativeTitleBar() {
   return window['go']['app']['App']['GetNativeTitleBar']();
+}
+
+export function GetOAuthCredsChoices(arg1, arg2) {
+  return window['go']['app']['App']['GetOAuthCredsChoices'](arg1, arg2);
 }
 
 export function GetOAuthCredsStatus(arg1) {
@@ -1016,6 +1024,10 @@ export function SetNativeTitleBar(arg1) {
 
 export function SetOAuthCreds(arg1, arg2, arg3) {
   return window['go']['app']['App']['SetOAuthCreds'](arg1, arg2, arg3);
+}
+
+export function SetOAuthCredsChoice(arg1, arg2) {
+  return window['go']['app']['App']['SetOAuthCredsChoice'](arg1, arg2);
 }
 
 export function SetPGPEncryptPolicy(arg1, arg2) {

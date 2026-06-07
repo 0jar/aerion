@@ -1,29 +1,39 @@
 <script lang="ts">
   // OAuthCredsSlotEditor — single-slot OAuth credential editor primitive.
   // Used by Aerion core's "OAuth Credentials (advanced)" section (Settings →
-  // Accounts) AND by each extension's settings dialog. Composed from existing
-  // ui/input (type="password" for secret), ui/button, and ui/select.
+  // Accounts) AND by each extension's settings dialog.
   //
   // Props:
   //   configID            — the slot identifier (e.g., "google-mail",
   //                         "google-contacts")
+  //   extensionID         — the manifest id of the consuming extension
+  //                         (e.g., "contacts", "calendar"). Omit (or pass "")
+  //                         for core/mail's settings UI — then the backend
+  //                         skips the manifest lookup and the "Aerion mail
+  //                         client" option never appears.
   //   label               — display name (e.g., "Google Mail")
   //   secretRequired      — whether the slot needs a client_secret (true for
   //                         Google; false for Microsoft / PKCE)
   //
   // UX:
-  //   Single dropdown picks the source of credentials for this slot:
-  //     - "Custom"          — user-pasted client_id/secret. Default. Selecting
-  //                           reveals the edit form.
-  //     - "Aerion - <prov>" — Aerion-shipped build-time client_id/secret.
-  //                           Only appears when shipped creds for this slot's
-  //                           provider exist in the binary. Selecting hides
+  //   Dropdown enumerates the available credential sources for this slot.
+  //   Choice IDs come from the backend (GetOAuthCredsChoices); persistence
+  //   goes through SetOAuthCredsChoice. Possible IDs today:
+  //     - "custom"          — user-pasted client_id/secret. Selecting reveals
   //                           the edit form.
+  //     - "aerion-shipped"  — the slot's own shipped client (compiled in via
+  //                           the extension's .env / Makefile ldflags). Labeled
+  //                           by the backend per slot ("Aerion - Google",
+  //                           "Aerion - Microsoft", "Aerion testing", etc.).
+  //     - "aerion-mail"     — reuse the core mail OAuth slot for scopes the
+  //                           extension manifest declares as core-routable
+  //                           (first_party_uses_core_for_scopes).
   //
-  //   Switching Custom → Aerion-X calls ClearOAuthCreds, so the resolver
-  //   falls through to the shipped provider chain naturally.
-  //   Switching Aerion-X → Custom shows an empty form; user pastes + Saves
-  //   → SetOAuthCreds writes the user override.
+  //   Picking a non-custom option writes the choice via SetOAuthCredsChoice
+  //   (which clears any user override and sets/clears the slot alias as
+  //   appropriate). Picking Custom shows the empty form; user pastes + Saves
+  //   → SetOAuthCreds writes the user override AND SetOAuthCredsChoice
+  //   ensures any stale alias is cleared.
 
   import { onMount } from 'svelte'
   import Icon from '@iconify/svelte'
@@ -33,59 +43,50 @@
   import * as Select from '$lib/components/ui/select'
   import { toasts } from '$lib/stores/toast'
   // @ts-ignore - wailsjs bindings
-  import { GetOAuthCredsStatus, SetOAuthCreds, ClearOAuthCreds } from '$wailsjs/go/app/App'
+  import { GetOAuthCredsChoices, SetOAuthCreds, SetOAuthCredsChoice } from '$wailsjs/go/app/App'
   // @ts-ignore - wailsjs bindings
   import type { app } from '$wailsjs/go/models'
 
   interface Props {
     configID: string
     label: string
+    extensionID?: string
     secretRequired?: boolean
   }
 
-  const { configID, label, secretRequired = true }: Props = $props()
+  const { configID, label, extensionID = '', secretRequired = true }: Props = $props()
 
-  type SourceMode = 'custom' | 'aerion-shipped'
-
-  let status = $state<app.OAuthCredsStatus | null>(null)
+  let choices = $state<app.OAuthCredsChoices | null>(null)
   let loading = $state(true)
-  let mode = $state<SourceMode>('custom')
+  let mode = $state<string>('custom')
   let clientID = $state('')
   let clientSecret = $state('')
   let saving = $state(false)
 
-  // Derive provider label from the slot's configID prefix. The shipped option
-  // shows as "Aerion - Google" / "Aerion - Microsoft" so the user can tell
-  // exactly which client identity they're picking, independent of the slot
-  // they're configuring (which might be e.g. "google-contacts").
-  const shippedOptionLabel = $derived.by(() => {
-    if (configID.startsWith('google-')) return 'Aerion - Google'
-    if (configID.startsWith('microsoft-')) return 'Aerion - Microsoft'
-    return 'Aerion - Default'
-  })
+  function currentChoiceLabel(): string {
+    const match = choices?.choices.find(c => c.id === mode)
+    if (match) return match.label
+    return 'Custom'
+  }
 
-  // The Aerion-shipped option appears only when the binary actually carries
-  // shipped creds for this slot. Same detection as before — hasShipped is
-  // computed by GetOAuthCredsStatus by probing the provider chain with the
-  // UserOverrideLookup hook disabled.
-  const shippedOptionAvailable = $derived(status?.hasShipped === true)
-
-  // Map the slot's current backend state to one of the two SourceMode values.
-  // Guard-clause style to comply with the no-else rule.
-  function deriveMode(s: app.OAuthCredsStatus | null): SourceMode {
-    if (s?.hasUserOverride) return 'custom'
-    if (s?.hasShipped) return 'aerion-shipped'
-    return 'custom'
+  // Status badge driven by the currently-selected mode rather than two
+  // independent has* booleans. Maps to the same three visual states the
+  // previous version had: Custom / Aerion / Not configured.
+  function statusBadgeKind(): 'custom' | 'aerion' | 'unset' {
+    if (loading) return 'unset'
+    if (mode === 'custom' && choices?.hasUserOverride) return 'custom'
+    if (mode !== 'custom') return 'aerion'
+    return 'unset'
   }
 
   async function refresh() {
     loading = true
     try {
-      status = await GetOAuthCredsStatus(configID)
-      mode = deriveMode(status)
+      choices = await GetOAuthCredsChoices(configID, extensionID)
+      mode = choices?.current || 'custom'
     } catch (err) {
-      console.error('Failed to load OAuth creds status:', err)
-      status = null
+      console.error('Failed to load OAuth creds choices:', err)
+      choices = null
       mode = 'custom'
     } finally {
       loading = false
@@ -94,27 +95,34 @@
 
   onMount(refresh)
 
-  // Dropdown change handler. Switching to Aerion-shipped clears the user
-  // override so the resolver falls through to the provider chain. Switching
-  // to Custom shows the blank edit form; the slot stays on whatever it was
-  // (shipped or empty) until the user saves explicit creds.
+  // Dropdown change handler. Custom shows the blank edit form; any other
+  // choice gets persisted server-side via SetOAuthCredsChoice (which clears
+  // any conflicting custom override and aligns the alias state).
   async function setMode(value: string | undefined) {
     if (!value) return
-    const next = value as SourceMode
-    if (next === mode) return
+    if (value === mode) return
+    const next = value
     mode = next
     if (next === 'custom') {
       clientID = ''
       clientSecret = ''
+      try {
+        await SetOAuthCredsChoice(configID, 'custom')
+      } catch (err) {
+        // Failing the alias-clear here doesn't block the user — they'll
+        // either save Custom creds (which establishes the override) or
+        // switch back. Surface as a console warning, not a toast.
+        console.warn('Failed to clear OAuth slot alias:', err)
+      }
       return
     }
-    // Switching to Aerion-shipped — clear any user override.
     try {
-      await ClearOAuthCreds(configID)
-      toasts.success(`${label} is now using Aerion's credentials`)
+      await SetOAuthCredsChoice(configID, next)
+      const labelText = choices?.choices.find(c => c.id === next)?.label ?? next
+      toasts.success(`${label} is now using ${labelText}`)
       await refresh()
     } catch (err) {
-      console.error('Failed to switch to Aerion-shipped creds:', err)
+      console.error('Failed to switch OAuth choice:', err)
       toasts.error(`Failed to switch credentials: ${(err as Error)?.message ?? err}`)
       await refresh()
     }
@@ -132,6 +140,13 @@
     saving = true
     try {
       await SetOAuthCreds(configID, clientID.trim(), clientSecret.trim())
+      // SetOAuthCreds writes the user override; ensure any alias from a
+      // previous "Aerion mail client" choice is cleared.
+      try {
+        await SetOAuthCredsChoice(configID, 'custom')
+      } catch (err) {
+        console.warn('Failed to clear OAuth slot alias after Custom save:', err)
+      }
       toasts.success(`${label} credentials saved`)
       clientID = ''
       clientSecret = ''
@@ -152,15 +167,15 @@
         <h4 class="font-medium text-foreground">{label}</h4>
         {#if loading}
           <Icon icon="mdi:loading" class="w-3.5 h-3.5 animate-spin text-muted-foreground" />
-        {:else if status?.hasUserOverride}
+        {:else if statusBadgeKind() === 'custom'}
           <span class="text-xs px-2 py-0.5 rounded bg-primary/15 text-primary">Custom</span>
-        {:else if status?.hasShipped}
+        {:else if statusBadgeKind() === 'aerion'}
           <span class="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">Aerion</span>
         {:else}
           <span class="text-xs px-2 py-0.5 rounded bg-destructive/15 text-destructive">Not configured</span>
         {/if}
-        {#if status?.clientIdFingerprint}
-          <code class="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{status.clientIdFingerprint}</code>
+        {#if choices?.clientIdFingerprint}
+          <code class="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{choices.clientIdFingerprint}</code>
         {/if}
       </div>
       <p class="text-xs text-muted-foreground mt-1 font-mono">{configID}</p>
@@ -172,14 +187,13 @@
     <Select.Root value={mode} onValueChange={setMode}>
       <Select.Trigger class="h-8 w-[220px] text-sm">
         <Select.Value placeholder="Custom">
-          {mode === 'aerion-shipped' ? shippedOptionLabel : 'Custom'}
+          {currentChoiceLabel()}
         </Select.Value>
       </Select.Trigger>
       <Select.Content>
-        <Select.Item value="custom" label="Custom" />
-        {#if shippedOptionAvailable}
-          <Select.Item value="aerion-shipped" label={shippedOptionLabel} />
-        {/if}
+        {#each (choices?.choices ?? []) as choice (choice.id)}
+          <Select.Item value={choice.id} label={choice.label} />
+        {/each}
       </Select.Content>
     </Select.Root>
   </div>
@@ -192,7 +206,7 @@
           id={`${configID}-client-id`}
           type="text"
           bind:value={clientID}
-          placeholder={status?.hasUserOverride ? 'paste a new Client ID to replace' : 'paste Client ID'}
+          placeholder={choices?.hasUserOverride ? 'paste a new Client ID to replace' : 'paste Client ID'}
           disabled={saving}
           autocomplete="off"
         />
@@ -204,7 +218,7 @@
             id={`${configID}-client-secret`}
             type="password"
             bind:value={clientSecret}
-            placeholder={status?.hasUserOverride ? 'paste a new Client Secret to replace' : 'paste Client Secret'}
+            placeholder={choices?.hasUserOverride ? 'paste a new Client Secret to replace' : 'paste Client Secret'}
             disabled={saving}
             autocomplete="new-password"
           />

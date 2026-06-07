@@ -177,6 +177,13 @@ func TestMigrationV32_LocalRecordIDsRewrittenToUUIDs(t *testing.T) {
 			t.Fatalf("drop %s for re-migrate: %v", col, err)
 		}
 	}
+	// Drop v36's encrypted fallback columns on oauth_tokens for the same
+	// reason — re-running v36 ADDs them again.
+	for _, col := range []string{"encrypted_access_token", "encrypted_refresh_token"} {
+		if _, err := db.Exec(`ALTER TABLE oauth_tokens DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop oauth_tokens.%s for re-migrate: %v", col, err)
+		}
+	}
 
 	// Re-run migrations — migration 32 should rewrite the seeded local- id.
 	if err := db.Migrate(); err != nil {
@@ -311,6 +318,12 @@ func TestMigrationV33_CleansExistingOrphans(t *testing.T) {
 	for _, col := range []string{"photo_data", "photo_media_type", "photo_url"} {
 		if _, err := db.Exec(`ALTER TABLE contact_records DROP COLUMN ` + col); err != nil {
 			t.Fatalf("drop %s for re-migrate: %v", col, err)
+		}
+	}
+	// Same for v36's encrypted oauth_tokens fallback columns.
+	for _, col := range []string{"encrypted_access_token", "encrypted_refresh_token"} {
+		if _, err := db.Exec(`ALTER TABLE oauth_tokens DROP COLUMN ` + col); err != nil {
+			t.Fatalf("drop oauth_tokens.%s for re-migrate: %v", col, err)
 		}
 	}
 

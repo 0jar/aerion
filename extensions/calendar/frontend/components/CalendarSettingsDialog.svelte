@@ -12,6 +12,7 @@
   import { Button } from '$lib/components/ui/button'
   import ConfirmDialog from '$lib/components/kit/ConfirmDialog.svelte'
   import ColorPicker from '$lib/components/kit/ColorPicker.svelte'
+  import OAuthCredsSlotEditor from '$lib/components/kit/OAuthCredsSlotEditor.svelte'
   import AddLocalCalendarDialog from './AddLocalCalendarDialog.svelte'
   import AddGoogleCalendarDialog from './AddGoogleCalendarDialog.svelte'
   import AddMicrosoftCalendarDialog from './AddMicrosoftCalendarDialog.svelte'
@@ -457,6 +458,34 @@
         <p class="text-xs text-muted-foreground">
           {$_('calendar.settings.alarmsHelp')}
         </p>
+      </section>
+
+      <!-- OAuth Credentials (advanced) — picker matches Contacts'. Google
+           shows "Aerion testing" as the default since the mail-app's verified
+           client carries no Calendar scopes. Microsoft resolves to mail's
+           client (consolidated in core_provider.go); Custom is always an
+           escape hatch. -->
+      <section class="space-y-2">
+        <h3 class="text-sm font-semibold text-foreground">
+          {$_('calendar.settings.oauthSection')}
+        </h3>
+        <p class="text-xs text-muted-foreground">
+          {$_('calendar.settings.oauthHelp')}
+        </p>
+        <div class="space-y-3">
+          <OAuthCredsSlotEditor
+            configID="google-calendar"
+            extensionID="calendar"
+            label={$_('calendar.settings.oauthGoogleLabel')}
+            secretRequired={true}
+          />
+          <OAuthCredsSlotEditor
+            configID="microsoft-calendar"
+            extensionID="calendar"
+            label={$_('calendar.settings.oauthMicrosoftLabel')}
+            secretRequired={false}
+          />
+        </div>
       </section>
 
       <!-- Display timezone — read-only hint; actual picker is in ViewSwitcher.

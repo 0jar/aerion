@@ -1204,4 +1204,27 @@ var migrations = []Migration{
 			CREATE INDEX IF NOT EXISTS idx_extension_secrets_ext ON extension_secrets(extension);
 		`,
 	},
+	{
+		Version: 36,
+		SQL: `
+			-- Per-(account, client_config) encrypted fallback for OAuth tokens.
+			--
+			-- Before this migration, only the *-mail client_config slots had a
+			-- DB fallback when the OS keyring is unavailable — they reuse the
+			-- legacy encrypted_access_token / encrypted_refresh_token columns
+			-- on the accounts table (migration v9). Non-mail slots (the
+			-- extension slots: google-contacts, google-calendar,
+			-- microsoft-contacts, microsoft-calendar) had no fallback at all:
+			-- when the keyring failed, the StartIncrementalConsent flow
+			-- returned "keyring unavailable and no fallback for client config".
+			--
+			-- This migration extends the per-(account, client_config)
+			-- oauth_tokens row with its own encrypted columns so every slot —
+			-- mail or extension — gets the same keyring-first +
+			-- encrypted-DB-fallback behavior.
+
+			ALTER TABLE oauth_tokens ADD COLUMN encrypted_access_token TEXT;
+			ALTER TABLE oauth_tokens ADD COLUMN encrypted_refresh_token TEXT;
+		`,
+	},
 }

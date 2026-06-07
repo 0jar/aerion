@@ -59,6 +59,8 @@ export function Calendar_DismissAlarm(arg1:string):Promise<void>;
 
 export function Calendar_GetEvent(arg1:string):Promise<backend.Event>;
 
+export function Calendar_GrantCalendarAccess(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function Calendar_ListCalendars(arg1:string):Promise<Array<backend.Calendar>>;
 
 export function Calendar_ListEventsInRange(arg1:Array<string>,arg2:number,arg3:number):Promise<Array<backend.EventInstance>>;
@@ -264,6 +266,8 @@ export function GetMessages(arg1:string,arg2:string,arg3:number,arg4:number):Pro
 export function GetMicrosoftSharedMailboxes(arg1:string):Promise<Array<account.Account>>;
 
 export function GetNativeTitleBar():Promise<boolean>;
+
+export function GetOAuthCredsChoices(arg1:string,arg2:string):Promise<app.OAuthCredsChoices>;
 
 export function GetOAuthCredsStatus(arg1:string):Promise<app.OAuthCredsStatus>;
 
@@ -526,6 +530,8 @@ export function SetMessageListSortOrder(arg1:string):Promise<void>;
 export function SetNativeTitleBar(arg1:boolean):Promise<void>;
 
 export function SetOAuthCreds(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function SetOAuthCredsChoice(arg1:string,arg2:string):Promise<void>;
 
 export function SetPGPEncryptPolicy(arg1:string,arg2:string):Promise<void>;
 

@@ -1,20 +1,21 @@
--- Aerion: rollback the v0.3.0 schema (migrations 31 + 32 + 33 + 34 + 35) back to v0.2.5 (v30).
+-- Aerion: rollback the v0.3.0 schema (migrations 31 + 32 + 33 + 34 + 35 + 36) back to v0.2.5 (v30).
 --
 -- This script reconstructs the v30 schema (`contacts` + `carddav_contacts` tables)
--- from the v35 schema (`contact_records` + `contact_emails` + sidecars +
--- `extension_secrets`) via JOINs + DROP for the calendar-extension-secrets
--- table. No external backup file is needed — the unified schema IS the data;
--- the old shape is just a denormalized projection of it.
+-- from the v36 schema (`contact_records` + `contact_emails` + sidecars +
+-- `extension_secrets` + per-slot oauth_tokens encrypted fallback columns) via
+-- JOINs + DROPs / DROP COLUMNs. No external backup file is needed — the unified
+-- schema IS the data; the old shape is just a denormalized projection of it.
 --
 -- Aerion versions and the schemas they ship with:
 --   - v0.2.5 (last released) → schema v30 (separate `contacts`, `carddav_contacts`)
---   - v0.3.0 (upcoming)      → schema v35 (unified contact_records + UUID identity
+--   - v0.3.0 (upcoming)      → schema v36 (unified contact_records + UUID identity
 --                                          + carddav_record_state.addressbook_id FK
---                                          + PHOTO columns + extension_secrets)
+--                                          + PHOTO columns + extension_secrets
+--                                          + per-slot oauth_tokens encrypted fallback)
 --
--- v31, v32, v33, v34 were intermediate development schemas that never shipped —
+-- v31, v32, v33, v34, v35 were intermediate development schemas that never shipped —
 -- no real-world DB will ever be at any of them alone. The only rollback path
--- that matters is v35 → v30 (the released-to-released transition).
+-- that matters is v36 → v30 (the released-to-released transition).
 --
 -- Migrations bundled into the 0.3.0 cumulative jump:
 --   - 31: unified contact_records + multi-field sub-tables; replaced legacy
@@ -33,6 +34,14 @@
 --     extension (1B) for CalDAV passwords. Rolling back drops the table;
 --     keyring-stored entries are orphaned (the OS keyring is not touched by
 --     this SQL — clear them manually if needed).
+--   - 36: per-(account, client_config) encrypted fallback for OAuth tokens —
+--     adds encrypted_access_token and encrypted_refresh_token columns to
+--     oauth_tokens so non-mail slots (google-contacts, google-calendar,
+--     microsoft-contacts, microsoft-calendar) work without an OS keyring.
+--     Rolling back drops those columns. The extension-slot rows themselves
+--     (where client_config_id != 'google-mail' / 'microsoft-mail') are also
+--     deleted, because v0.2.5's OAuth code doesn't understand them and would
+--     pick one of them at random when looking up the account's provider.
 --
 -- Inherent data loss on rollback:
 --   - Multi-field data (phones, addresses, URLs, IMPPs, org, title, note, bday,
@@ -57,7 +66,7 @@
 --      (or whatever your DB path is — `~/Library/Application Support/Aerion/`
 --       on macOS, `%LOCALAPPDATA%\aerion\` on Windows).
 --   3. Run this script against your DB:
---        sqlite3 ~/.local/share/aerion/aerion.db < rollback-v35-to-v30.sql
+--        sqlite3 ~/.local/share/aerion/aerion.db < rollback-v36-to-v30.sql
 --   4. Launch the older Aerion (v0.2.5). It should start normally and your
 --      contacts autocomplete should work.
 --
@@ -146,8 +155,27 @@ DROP TABLE contact_records;
 --    (Seahorse / Keychain / Credential Manager) if you want a full cleanup.
 DROP TABLE IF EXISTS extension_secrets;
 
--- 7. Roll back the migration tracker so older Aerion doesn't think v31/v32/
---    v33/v34/v35 have been applied. After this, older Aerion sees
+-- 7. Roll back v36's per-(account, client_config) OAuth fallback.
+--    7a. Delete extension-slot oauth_tokens rows. v0.2.5 only knows about the
+--        mail slots; leaving extension rows behind would also leak past v36's
+--        purpose. Per-slot keyring entries from these rows (keyed as
+--        "<accountID>:<configID>:access_token" / refresh_token) are NOT cleared
+--        by this SQL — clear them via the OS keyring manager if desired.
+DELETE FROM oauth_tokens
+ WHERE client_config_id NOT IN ('google-mail', 'microsoft-mail');
+
+--    7b. Drop the encrypted fallback columns added in v36. SQLite supports
+--        DROP COLUMN since 3.35 — modernc.org/sqlite (Aerion's driver) is well
+--        past that. If you're on a stock CLI older than 3.35 these will fail;
+--        upgrade sqlite3 or skip these two statements (the columns being
+--        present is harmless to v0.2.5 — v0.2.5 just ignores unknown columns
+--        — but leaving them in place will cause v36's ADD COLUMN to fail on
+--        the next upgrade).
+ALTER TABLE oauth_tokens DROP COLUMN encrypted_access_token;
+ALTER TABLE oauth_tokens DROP COLUMN encrypted_refresh_token;
+
+-- 8. Roll back the migration tracker so older Aerion doesn't think v31/v32/
+--    v33/v34/v35/v36 have been applied. After this, older Aerion sees
 --    schema_version=30 and starts normally. The `>= 31` bound catches all
 --    v0.3.0 migrations plus any future intermediate schemas.
 DELETE FROM migrations WHERE version >= 31;

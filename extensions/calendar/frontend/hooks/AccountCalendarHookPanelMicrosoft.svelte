@@ -17,7 +17,7 @@
   import { addToast } from '$lib/stores/toast'
   import { refreshExtensionRegistry } from '$lib/stores/extensionRegistry.svelte'
   // @ts-ignore - wailsjs bindings
-  import { SetExtensionEnabled, Calendar_ListMicrosoftCalendarsForAccount, Calendar_AddMicrosoftSource } from '$wailsjs/go/app/App'
+  import { SetExtensionEnabled, Calendar_ListMicrosoftCalendarsForAccount, Calendar_AddMicrosoftSource, Calendar_GrantCalendarAccess } from '$wailsjs/go/app/App'
   // @ts-ignore - wailsjs bindings
   import type { v1, backend } from '$wailsjs/go/models'
 
@@ -41,6 +41,7 @@
   let busy = $state(false)
   let done = $state(false)
   let needsConsent = $state(false)
+  let granting = $state(false)
   let error = $state<string | null>(null)
 
   onMount(() => void loadCalendars())
@@ -77,6 +78,35 @@
     }
     next.add(id)
     selectedIds = next
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === calendars.length) {
+      selectedIds = new Set()
+      return
+    }
+    selectedIds = new Set(calendars.map((c) => c.id))
+  }
+
+  const allSelected = $derived(calendars.length > 0 && selectedIds.size === calendars.length)
+  const someSelected = $derived(selectedIds.size > 0 && selectedIds.size < calendars.length)
+  let selectAllEl = $state<HTMLInputElement | null>(null)
+  $effect(() => {
+    if (selectAllEl) selectAllEl.indeterminate = someSelected
+  })
+
+  async function grantAccess() {
+    if (granting) return
+    granting = true
+    error = null
+    try {
+      await Calendar_GrantCalendarAccess('microsoft', accountId, accountName)
+      await loadCalendars()
+    } catch (err) {
+      error = (err as Error)?.message ?? String(err)
+    } finally {
+      granting = false
+    }
   }
 
   async function setUp() {
@@ -136,8 +166,11 @@
     {/if}
 
     {#if !loading && needsConsent}
-      <div class="rounded-md border border-yellow-400/40 bg-yellow-400/10 p-3 text-xs text-yellow-700 dark:text-yellow-300 mb-3">
-        {$_('calendar.hooks.consentNeeded')}
+      <div class="rounded-md border border-yellow-400/40 bg-yellow-400/10 p-3 text-xs text-yellow-700 dark:text-yellow-300 mb-3 space-y-2">
+        <div>{$_('calendar.hooks.consentNeeded')}</div>
+        <Button size="sm" variant="outline" onclick={grantAccess} disabled={granting}>
+          {#if granting}{$_('calendar.hooks.granting')}{:else}{$_('calendar.hooks.grantButton')}{/if}
+        </Button>
       </div>
     {/if}
 
@@ -145,16 +178,26 @@
       <div class="space-y-1 mb-3">
         <Label>{$_('calendar.hooks.calendarsLabel')}</Label>
         <div class="max-h-48 overflow-y-auto rounded-md border border-border">
+          <label
+            class="flex items-center gap-2 px-3 py-2 text-sm border-b border-border bg-muted/30 cursor-pointer hover:bg-muted/50"
+          >
+            <input
+              type="checkbox"
+              bind:this={selectAllEl}
+              checked={allSelected}
+              onchange={toggleSelectAll}
+            />
+            <span class="font-medium">{$_('calendar.hooks.selectAll')}</span>
+          </label>
           {#each calendars as cal (cal.id)}
             <label
               class="flex items-center gap-2 px-3 py-2 text-sm border-b border-border last:border-b-0
-                     hover:bg-muted/40 cursor-pointer {!cal.writable ? 'opacity-60' : ''}"
+                     hover:bg-muted/40 cursor-pointer"
               title={!cal.writable ? $_('calendar.hooks.readOnlyHint') : ''}
             >
               <input
                 type="checkbox"
                 checked={selectedIds.has(cal.id)}
-                disabled={!cal.writable}
                 onchange={() => toggleCalendar(cal.id)}
               />
               <span class="truncate flex-1">{cal.name}</span>
