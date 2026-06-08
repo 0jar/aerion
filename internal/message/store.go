@@ -2033,6 +2033,33 @@ func (s *Store) DeleteBatch(ids []string) error {
 }
 
 // GetByIDs retrieves multiple messages by their IDs
+// SpansMultipleAccounts returns true when the given message IDs belong
+// to two or more different accounts. Cheap (single SELECT COUNT
+// DISTINCT against the indexed account_id column) — used by bulk-action
+// callers in app/actions.go to decide between the single-account fast
+// path and the cross-account partition+dispatch path. A nil/short input
+// returns false without hitting the DB.
+func (s *Store) SpansMultipleAccounts(ids []string) (bool, error) {
+	if len(ids) < 2 {
+		return false, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(
+		"SELECT COUNT(DISTINCT account_id) FROM messages WHERE id IN (%s)",
+		strings.Join(placeholders, ", "),
+	)
+	var n int
+	if err := s.db.QueryRow(query, args...).Scan(&n); err != nil {
+		return false, fmt.Errorf("failed to check account span: %w", err)
+	}
+	return n > 1, nil
+}
+
 func (s *Store) GetByIDs(ids []string) ([]*Message, error) {
 	if len(ids) == 0 {
 		return nil, nil
