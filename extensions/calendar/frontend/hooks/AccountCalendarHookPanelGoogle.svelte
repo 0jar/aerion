@@ -36,11 +36,12 @@
     hook: v1.AccountSetupHookRequest
     accountId: string
     accountName: string
+    accountEmail: string
     /** Called when user has settled the panel (set up or skipped). */
     onResolved: () => void
   }
 
-  const { hook, accountId, accountName, onResolved }: Props = $props()
+  const { hook, accountId, accountName, accountEmail, onResolved }: Props = $props()
 
   let calendars = $state<backend.GoogleCalendarChoice[]>([])
   let selectedIds = $state<Set<string>>(new Set())
@@ -140,7 +141,7 @@
       const selections = calendars
         .filter((c) => selectedIds.has(c.id))
         .map((c) => ({ id: c.id, displayName: c.summary, color: '', writable: c.writable }))
-      await Calendar_AddGoogleSource(accountId, sourceName.trim(), selections)
+      await Calendar_AddGoogleSource(accountId, sourceName.trim(), accountEmail, selections)
       await SetExtensionEnabled('calendar', true)
       await refreshExtensionRegistry()
       done = true

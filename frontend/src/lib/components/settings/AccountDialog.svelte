@@ -494,6 +494,7 @@
                 {hook}
                 accountId={hookAccount.id}
                 accountName={hookAccount.name}
+                accountEmail={hookAccount.email ?? ''}
                 onResolved={() => resolveHook(hook.extensionId)}
               />
             {/if}
@@ -502,6 +503,7 @@
                 {hook}
                 accountId={hookAccount.id}
                 accountName={hookAccount.name}
+                accountEmail={hookAccount.email ?? ''}
                 onResolved={() => resolveHook(hook.extensionId)}
               />
             {/if}

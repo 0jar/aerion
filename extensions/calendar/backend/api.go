@@ -5,12 +5,46 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	coreapi "github.com/hkdb/aerion/internal/core/api/v1"
 )
+
+// ErrCalDAVOrganizerEmailRequired is returned by AddCalDAVSource when the
+// principal's PROPFIND for `<C:calendar-user-address-set>` yielded zero
+// usable mailto: addresses AND the caller didn't supply an organizerEmail
+// fallback. The frontend matches the sentinel by error message and
+// reveals an "Organizer email" input on the source-add dialog; the user
+// fills it and resubmits.
+//
+// Probe failures (network / 4xx / parse) are reported as
+// ErrCalDAVOrganizerEmailRequired too, since the practical outcome is
+// the same: we need the user to supply an email.
+var ErrCalDAVOrganizerEmailRequired = errors.New("calendar: organizer email required (server did not publish a calendar user address — please enter the email Aerion should use as the meeting organizer)")
+
+// emailRegex is the minimal validator used to reject obviously-bad
+// organizer email input. The plan intentionally avoids over-engineering
+// here — the canonical "is this a valid email" answer comes from the
+// server (a malformed address rejects on the first invite). The regex
+// guards against typos like missing @ or whitespace.
+var emailRegex = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+
+// organizerIdentitiesFromAccount returns the trimmed+lowercased account
+// email as a single-entry identity list, or nil when the input is empty.
+// Used by AddGoogleSource / AddMicrosoftSource — both providers have a
+// single mailbox identity per account (Gmail send-as aliases + Graph
+// proxyAddresses are out of scope for v0.3.0 per the plan).
+func organizerIdentitiesFromAccount(email string) []string {
+	v := strings.ToLower(strings.TrimSpace(email))
+	if v == "" {
+		return nil
+	}
+	return []string{v}
+}
 
 // API is the extension-local logic the Bridge delegates to. NOT a
 // coreapi.Calendar impl — the calendar extension doesn't expose one in
@@ -45,13 +79,20 @@ func NewAPI(store *Store, secrets coreapi.Secrets, auth coreapi.Auth, queue *Pen
 // discovered calendars in a single transaction, and stores the password
 // via coreapi.Secrets. Returns the new source ID.
 //
+// organizerEmail is the user-supplied fallback for the organizer address
+// when the server doesn't publish `<C:calendar-user-address-set>` on the
+// principal. Pass "" on the first call; if the server's address-set
+// probe yields zero addresses, this method returns
+// ErrCalDAVOrganizerEmailRequired so the frontend can prompt the user
+// and resubmit with the value populated.
+//
 // Atomicity:
-//  1. Discovery is a transient probe — failure persists nothing.
+//  1. Discovery + probes are transient — failure persists nothing.
 //  2. Source + calendar inserts share one DB transaction.
 //  3. After commit, secret write is attempted. On secret failure, the
 //     source row (and its CASCADE'd calendars) is rolled back so we don't
 //     leave a passwordless source.
-func (a *API) AddCalDAVSource(name, serverURL, username, password string) (string, error) {
+func (a *API) AddCalDAVSource(name, serverURL, username, password, organizerEmail string) (string, error) {
 	if name == "" {
 		return "", errors.New("calendar: name required")
 	}
@@ -87,19 +128,39 @@ func (a *API) AddCalDAVSource(name, serverURL, username, password string) (strin
 	itipMode := probeCalDAVScheduling(probeCtx, serverURL, username, password)
 	probeCancel()
 
-	// 2b. Persist source + calendars atomically.
+	// 2b. Probe calendar-user-address-set for the organizer identity
+	// list. If the server publishes any mailto: addresses, use them
+	// verbatim. Otherwise fall back to the caller-supplied
+	// organizerEmail; if that's empty too, signal the frontend to
+	// prompt the user.
+	identCtx, identCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	identities := probeCalDAVOrganizerIdentities(identCtx, serverURL, username, password)
+	identCancel()
+	if len(identities) == 0 {
+		manual := strings.ToLower(strings.TrimSpace(organizerEmail))
+		if manual == "" {
+			return "", ErrCalDAVOrganizerEmailRequired
+		}
+		if !emailRegex.MatchString(manual) {
+			return "", fmt.Errorf("calendar: organizer email %q is not a valid address", organizerEmail)
+		}
+		identities = []string{manual}
+	}
+
+	// 2c. Persist source + calendars atomically.
 	err = a.store.WithTx(func(tx *sql.Tx) error {
 		if err := a.store.CreateSourceTx(tx, Source{
-			ID:              sourceID,
-			Type:            SourceTypeCalDAV,
-			Name:            name,
-			URL:             homePath,
-			Username:        username,
-			SyncIntervalMin: 15,
-			Enabled:         true,
-			Writable:        true, // trust-on-first-write per RFC 4791
-			CreatedAt:       now,
-			ITIPMode:        itipMode,
+			ID:                  sourceID,
+			Type:                SourceTypeCalDAV,
+			Name:                name,
+			URL:                 homePath,
+			Username:            username,
+			SyncIntervalMin:     15,
+			Enabled:             true,
+			Writable:            true, // trust-on-first-write per RFC 4791
+			CreatedAt:           now,
+			ITIPMode:            itipMode,
+			OrganizerIdentities: identities,
 		}); err != nil {
 			return err
 		}
@@ -133,6 +194,67 @@ func (a *API) AddCalDAVSource(name, serverURL, username, password string) (strin
 	return sourceID, nil
 }
 
+// SetOrganizerIdentity replaces the stored organizer identity list for
+// a source with a single email. Used by the per-source CalDAV settings
+// row to let users fix up empty / wrong identity lists without deleting
+// and re-adding the source. Empty input clears the list (composer hides
+// attendees for that source's calendars).
+func (a *API) SetOrganizerIdentity(sourceID, email string) error {
+	if sourceID == "" {
+		return errors.New("calendar: source ID required")
+	}
+	src, err := a.store.GetSource(sourceID)
+	if err != nil {
+		return fmt.Errorf("look up source: %w", err)
+	}
+	if src == nil {
+		return errors.New("calendar: source not found")
+	}
+	v := strings.ToLower(strings.TrimSpace(email))
+	if v == "" {
+		return a.store.SetOrganizerIdentities(sourceID, nil)
+	}
+	if !emailRegex.MatchString(v) {
+		return fmt.Errorf("calendar: %q is not a valid email address", email)
+	}
+	return a.store.SetOrganizerIdentities(sourceID, []string{v})
+}
+
+// ReprobeCalDAVOrganizerIdentities re-runs the principal PROPFIND for
+// `<C:calendar-user-address-set>` on a CalDAV source and replaces the
+// stored identity list with the result. Used by the per-source settings
+// "Re-probe server" button so the user can refresh the list after the
+// admin updates the principal's scheduling addresses without re-adding
+// the source. Returns the number of identities discovered (0 means the
+// stored list was cleared — the user should then enter an organizer
+// email manually via SetOrganizerIdentity).
+func (a *API) ReprobeCalDAVOrganizerIdentities(sourceID string) (int, error) {
+	if sourceID == "" {
+		return 0, errors.New("calendar: source ID required")
+	}
+	src, err := a.store.GetSource(sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("look up source: %w", err)
+	}
+	if src == nil {
+		return 0, errors.New("calendar: source not found")
+	}
+	if src.Type != SourceTypeCalDAV {
+		return 0, fmt.Errorf("calendar: source %q is not a CalDAV source (type=%q)", sourceID, src.Type)
+	}
+	password, err := a.secrets.Get(sourceID)
+	if err != nil {
+		return 0, fmt.Errorf("load password: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	identities := probeCalDAVOrganizerIdentities(ctx, src.URL, src.Username, password)
+	if err := a.store.SetOrganizerIdentities(sourceID, identities); err != nil {
+		return 0, err
+	}
+	return len(identities), nil
+}
+
 // ListSources returns all configured calendar sources.
 func (a *API) ListSources() ([]Source, error) {
 	return a.store.ListSources()
@@ -164,6 +286,23 @@ func (a *API) DeleteSource(sourceID string) error {
 // Reject other values to avoid hammering servers or wedging the scheduler.
 var validSyncIntervals = map[int]struct{}{
 	5: {}, 15: {}, 30: {}, 60: {}, 120: {}, 240: {}, 720: {},
+}
+
+// RenameSource changes a source's display name. Trims input, rejects
+// empty / overlong values. Length cap matches what the source-add
+// dialogs use as a practical UI guard.
+func (a *API) RenameSource(sourceID, name string) error {
+	if sourceID == "" {
+		return errors.New("calendar: source ID required")
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return errors.New("calendar: name required")
+	}
+	if len(trimmed) > 200 {
+		return errors.New("calendar: name too long (max 200 characters)")
+	}
+	return a.store.UpdateSourceName(sourceID, trimmed)
 }
 
 // SetSyncInterval validates the minutes value, then writes it to the
@@ -423,7 +562,14 @@ func (a *API) ListMicrosoftCalendarsForAccount(ctx context.Context, accountID st
 // AddMicrosoftSource persists a Microsoft-backed source + the user's
 // chosen calendars in one transaction. Triggers an initial sync via
 // bridge.go's Calendar_AddMicrosoftSource caller.
-func (a *API) AddMicrosoftSource(accountID, name string, selections []MicrosoftCalendarSelection) (string, error) {
+//
+// accountEmail is the bound account's primary email (Microsoft UPN /
+// OAuth identifier — always email-shaped). Stored in OrganizerIdentities
+// so the event composer knows which address to use as ORGANIZER for
+// events on this source's calendars. Empty value is allowed (legacy
+// callers that haven't been updated); the composer then falls back to
+// live accountStore lookup for sources with empty stored identities.
+func (a *API) AddMicrosoftSource(accountID, name, accountEmail string, selections []MicrosoftCalendarSelection) (string, error) {
 	if accountID == "" {
 		return "", errors.New("calendar: account ID required")
 	}
@@ -434,20 +580,23 @@ func (a *API) AddMicrosoftSource(accountID, name string, selections []MicrosoftC
 		return "", errors.New("calendar: at least one calendar must be selected")
 	}
 
+	identities := organizerIdentitiesFromAccount(accountEmail)
+
 	sourceID := uuid.New().String()
 	now := time.Now().Unix()
 	err := a.store.WithTx(func(tx *sql.Tx) error {
 		if err := a.store.CreateSourceTx(tx, Source{
-			ID:              sourceID,
-			Type:            SourceTypeMicrosoft,
-			Name:            name,
-			URL:             "",
-			Username:        "",
-			SyncIntervalMin: 15,
-			AccountID:       accountID,
-			Enabled:         true,
-			Writable:        true,
-			CreatedAt:       now,
+			ID:                  sourceID,
+			Type:                SourceTypeMicrosoft,
+			Name:                name,
+			URL:                 "",
+			Username:            "",
+			SyncIntervalMin:     15,
+			AccountID:           accountID,
+			Enabled:             true,
+			Writable:            true,
+			CreatedAt:           now,
+			OrganizerIdentities: identities,
 		}); err != nil {
 			return err
 		}
@@ -483,7 +632,14 @@ func (a *API) AddMicrosoftSource(accountID, name string, selections []MicrosoftC
 // AddGoogleSource persists a Google-backed source + the user's chosen
 // calendars in one transaction, then triggers an initial sync (caller's
 // responsibility — bridge wires it).
-func (a *API) AddGoogleSource(accountID, name string, selections []GoogleCalendarSelection) (string, error) {
+//
+// accountEmail is the bound account's primary email (Google OAuth
+// identifier — always email-shaped). Stored in OrganizerIdentities so
+// the event composer knows which address to use as ORGANIZER for events
+// on this source's calendars. Empty value is allowed; the composer
+// then falls back to live accountStore lookup for sources with empty
+// stored identities.
+func (a *API) AddGoogleSource(accountID, name, accountEmail string, selections []GoogleCalendarSelection) (string, error) {
 	if accountID == "" {
 		return "", errors.New("calendar: account ID required")
 	}
@@ -494,20 +650,23 @@ func (a *API) AddGoogleSource(accountID, name string, selections []GoogleCalenda
 		return "", errors.New("calendar: at least one calendar must be selected")
 	}
 
+	identities := organizerIdentitiesFromAccount(accountEmail)
+
 	sourceID := uuid.New().String()
 	now := time.Now().Unix()
 	err := a.store.WithTx(func(tx *sql.Tx) error {
 		if err := a.store.CreateSourceTx(tx, Source{
-			ID:              sourceID,
-			Type:            SourceTypeGoogle,
-			Name:            name,
-			URL:             "", // Google sources have no single endpoint URL
-			Username:        "", // OAuth-only; no username
-			SyncIntervalMin: 15,
-			AccountID:       accountID,
-			Enabled:         true,
-			Writable:        true, // CanWrite from googleProvider.Capabilities
-			CreatedAt:       now,
+			ID:                  sourceID,
+			Type:                SourceTypeGoogle,
+			Name:                name,
+			URL:                 "", // Google sources have no single endpoint URL
+			Username:            "", // OAuth-only; no username
+			SyncIntervalMin:     15,
+			AccountID:           accountID,
+			Enabled:             true,
+			Writable:            true, // CanWrite from googleProvider.Capabilities
+			CreatedAt:           now,
+			OrganizerIdentities: identities,
 		}); err != nil {
 			return err
 		}

@@ -23,7 +23,9 @@
   import { calendarSettings } from '$extensions/calendar/frontend/stores/calendarSettings.svelte'
   import AddCalDAVSourceDialog from './AddCalDAVSourceDialog.svelte'
   // @ts-ignore - wailsjs bindings
-  import { Calendar_SetSyncInterval, Calendar_DeleteCalendar } from '$wailsjs/go/app/App.js'
+  import { Calendar_SetSyncInterval, Calendar_DeleteCalendar, Calendar_SetOrganizerIdentity, Calendar_ReprobeCalDAVOrganizerIdentities, Calendar_RenameSource } from '$wailsjs/go/app/App.js'
+  import { Input } from '$lib/components/ui/input'
+  import TimezonePicker from './TimezonePicker.svelte'
   // @ts-ignore - wailsjs bindings
   import type { backend } from '$wailsjs/go/models'
 
@@ -55,9 +57,12 @@
     return out
   })
 
-  // CalDAV sources only — the existing "Sources" section list.
-  const calDavSources = $derived(
-    calendarSources.sources.filter(s => s.type === 'caldav')
+  // Remote sources — every non-local source surfaces in the "Sources"
+  // section. Local calendars have their own section above. Per-source
+  // controls (sync interval, sync now, delete) apply uniformly; only the
+  // CalDAV-specific organizer-email row is gated on type in the template.
+  const remoteSources = $derived(
+    calendarSources.sources.filter(s => s.type !== 'local')
   )
 
   // Defaults section. We expose:
@@ -108,6 +113,116 @@
   let deleteTarget = $state<backend.Source | null>(null)
   let deleting = $state(false)
   let syncingSourceID = $state<string | null>(null)
+
+  // Per-source organizer-email edits. Keyed by source.id; populated when
+  // the user starts typing so we don't track every CalDAV row in memory
+  // up front. Saving applies + clears the local entry.
+  let organizerEdits = $state<Record<string, string>>({})
+  let reprobingSourceID = $state<string | null>(null)
+
+  // Per-source rename state. `renamingId` is the source currently in
+  // edit mode (only one at a time); `renameDraft` holds the in-progress
+  // text. Esc cancels; Enter / blur commits.
+  let renamingId = $state<string | null>(null)
+  let renameDraft = $state('')
+
+  function startRename(src: backend.Source) {
+    renamingId = src.id
+    renameDraft = src.name
+  }
+
+  function cancelRename() {
+    renamingId = null
+    renameDraft = ''
+  }
+
+  async function commitRename(src: backend.Source) {
+    const next = renameDraft.trim()
+    if (next === '' || next === src.name) {
+      cancelRename()
+      return
+    }
+    try {
+      await Calendar_RenameSource(src.id, next)
+      await calendarSources.load()
+      toasts.success($_('calendar.settings.renameToastSuccess', { values: { name: next } }))
+    } catch (err) {
+      const msg = (err as Error)?.message ?? String(err)
+      toasts.error(msg)
+    } finally {
+      cancelRename()
+    }
+  }
+
+  // Collapsible-section state. Object keyed by section id; entries
+  // default to false (collapsed) so the user can scan all category
+  // titles at once and drill into one. Toggle persists only for the
+  // dialog's lifetime — re-opening the dialog re-collapses everything,
+  // which keeps the discovery / scanning experience intentional.
+  let expanded = $state<Record<string, boolean>>({
+    local: false,
+    sources: false,
+    defaults: false,
+    timezone: false,
+    oauth: false,
+  })
+
+  function toggle(key: string) {
+    expanded[key] = !expanded[key]
+    expanded = { ...expanded }
+  }
+
+  function organizerDisplay(src: backend.Source): string {
+    if (organizerEdits[src.id] !== undefined) return organizerEdits[src.id]
+    const list = src.organizerIdentities ?? []
+    return list[0] ?? ''
+  }
+
+  function organizerLooksValid(value: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+  }
+
+  async function handleSaveOrganizer(src: backend.Source) {
+    const value = (organizerEdits[src.id] ?? '').trim()
+    if (value !== '' && !organizerLooksValid(value)) {
+      toasts.error($_('calendar.add.organizerEmailInvalid'))
+      return
+    }
+    try {
+      await Calendar_SetOrganizerIdentity(src.id, value)
+      toasts.success($_('calendar.settings.organizerEmailSaved'))
+      delete organizerEdits[src.id]
+      organizerEdits = { ...organizerEdits }
+      await calendarSources.load()
+    } catch (err) {
+      const msg = (err as Error)?.message ?? String(err)
+      toasts.error(msg)
+    }
+  }
+
+  async function handleReprobeOrganizer(src: backend.Source) {
+    if (reprobingSourceID !== null) return
+    reprobingSourceID = src.id
+    try {
+      const count = await Calendar_ReprobeCalDAVOrganizerIdentities(src.id)
+      if (count > 0) {
+        toasts.success(
+          $_('calendar.settings.organizerEmailReprobed', { values: { count } }),
+        )
+        delete organizerEdits[src.id]
+        organizerEdits = { ...organizerEdits }
+        await calendarSources.load()
+        return
+      }
+      toasts.warning($_('calendar.settings.organizerEmailReprobeEmpty'))
+      await calendarSources.load()
+    } catch (err) {
+      const msg = (err as Error)?.message ?? String(err)
+      toasts.error(msg)
+    } finally {
+      reprobingSourceID = null
+    }
+  }
 
   // Sync interval options (mirrors api.go's validSyncIntervals).
   const INTERVAL_VALUES = [5, 15, 30, 60, 120, 240, 720]
@@ -224,12 +339,22 @@
       <Dialog.Title>{$_('calendar.settings.title')}</Dialog.Title>
     </Dialog.Header>
 
-    <div class="space-y-6 mt-2 max-h-[60vh] overflow-y-auto pr-1">
+    <div class="space-y-3 mt-2 max-h-[60vh] overflow-y-auto pr-1">
       <!-- Local calendars section -->
-      <section class="space-y-2">
-        <h3 class="text-sm font-semibold text-foreground">
-          {$_('calendar.settings.localCalendarsSection')}
-        </h3>
+      <section class="border border-border rounded-md">
+        <button
+          type="button"
+          class="w-full flex items-center justify-between p-3 text-left hover:bg-muted/30 rounded-md"
+          onclick={() => toggle('local')}
+          aria-expanded={expanded.local}
+        >
+          <h3 class="text-sm font-semibold text-foreground">
+            {$_('calendar.settings.localCalendarsSection')}
+          </h3>
+          <Icon icon={expanded.local ? 'mdi:chevron-up' : 'mdi:chevron-down'} class="w-4 h-4 text-muted-foreground" />
+        </button>
+        {#if expanded.local}
+        <div class="space-y-2 px-3 pb-3 pt-1">
 
         {#if localCalendars.length === 0}
           <p class="text-sm text-muted-foreground py-2">
@@ -267,28 +392,68 @@
           <Icon icon="mdi:plus" class="w-4 h-4 mr-1" />
           {$_('calendar.settings.addLocalCalendar')}
         </Button>
+        </div>
+        {/if}
       </section>
 
-      <!-- Sources section (CalDAV only) -->
-      <section class="space-y-2">
-        <h3 class="text-sm font-semibold text-foreground">
-          {$_('calendar.settings.sourcesSection')}
-        </h3>
+      <!-- Sources section — CalDAV + Google + Microsoft sources. Local
+           calendars live in their own section above. -->
+      <section class="border border-border rounded-md">
+        <button
+          type="button"
+          class="w-full flex items-center justify-between p-3 text-left hover:bg-muted/30 rounded-md"
+          onclick={() => toggle('sources')}
+          aria-expanded={expanded.sources}
+        >
+          <h3 class="text-sm font-semibold text-foreground">
+            {$_('calendar.settings.sourcesSection')}
+          </h3>
+          <Icon icon={expanded.sources ? 'mdi:chevron-up' : 'mdi:chevron-down'} class="w-4 h-4 text-muted-foreground" />
+        </button>
+        {#if expanded.sources}
+        <div class="space-y-2 px-3 pb-3 pt-1">
 
-        {#if calDavSources.length === 0}
+        {#if remoteSources.length === 0}
           <p class="text-sm text-muted-foreground py-3">
             {$_('calendar.settings.noSources')}
           </p>
         {/if}
 
-        {#each calDavSources as src (src.id)}
+        {#each remoteSources as src (src.id)}
           <div class="flex flex-col gap-2 p-3 border border-border rounded-md">
             <!-- Source header row -->
             <div class="flex items-start justify-between gap-3">
               <div class="flex-1 min-w-0">
-                <div class="text-sm font-medium text-foreground truncate">
-                  {src.name}
-                </div>
+                {#if renamingId === src.id}
+                  <div class="flex items-center gap-1">
+                    <Input
+                      type="text"
+                      class="h-8 text-sm flex-1 min-w-0"
+                      bind:value={renameDraft}
+                      autofocus
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); void commitRename(src) }
+                        if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                      }}
+                      onblur={() => void commitRename(src)}
+                    />
+                  </div>
+                {/if}
+                {#if renamingId !== src.id}
+                  <div class="flex items-center gap-1 min-w-0">
+                    <span class="text-sm font-medium text-foreground truncate">{src.name}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-6 w-6 p-0 shrink-0"
+                      onclick={() => startRename(src)}
+                      title={$_('calendar.settings.renameTitle')}
+                      aria-label={$_('calendar.settings.renameTitle')}
+                    >
+                      <Icon icon="mdi:pencil-outline" class="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                {/if}
                 <div class="text-xs text-muted-foreground mt-0.5">
                   {calendarCountLabel(src)} · {lastSyncLabel(src)}
                 </div>
@@ -341,6 +506,55 @@
               </div>
             </div>
 
+            <!-- Organizer email row. CalDAV-only: Google + Microsoft
+                 sources auto-populate organizerIdentities from the bound
+                 mail account at source-add time and don't need the
+                 user-edit / re-probe path. CalDAV picks this up from
+                 PROPFIND <C:calendar-user-address-set>; servers that
+                 don't publish it land here empty and the user can type
+                 one. "Re-probe" re-runs the PROPFIND. -->
+            {#if src.type === 'caldav'}
+            <div class="flex items-center gap-2 pl-2">
+              <span class="text-xs text-muted-foreground shrink-0 w-28">
+                {$_('calendar.settings.organizerEmailLabel')}
+              </span>
+              <Input
+                type="email"
+                placeholder={$_('calendar.settings.organizerEmailPlaceholder')}
+                value={organizerDisplay(src)}
+                oninput={(e) => {
+                  organizerEdits[src.id] = (e.currentTarget as HTMLInputElement).value
+                  organizerEdits = { ...organizerEdits }
+                }}
+                class="h-8 text-xs flex-1 min-w-0"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-8 shrink-0"
+                onclick={() => handleSaveOrganizer(src)}
+                disabled={organizerEdits[src.id] === undefined || organizerEdits[src.id] === (src.organizerIdentities?.[0] ?? '')}
+              >
+                {$_('calendar.common.save')}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-8 shrink-0"
+                onclick={() => handleReprobeOrganizer(src)}
+                disabled={reprobingSourceID !== null}
+                title={$_('calendar.settings.organizerEmailReprobeTitle')}
+              >
+                {#if reprobingSourceID === src.id}
+                  <Icon icon="mdi:loading" class="w-3.5 h-3.5 animate-spin" />
+                {/if}
+                {#if reprobingSourceID !== src.id}
+                  <Icon icon="mdi:cloud-search-outline" class="w-3.5 h-3.5" />
+                {/if}
+              </Button>
+            </div>
+            {/if}
+
             <!-- Per-calendar color rows. Color is the calendar's actual
                  rendered hue (stored hex if set, else the deterministic
                  HSL→hex fallback) — clicking opens the palette + hex input
@@ -385,16 +599,28 @@
             {$_('calendar.settings.addOutlook')}
           </Button>
         </div>
+        </div>
+        {/if}
       </section>
 
       <!-- Defaults for new events — both global + per-source. Stale entries
            (the source/calendar got deleted) return '' from the store getters
            so the trigger label gracefully shows "not set" until the user
            picks again. -->
-      <section class="space-y-2">
-        <h3 class="text-sm font-semibold text-foreground">
-          {$_('calendar.settings.defaultsSection')}
-        </h3>
+      <section class="border border-border rounded-md">
+        <button
+          type="button"
+          class="w-full flex items-center justify-between p-3 text-left hover:bg-muted/30 rounded-md"
+          onclick={() => toggle('defaults')}
+          aria-expanded={expanded.defaults}
+        >
+          <h3 class="text-sm font-semibold text-foreground">
+            {$_('calendar.settings.defaultsSection')}
+          </h3>
+          <Icon icon={expanded.defaults ? 'mdi:chevron-up' : 'mdi:chevron-down'} class="w-4 h-4 text-muted-foreground" />
+        </button>
+        {#if expanded.defaults}
+        <div class="space-y-2 px-3 pb-3 pt-1">
 
         {#if writableSources.length === 0}
           <p class="text-xs text-muted-foreground">
@@ -448,16 +674,33 @@
             {/if}
           {/each}
         {/if}
+        </div>
+        {/if}
       </section>
 
-      <!-- Alarms section (informational) -->
-      <section class="space-y-2">
-        <h3 class="text-sm font-semibold text-foreground">
-          {$_('calendar.settings.alarmsSection')}
-        </h3>
-        <p class="text-xs text-muted-foreground">
-          {$_('calendar.settings.alarmsHelp')}
-        </p>
+      <!-- Display timezone — picker for choosing how times render across
+           views. The same TimezonePicker is also mounted in ViewSwitcher's
+           top-right; both paths write to calendarSettings.displayTimezone. -->
+      <section class="border border-border rounded-md">
+        <button
+          type="button"
+          class="w-full flex items-center justify-between p-3 text-left hover:bg-muted/30 rounded-md"
+          onclick={() => toggle('timezone')}
+          aria-expanded={expanded.timezone}
+        >
+          <h3 class="text-sm font-semibold text-foreground">
+            {$_('calendar.settings.timezoneSection')}
+          </h3>
+          <Icon icon={expanded.timezone ? 'mdi:chevron-up' : 'mdi:chevron-down'} class="w-4 h-4 text-muted-foreground" />
+        </button>
+        {#if expanded.timezone}
+        <div class="px-3 pb-3 pt-1 space-y-2">
+          <p class="text-xs text-muted-foreground">
+            {$_('calendar.settings.timezoneHelp')}
+          </p>
+          <TimezonePicker />
+        </div>
+        {/if}
       </section>
 
       <!-- OAuth Credentials (advanced) — picker matches Contacts'. Google
@@ -465,14 +708,23 @@
            client carries no Calendar scopes. Microsoft resolves to mail's
            client (consolidated in core_provider.go); Custom is always an
            escape hatch. -->
-      <section class="space-y-2">
-        <h3 class="text-sm font-semibold text-foreground">
-          {$_('calendar.settings.oauthSection')}
-        </h3>
-        <p class="text-xs text-muted-foreground">
-          {$_('calendar.settings.oauthHelp')}
-        </p>
-        <div class="space-y-3">
+      <section class="border border-border rounded-md">
+        <button
+          type="button"
+          class="w-full flex items-center justify-between p-3 text-left hover:bg-muted/30 rounded-md"
+          onclick={() => toggle('oauth')}
+          aria-expanded={expanded.oauth}
+        >
+          <h3 class="text-sm font-semibold text-foreground">
+            {$_('calendar.settings.oauthSection')}
+          </h3>
+          <Icon icon={expanded.oauth ? 'mdi:chevron-up' : 'mdi:chevron-down'} class="w-4 h-4 text-muted-foreground" />
+        </button>
+        {#if expanded.oauth}
+        <div class="px-3 pb-3 pt-1 space-y-3">
+          <p class="text-xs text-muted-foreground">
+            {$_('calendar.settings.oauthHelp')}
+          </p>
           <OAuthCredsSlotEditor
             configID="google-calendar"
             extensionID="calendar"
@@ -486,18 +738,7 @@
             secretRequired={false}
           />
         </div>
-      </section>
-
-      <!-- Display timezone — read-only hint; actual picker is in ViewSwitcher.
-           This section is a discoverability nudge so users know where to find
-           the setting; no UI duplication. -->
-      <section class="space-y-1">
-        <h3 class="text-sm font-semibold text-foreground">
-          {$_('calendar.tzSelector.tooltip')}
-        </h3>
-        <p class="text-xs text-muted-foreground">
-          {$_('calendar.viewSwitcher.tzLabel', { values: { tz: calendarSettings.effectiveTimezone } })}
-        </p>
+        {/if}
       </section>
     </div>
 

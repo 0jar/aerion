@@ -118,3 +118,108 @@ func probeCalDAVScheduling(ctx context.Context, baseURL, username, password stri
 func formatNoITIPModeReason() string {
 	return fmt.Sprintf("CalDAV server does not advertise RFC 6638 (calendar-auto-schedule)")
 }
+
+// probeCalDAVOrganizerIdentities returns the list of email addresses the
+// principal is authorized to act as for scheduling — discovered via
+// PROPFIND for `<C:calendar-user-address-set>` on the principal URL (RFC
+// 6638 §2.4.1). Returned addresses are stripped of the `mailto:` prefix,
+// lowercased, deduped. Empty slice means either the server doesn't expose
+// the property OR the principal has no scheduling addresses configured;
+// in both cases the caller falls back to the user-supplied "Organizer
+// email" field on the setup dialog.
+//
+// Best-effort: any transport / auth / parse error returns nil so the
+// caller can surface ErrCalDAVOrganizerEmailRequired and let the user
+// provide an organizer email manually.
+//
+// Note: we PROPFIND at the URL the user supplied in the setup dialog.
+// Discovery has already resolved that to the calendar-home-set on a
+// well-formed CalDAV server; many RFC 6638-compliant servers expose
+// `calendar-user-address-set` on the home-set too. Servers that only
+// publish it on the principal URL return empty here — same UX as
+// non-compliant servers (user types the email).
+func probeCalDAVOrganizerIdentities(ctx context.Context, baseURL, username, password string) []string {
+	body := `<?xml version="1.0" encoding="utf-8"?>
+<propfind xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+  <prop>
+    <C:calendar-user-address-set/>
+  </prop>
+</propfind>`
+	req, err := http.NewRequestWithContext(ctx, "PROPFIND", baseURL, strings.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Depth", "0")
+	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
+	req.SetBasicAuth(username, password)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return nil
+	}
+
+	type href struct {
+		Value string `xml:",chardata"`
+	}
+	type addressSet struct {
+		Hrefs []href `xml:"href"`
+	}
+	type prop struct {
+		AddressSet *addressSet `xml:"calendar-user-address-set"`
+	}
+	type propstat struct {
+		Prop prop `xml:"prop"`
+	}
+	type response struct {
+		Propstat []propstat `xml:"propstat"`
+	}
+	type multistatus struct {
+		XMLName  xml.Name   `xml:"multistatus"`
+		Response []response `xml:"response"`
+	}
+	var ms multistatus
+	if err := xml.Unmarshal(raw, &ms); err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var out []string
+	for _, r := range ms.Response {
+		for _, ps := range r.Propstat {
+			if ps.Prop.AddressSet == nil {
+				continue
+			}
+			for _, h := range ps.Prop.AddressSet.Hrefs {
+				v := strings.TrimSpace(h.Value)
+				if v == "" {
+					continue
+				}
+				// Address-set values can be mailto:, https:, or opaque
+				// principal URIs. Per the v0.3.0 plan we only consume
+				// mailto: (the only form that gives us an email to use
+				// as ORGANIZER). Filter the rest silently.
+				low := strings.ToLower(v)
+				if !strings.HasPrefix(low, "mailto:") {
+					continue
+				}
+				email := strings.ToLower(strings.TrimSpace(v[len("mailto:"):]))
+				if email == "" {
+					continue
+				}
+				if _, ok := seen[email]; ok {
+					continue
+				}
+				seen[email] = struct{}{}
+				out = append(out, email)
+			}
+		}
+	}
+	return out
+}

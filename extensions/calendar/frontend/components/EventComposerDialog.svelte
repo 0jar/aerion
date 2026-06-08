@@ -120,31 +120,109 @@
     return out
   })
 
-  // Self-emails (primary account emails) for AttendeesSection's
-  // self-suggestion suppression + downstream RSVP self-match. Aliases
-  // (account.Identity rows) live on AccountIdentityGroup, not the plain
-  // Account type the accountStore exposes — fetching those would need
-  // GetAllAccountIdentities + an async hydration $effect. Deferred for
-  // v0.3.0: primary emails cover the common case (one identity per account).
+  // Self-emails for AttendeesSection's self-suggestion suppression +
+  // downstream RSVP self-match. Union of mail account primaries and
+  // every calendar source's organizer identities — so users whose
+  // CalDAV identity isn't also a configured mail account still get
+  // recognized as themselves (and the picker doesn't suggest them as
+  // an invitee). Account aliases (Identity rows) require a separate
+  // GetAllAccountIdentities call; deferred.
   const selfEmails = $derived.by(() => {
+    const seen = new Set<string>()
     const out: string[] = []
+    const push = (raw: string | undefined) => {
+      const v = (raw || '').toLowerCase().trim()
+      if (v === '' || seen.has(v)) return
+      seen.add(v)
+      out.push(v)
+    }
     for (const aw of accountStore.accounts) {
-      if (aw.account?.email) out.push(aw.account.email.toLowerCase())
+      push(aw.account?.email)
+    }
+    for (const src of calendarSources.sources) {
+      for (const email of src.organizerIdentities ?? []) {
+        push(email)
+      }
     }
     return out
   })
 
-  // Identity list for the AttendeesSection organizer picker. One entry per
-  // account; the picker collapses when ≤1.
+  // Identity list for the AttendeesSection organizer picker. Sourced from
+  // the picked calendar's owning source (NOT from the global mail account
+  // list — see Phase I of the v0.3.0 plan). source.organizerIdentities is
+  // populated at source-add time from provider discovery:
+  //   - Google / Microsoft: the bound account's email (1 entry).
+  //   - CalDAV: PROPFIND <C:calendar-user-address-set> or the user's
+  //     manual entry from the setup / settings dialog (1+ entries).
+  //   - Local: empty (attendees section is hidden entirely).
+  //
+  // Legacy fallback: pre-migration-v9 Google/Microsoft sources have
+  // empty organizerIdentities. We derive the identity live by looking
+  // up the bound account in accountStore so the composer keeps working
+  // without forcing the user to re-add every source.
   const identityOptions = $derived.by(() => {
-    const out: { email: string; commonName: string }[] = []
-    for (const aw of accountStore.accounts) {
-      const acc = aw.account
-      if (acc?.email) {
-        out.push({ email: acc.email, commonName: acc.name || '' })
+    if (!calendarId) return [] as { email: string; commonName: string }[]
+    for (const src of calendarSources.sources) {
+      const cals = calendarSources.calendarsBySource[src.id] || []
+      const owns = cals.some((c) => c.id === calendarId)
+      if (!owns) continue
+      const list = (src.organizerIdentities ?? []).filter((e) => e !== '')
+      if (list.length > 0) {
+        return list.map((email) => ({
+          email,
+          commonName: legacyCommonNameFor(src.accountId, email),
+        }))
       }
+      // Legacy fallback (no stored identities yet): live lookup against
+      // accountStore. Only applies to Google/Microsoft — Local has no
+      // identity by design, CalDAV without a populated list signals the
+      // user must set one via CalendarSettingsDialog.
+      if (src.type === 'google' || src.type === 'microsoft') {
+        const acc = accountStore.accounts.find((aw) => aw.account?.id === src.accountId)
+        const email = acc?.account?.email
+        if (email) {
+          return [{ email: email.toLowerCase(), commonName: acc?.account?.name || '' }]
+        }
+      }
+      return []
     }
-    return out
+    return []
+  })
+
+  // Helper for the legacy fallback path: when the source's stored
+  // identity list is populated, the email itself is authoritative — but
+  // we still try to label it with the bound account's display name when
+  // they match, so the dropdown reads "Alice <alice@…>" rather than
+  // bare "<alice@…>".
+  function legacyCommonNameFor(accountId: string | undefined, email: string): string {
+    if (!accountId) return ''
+    const acc = accountStore.accounts.find((aw) => aw.account?.id === accountId)
+    if (!acc?.account?.email) return ''
+    if (acc.account.email.toLowerCase() !== email.toLowerCase()) return ''
+    return acc.account.name || ''
+  }
+
+  // hasAttendeesCapability gates the entire attendees section: hidden
+  // when there's no organizer identity to attribute the event to (Local
+  // sources by design, or empty-CalDAV in the recovery window before
+  // the user fills in an organizer email via CalendarSettingsDialog).
+  const hasAttendeesCapability = $derived(identityOptions.length > 0)
+
+  // Reset organizer when the user switches calendars mid-compose to a
+  // source whose identity list doesn't include the current selection.
+  // Without this, a stale cross-source organizer survives the switch
+  // and breaks invitations on save — exactly the bug Phase I exists
+  // to fix.
+  $effect(() => {
+    if (!open) return
+    const opts = identityOptions
+    if (opts.length === 0) {
+      organizer = null
+      return
+    }
+    const current = organizer?.email?.toLowerCase()
+    if (current && opts.some((o) => o.email.toLowerCase() === current)) return
+    organizer = { email: opts[0].email.toLowerCase(), cn: opts[0].commonName }
   })
 
   // Phase H: day + duration derivations for "Find a time".
@@ -320,12 +398,10 @@
     reminderCustomMinutes = 15
     attendees = []
     sendUpdates = 'all'
-    // Default organizer to the user's primary account email; user can switch
-    // via AttendeesSection's identity picker when more than one identity
-    // exists.
-    organizer = identityOptions[0]
-      ? { email: identityOptions[0].email.toLowerCase(), cn: identityOptions[0].commonName }
-      : null
+    // Organizer is re-derived reactively from the calendar's source-bound
+    // identity list by the $effect above — leave it null here and let
+    // that effect settle it after calendarId is in place.
+    organizer = null
   }
 
   function parseRRule(text: string) {
@@ -627,6 +703,7 @@
         bind:organizer
         selfEmails={selfEmails}
         identities={identityOptions}
+        capability={hasAttendeesCapability}
         dayUnixForFreeBusy={dayUnixForFreeBusy}
         durationMinutes={pickedDurationMinutes}
         onFreeBusyPick={applyPickedSlot}

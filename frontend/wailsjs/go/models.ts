@@ -1285,6 +1285,7 @@ export namespace backend {
 	    writable: boolean;
 	    createdAt: number;
 	    itipMode?: string;
+	    organizerIdentities: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Source(source);
@@ -1306,6 +1307,7 @@ export namespace backend {
 	        this.writable = source["writable"];
 	        this.createdAt = source["createdAt"];
 	        this.itipMode = source["itipMode"];
+	        this.organizerIdentities = source["organizerIdentities"];
 	    }
 	}
 

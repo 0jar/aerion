@@ -34,6 +34,12 @@
   let urlInput = $state('')
   let usernameInput = $state('')
   let passwordInput = $state('')
+  // organizerEmailInput stays hidden until the backend's first attempt
+  // returns the ErrCalDAVOrganizerEmailRequired sentinel (server didn't
+  // publish a calendar user address via PROPFIND). The field then
+  // appears with a prompt; the user fills it and Save retries.
+  let organizerEmailInput = $state('')
+  let needsOrganizerEmail = $state(false)
   let submitting = $state(false)
   let lastError = $state('')
 
@@ -46,11 +52,24 @@
     urlInput = ''
     usernameInput = ''
     passwordInput = ''
+    organizerEmailInput = ''
+    needsOrganizerEmail = false
     lastError = ''
     submitting = false
     providerDefaultTempId = ''
     globalDefaultRef = ''
   })
+
+  // Minimal email shape check so Save is disabled until the user types
+  // something plausible. The backend re-validates server-side.
+  const emailLooksValid = $derived(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(organizerEmailInput.trim()))
+
+  // Match the backend sentinel error by stable substring. Lifted from
+  // ErrCalDAVOrganizerEmailRequired's message: "calendar: organizer
+  // email required". Robust to wrapping (errors.Errorf etc.).
+  function isOrganizerEmailRequired(msg: string): boolean {
+    return msg.toLowerCase().includes('organizer email required')
+  }
 
   // Calendars discovered for the new source — populated after Stage 1 by
   // calendarSources.addCalDAVSource → load(). Reactive on the store.
@@ -119,6 +138,10 @@
 
   async function submit() {
     if (!validate()) return
+    if (needsOrganizerEmail && !emailLooksValid) {
+      lastError = $_('calendar.add.organizerEmailInvalid')
+      return
+    }
     submitting = true
     lastError = ''
     try {
@@ -127,6 +150,7 @@
         urlInput.trim(),
         usernameInput.trim(),
         passwordInput,
+        organizerEmailInput.trim(),
       )
       const count = calendarSources.calendarsBySource[sourceID]?.length ?? 0
       toasts.success(
@@ -138,8 +162,17 @@
       newSourceID = sourceID
       stage = 'colors'
     } catch (err) {
-      lastError = (err as Error)?.message ?? String(err)
+      const msg = (err as Error)?.message ?? String(err)
       console.error('Add CalDAV source failed:', err)
+      // Backend signals "server didn't publish a calendar user address
+      // — give me an organizer email". Reveal the field instead of
+      // bouncing the user out with a generic error.
+      if (isOrganizerEmailRequired(msg)) {
+        needsOrganizerEmail = true
+        lastError = $_('calendar.add.organizerEmailPrompt')
+        return
+      }
+      lastError = msg
     } finally {
       submitting = false
     }
@@ -208,6 +241,23 @@
             onkeydown={onKeydown}
           />
         </div>
+
+        {#if needsOrganizerEmail}
+          <div>
+            <Label for="cal-add-organizer">{$_('calendar.add.organizerEmailLabel')}</Label>
+            <Input
+              id="cal-add-organizer"
+              type="email"
+              placeholder={$_('calendar.add.organizerEmailPlaceholder')}
+              bind:value={organizerEmailInput}
+              disabled={submitting}
+              onkeydown={onKeydown}
+            />
+            <p class="text-xs text-muted-foreground mt-1">
+              {$_('calendar.add.organizerEmailHelp')}
+            </p>
+          </div>
+        {/if}
 
         {#if lastError !== ''}
           <div class="flex items-start gap-2 p-2 bg-destructive/10 rounded text-sm min-w-0">

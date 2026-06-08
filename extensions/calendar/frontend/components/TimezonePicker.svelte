@@ -31,8 +31,35 @@
   let searchQuery = $state('')
   let highlightedIdx = $state(0)
   let popoverRef = $state<HTMLDivElement | null>(null)
+  let triggerRef = $state<HTMLButtonElement | null>(null)
   let searchInputRef = $state<HTMLInputElement | null>(null)
   let listRef = $state<HTMLUListElement | null>(null)
+
+  // Computed coords for the popover. We use position:fixed (anchored to
+  // the viewport) rather than position:absolute (anchored to the trigger)
+  // so the dropdown isn't clipped when the trigger lives inside a scroll
+  // container with overflow-y-auto — exactly the case when this picker
+  // is mounted inside CalendarSettingsDialog. The popover auto-flips
+  // upward when there isn't room below.
+  let popoverStyle = $state('')
+  const POPOVER_WIDTH = 288 // w-72 = 18rem ≈ 288px
+  const POPOVER_HEIGHT = 320 // search input + max-h-72 list + padding
+
+  function recomputePopoverPosition() {
+    if (!triggerRef) return
+    const rect = triggerRef.getBoundingClientRect()
+    const flipsUp = rect.bottom + POPOVER_HEIGHT + 8 > window.innerHeight
+      && rect.top - POPOVER_HEIGHT - 8 > 0
+    const top = flipsUp ? rect.top - POPOVER_HEIGHT - 4 : rect.bottom + 4
+    // Right-align the popover with the trigger button. Clamp to viewport
+    // so it doesn't bleed off-screen on a narrow window.
+    let left = rect.right - POPOVER_WIDTH
+    if (left < 8) left = 8
+    if (left + POPOVER_WIDTH > window.innerWidth - 8) {
+      left = window.innerWidth - POPOVER_WIDTH - 8
+    }
+    popoverStyle = `position: fixed; top: ${top}px; left: ${left}px; width: ${POPOVER_WIDTH}px;`
+  }
 
   // Filter list. The auto-detect row is always first and matches when the
   // user's query is empty or substring-matches "auto" / "system".
@@ -60,7 +87,10 @@
     searchQuery = ''
     // Pre-highlight the currently-selected zone (or auto-detect if unset).
     highlightedIdx = 0
-    queueMicrotask(() => searchInputRef?.focus())
+    queueMicrotask(() => {
+      recomputePopoverPosition()
+      searchInputRef?.focus()
+    })
   }
 
   function closePanel() {
@@ -128,8 +158,17 @@
   $effect(() => {
     if (!isOpen) return
     document.addEventListener('click', handleClickOutside, true)
+    // The popover uses position:fixed, so we need to close (or reposition)
+    // on viewport changes — otherwise the trigger scrolls away inside the
+    // dialog's scroll container while the popover stays put. Closing on
+    // scroll is the standard popover UX; the user re-opens it after.
+    const onViewportChange = () => closePanel()
+    window.addEventListener('scroll', onViewportChange, true)
+    window.addEventListener('resize', onViewportChange)
     return () => {
       document.removeEventListener('click', handleClickOutside, true)
+      window.removeEventListener('scroll', onViewportChange, true)
+      window.removeEventListener('resize', onViewportChange)
     }
   })
 
@@ -140,9 +179,10 @@
   })
 </script>
 
-<div class="relative inline-block" bind:this={popoverRef}>
+<div class="inline-block" bind:this={popoverRef}>
   <button
     type="button"
+    bind:this={triggerRef}
     class="text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40
            rounded px-1 py-0.5 transition-colors"
     title={$_('calendar.tzSelector.tooltip', { default: '' })}
@@ -153,8 +193,8 @@
 
   {#if isOpen}
     <div
-      class="absolute right-0 top-full mt-1 z-50 w-72 bg-popover border border-border
-             rounded-lg shadow-lg p-2"
+      class="z-50 bg-popover border border-border rounded-lg shadow-lg p-2"
+      style={popoverStyle}
       transition:fly={{ y: -5, duration: 150 }}
     >
       <input

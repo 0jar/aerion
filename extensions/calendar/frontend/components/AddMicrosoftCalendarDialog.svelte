@@ -185,7 +185,17 @@
       const selections = calendars
         .filter((c) => selectedIds.has(c.id))
         .map((c) => ({ id: c.id, displayName: c.name, color: '', writable: c.writable }))
-      const newSourceID = await Calendar_AddMicrosoftSource(selectedAccountId, sourceName.trim(), selections)
+      // Resolve the bound account's email so the backend can persist it
+      // as the source's organizer identity. Microsoft UPN is always
+      // email-shaped so this is reliable when bound.
+      const boundAccount = accounts.find((a) => a.id === selectedAccountId)
+      const accountEmail = boundAccount?.email ?? ''
+      const newSourceID = await Calendar_AddMicrosoftSource(
+        selectedAccountId,
+        sourceName.trim(),
+        accountEmail,
+        selections,
+      )
       await calendarSources.load()
       const newCals = calendarSources.calendarsBySource[newSourceID] || []
       const added = selections.map(s => {

@@ -190,7 +190,18 @@
       const selections = calendars
         .filter((c) => selectedIds.has(c.id))
         .map((c) => ({ id: c.id, displayName: c.summary, color: '', writable: c.writable }))
-      const newSourceID = await Calendar_AddGoogleSource(selectedAccountId, sourceName.trim(), selections)
+      // Resolve the bound account's email so the backend can persist it
+      // as the source's organizer identity (composer reads it back as
+      // the "Organizing as" line). Empty string is safe — backend
+      // tolerates it and the composer falls back to live lookup.
+      const boundAccount = accounts.find((a) => a.id === selectedAccountId)
+      const accountEmail = boundAccount?.email ?? ''
+      const newSourceID = await Calendar_AddGoogleSource(
+        selectedAccountId,
+        sourceName.trim(),
+        accountEmail,
+        selections,
+      )
       // Reload the sources store so the newly-persisted calendars have
       // real backend IDs we can attach defaults to (provider uses Google's
       // calendar id as the URL column; we match by URL → real id).

@@ -267,6 +267,29 @@ var migrations = []extensions.Migration{
 			ALTER TABLE calendar_sources ADD COLUMN itip_mode TEXT NOT NULL DEFAULT 'server';
 		`,
 	},
+	{
+		Version: 9,
+		SQL: `
+			-- Per-source organizer identity list. Populated at source-add time
+			-- from provider-specific discovery (Google/Microsoft: the bound
+			-- account's email; CalDAV: PROPFIND <C:calendar-user-address-set>
+			-- on the principal). Empty for Local sources — attendees / RSVP /
+			-- Find-a-time are gated off entirely in the composer when this
+			-- list is empty (no invitation pathway exists in v0.3.0 for
+			-- standalone local events).
+			--
+			-- Stored as JSON-encoded []string. DEFAULT '[]' keeps existing
+			-- rows well-formed without a cross-DB backfill — the calendar
+			-- extension's per-extension SQLite can't join the host's accounts
+			-- table at migration time. Frontend falls back to live lookup
+			-- via accountStore for legacy Google/Microsoft rows whose stored
+			-- identity list is empty; for CalDAV the user re-runs the probe
+			-- (or types an organizer email) from the per-source settings
+			-- row in CalendarSettingsDialog.
+
+			ALTER TABLE calendar_sources ADD COLUMN organizer_identities TEXT NOT NULL DEFAULT '[]';
+		`,
+	},
 }
 
 // Store wraps the per-extension DB for the Calendar extension. Lives in an
@@ -327,6 +350,20 @@ type Source struct {
 	// handles iTIP delivery natively). Frontend's "Send invitations"
 	// toggle on AttendeesSection grays its choices when this is "none".
 	ITIPMode string `json:"itipMode,omitempty"`
+
+	// OrganizerIdentities lists the email addresses the user is authorized
+	// to act as for events on this source's calendars. Populated at
+	// source-add time from provider-specific discovery:
+	//   - Google / Microsoft: the bound account's email (1 entry).
+	//   - CalDAV: PROPFIND <C:calendar-user-address-set> on the principal
+	//     (may be 0+ entries; user enters one manually when empty).
+	//   - Local: empty (attendees feature gated off in the composer).
+	//
+	// EventComposerDialog reads this through `source.organizerIdentities`
+	// to populate the "Organizing as" picker. Length 0 hides the attendees
+	// section entirely; length 1 renders a static label; length 2+ shows
+	// a picker constrained to these addresses.
+	OrganizerIdentities []string `json:"organizerIdentities"`
 }
 
 // Calendar is the Go type for one calendar row within a source.
@@ -380,21 +417,84 @@ func (s *Store) CreateSourceTx(tx *sql.Tx, src Source) error {
 	if src.ITIPMode == "" {
 		src.ITIPMode = "server"
 	}
-	_, err := tx.Exec(`
+	identitiesJSON, err := marshalOrganizerIdentities(src.OrganizerIdentities)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`
 		INSERT INTO calendar_sources (
 			id, type, name, url, username, sync_interval_min,
 			last_synced_at, last_error, last_error_at,
-			account_id, enabled, writable, created_at, itip_mode
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			account_id, enabled, writable, created_at, itip_mode,
+			organizer_identities
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		src.ID, src.Type, src.Name, src.URL, src.Username, src.SyncIntervalMin,
 		nullIfZero(src.LastSyncedAt), nullIfEmpty(src.LastError), nullIfZero(src.LastErrorAt),
 		nullIfEmpty(src.AccountID), boolToInt(src.Enabled), boolToInt(src.Writable), src.CreatedAt,
-		src.ITIPMode,
+		src.ITIPMode, identitiesJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("insert calendar_source: %w", err)
 	}
 	return nil
+}
+
+// SetOrganizerIdentities replaces the stored organizer identity list for
+// a source. Called by the per-source settings UI (manual edit) and by
+// re-probe operations. Empty input clears the list (composer then hides
+// attendees end-to-end for that source's calendars).
+func (s *Store) SetOrganizerIdentities(sourceID string, identities []string) error {
+	encoded, err := marshalOrganizerIdentities(identities)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB().Exec(`UPDATE calendar_sources SET organizer_identities = ? WHERE id = ?`,
+		encoded, sourceID)
+	if err != nil {
+		return fmt.Errorf("set organizer identities: %w", err)
+	}
+	return nil
+}
+
+// marshalOrganizerIdentities normalizes (lowercase + trim + dedupe) and
+// JSON-encodes the identity list for storage. Empty / all-blank input
+// yields "[]" — never stored as NULL or "null".
+func marshalOrganizerIdentities(in []string) (string, error) {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		v := strings.ToLower(strings.TrimSpace(s))
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("marshal organizer identities: %w", err)
+	}
+	if len(b) == 0 || string(b) == "null" {
+		return "[]", nil
+	}
+	return string(b), nil
+}
+
+// unmarshalOrganizerIdentities decodes the JSON column back into a slice.
+// Empty / unparseable input returns nil (composer treats as "no
+// identities" — same UX as Local sources).
+func unmarshalOrganizerIdentities(raw string) []string {
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 // SetSourceWritable updates the writable flag on a calendar_sources row.
@@ -417,19 +517,23 @@ func (s *Store) GetSource(id string) (*Source, error) {
 	row := s.DB().QueryRow(`
 		SELECT id, type, name, url, username, sync_interval_min,
 		       COALESCE(last_synced_at, 0), COALESCE(last_error, ''), COALESCE(last_error_at, 0),
-		       COALESCE(account_id, ''), enabled, writable, created_at, COALESCE(itip_mode, 'server')
+		       COALESCE(account_id, ''), enabled, writable, created_at, COALESCE(itip_mode, 'server'),
+		       COALESCE(organizer_identities, '[]')
 		FROM calendar_sources WHERE id = ?`, id)
 	src := &Source{}
 	var enabled, writable int
+	var identitiesRaw string
 	if err := row.Scan(
 		&src.ID, &src.Type, &src.Name, &src.URL, &src.Username, &src.SyncIntervalMin,
 		&src.LastSyncedAt, &src.LastError, &src.LastErrorAt,
 		&src.AccountID, &enabled, &writable, &src.CreatedAt, &src.ITIPMode,
+		&identitiesRaw,
 	); err != nil {
 		return nil, err
 	}
 	src.Enabled = enabled != 0
 	src.Writable = writable != 0
+	src.OrganizerIdentities = unmarshalOrganizerIdentities(identitiesRaw)
 	return src, nil
 }
 
@@ -438,7 +542,8 @@ func (s *Store) ListSources() ([]Source, error) {
 	rows, err := s.DB().Query(`
 		SELECT id, type, name, url, username, sync_interval_min,
 		       COALESCE(last_synced_at, 0), COALESCE(last_error, ''), COALESCE(last_error_at, 0),
-		       COALESCE(account_id, ''), enabled, writable, created_at, COALESCE(itip_mode, 'server')
+		       COALESCE(account_id, ''), enabled, writable, created_at, COALESCE(itip_mode, 'server'),
+		       COALESCE(organizer_identities, '[]')
 		FROM calendar_sources ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query calendar_sources: %w", err)
@@ -449,15 +554,18 @@ func (s *Store) ListSources() ([]Source, error) {
 	for rows.Next() {
 		var src Source
 		var enabled, writable int
+		var identitiesRaw string
 		if err := rows.Scan(
 			&src.ID, &src.Type, &src.Name, &src.URL, &src.Username, &src.SyncIntervalMin,
 			&src.LastSyncedAt, &src.LastError, &src.LastErrorAt,
 			&src.AccountID, &enabled, &writable, &src.CreatedAt, &src.ITIPMode,
+			&identitiesRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan calendar_source: %w", err)
 		}
 		src.Enabled = enabled != 0
 		src.Writable = writable != 0
+		src.OrganizerIdentities = unmarshalOrganizerIdentities(identitiesRaw)
 		out = append(out, src)
 	}
 	if err := rows.Err(); err != nil {
@@ -1003,6 +1111,17 @@ func (s *Store) UpdateCalendarWritable(calendarID string, writable bool) error {
 		boolToInt(writable), calendarID)
 	if err != nil {
 		return fmt.Errorf("update calendar writable: %w", err)
+	}
+	return nil
+}
+
+// UpdateSourceName changes the display name on a source row. Validation
+// (non-empty, length cap) happens at the API layer.
+func (s *Store) UpdateSourceName(sourceID, name string) error {
+	_, err := s.DB().Exec(`UPDATE calendar_sources SET name = ? WHERE id = ?`,
+		name, sourceID)
+	if err != nil {
+		return fmt.Errorf("update source name: %w", err)
 	}
 	return nil
 }

@@ -24,8 +24,15 @@
      *  for self-suggestion suppression AND used to render the organizer line. */
     selfEmails?: string[]
     /** When >1, identity dropdown is shown so the user picks which alias to
-     *  organize as. */
+     *  organize as. Sourced from the picked calendar's owning source.
+     *  Length 0 means the source has no organizer identity (Local source, or
+     *  CalDAV with no calendar-user-address-set yet) — the section is hidden
+     *  entirely via the `capability` prop. */
     identities?: { email: string; commonName: string }[]
+    /** When false, the whole attendees section (input + organizer line +
+     *  Find-a-time) is suppressed. Drives the gate for Local sources and
+     *  the recovery window for empty CalDAV identity lists. */
+    capability?: boolean
     /** "Find a time" starting day (unix seconds, midnight in user's tz). */
     dayUnixForFreeBusy?: number
     /** Duration hint so picked slot calculates DTEND correctly. */
@@ -40,6 +47,7 @@
     organizer = $bindable(null),
     selfEmails = [],
     identities = [],
+    capability = true,
     dayUnixForFreeBusy = 0,
     durationMinutes = 60,
     onFreeBusyPick,
@@ -64,6 +72,7 @@
   }
 </script>
 
+{#if capability}
 <div class="space-y-3">
   <div class="flex items-center justify-between">
     <label class="text-sm font-medium" for="cal-attendees">
@@ -123,3 +132,4 @@
   durationMinutes={durationMinutes}
   onSelect={(s, e) => onFreeBusyPick?.(s, e)}
 />
+{/if}

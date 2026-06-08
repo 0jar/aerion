@@ -37,15 +37,15 @@ export function Archive(arg1:Array<string>):Promise<void>;
 
 export function BroadcastThemeChange(arg1:string):Promise<void>;
 
-export function Calendar_AddCalDAVSource(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+export function Calendar_AddCalDAVSource(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
 
-export function Calendar_AddGoogleSource(arg1:string,arg2:string,arg3:Array<backend.GoogleCalendarSelection>):Promise<string>;
+export function Calendar_AddGoogleSource(arg1:string,arg2:string,arg3:string,arg4:Array<backend.GoogleCalendarSelection>):Promise<string>;
 
 export function Calendar_AddLocalCalendar(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function Calendar_AddLocalSource(arg1:string):Promise<string>;
 
-export function Calendar_AddMicrosoftSource(arg1:string,arg2:string,arg3:Array<backend.MicrosoftCalendarSelection>):Promise<string>;
+export function Calendar_AddMicrosoftSource(arg1:string,arg2:string,arg3:string,arg4:Array<backend.MicrosoftCalendarSelection>):Promise<string>;
 
 export function Calendar_CreateEvent(arg1:backend.EventInput):Promise<string>;
 
@@ -77,11 +77,17 @@ export function Calendar_OpenURL(arg1:string):Promise<void>;
 
 export function Calendar_QueryFreeBusy(arg1:Array<string>,arg2:Array<string>,arg3:number,arg4:number):Promise<Array<backend.FreeBusyResult>>;
 
+export function Calendar_RenameSource(arg1:string,arg2:string):Promise<void>;
+
+export function Calendar_ReprobeCalDAVOrganizerIdentities(arg1:string):Promise<number>;
+
 export function Calendar_SearchContacts(arg1:string,arg2:number):Promise<Array<v1.Contact>>;
 
 export function Calendar_SetCalendarColor(arg1:string,arg2:string):Promise<void>;
 
 export function Calendar_SetCalendarVisible(arg1:string,arg2:boolean):Promise<void>;
+
+export function Calendar_SetOrganizerIdentity(arg1:string,arg2:string):Promise<void>;
 
 export function Calendar_SetSyncInterval(arg1:string,arg2:number):Promise<void>;
 

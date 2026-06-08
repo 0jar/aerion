@@ -151,14 +151,21 @@ func (b *CalendarBridge) ensureInit() error {
 // stores the password via coreapi.Storage.Secrets. Returns the new
 // source's ID, or an error describing where discovery failed (auth /
 // principal / home-set / list).
-func (b *CalendarBridge) Calendar_AddCalDAVSource(name, url, username, password string) (string, error) {
+//
+// organizerEmail is an optional user-supplied fallback: if the principal
+// PROPFIND for <C:calendar-user-address-set> yields no mailto: addresses,
+// this email is stored as the organizer identity instead. Pass "" on
+// the first call; if the server publishes no addresses AND this is
+// empty, the bridge returns ErrCalDAVOrganizerEmailRequired and the
+// frontend prompts the user to enter one before resubmitting.
+func (b *CalendarBridge) Calendar_AddCalDAVSource(name, url, username, password, organizerEmail string) (string, error) {
 	if !b.gateEnabled() {
 		return "", errors.New("calendar: extension disabled")
 	}
 	if err := b.ensureInit(); err != nil {
 		return "", err
 	}
-	sourceID, err := b.api.AddCalDAVSource(name, url, username, password)
+	sourceID, err := b.api.AddCalDAVSource(name, url, username, password, organizerEmail)
 	if err != nil {
 		return "", err
 	}
@@ -166,6 +173,35 @@ func (b *CalendarBridge) Calendar_AddCalDAVSource(name, url, username, password 
 	// immediate sync in the background so events show up without waiting.
 	b.syncer.AddSource(sourceID, 15)
 	return sourceID, nil
+}
+
+// Calendar_SetOrganizerIdentity replaces the stored organizer identity
+// for a source with a single email. Used by the per-source CalDAV
+// settings row in CalendarSettingsDialog to fix up empty / wrong identity
+// lists without re-adding the source. Empty email clears the list.
+func (b *CalendarBridge) Calendar_SetOrganizerIdentity(sourceID, email string) error {
+	if !b.gateEnabled() {
+		return errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	return b.api.SetOrganizerIdentity(sourceID, email)
+}
+
+// Calendar_ReprobeCalDAVOrganizerIdentities re-runs the principal
+// PROPFIND for <C:calendar-user-address-set> on a CalDAV source and
+// replaces the stored identity list with the result. Returns the number
+// of identities discovered (0 means the list was cleared — the user
+// should then enter an organizer email via Calendar_SetOrganizerIdentity).
+func (b *CalendarBridge) Calendar_ReprobeCalDAVOrganizerIdentities(sourceID string) (int, error) {
+	if !b.gateEnabled() {
+		return 0, errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return 0, err
+	}
+	return b.api.ReprobeCalDAVOrganizerIdentities(sourceID)
 }
 
 // Calendar_AddLocalSource creates a local (non-CalDAV) source. Calendars
@@ -432,6 +468,19 @@ func (b *CalendarBridge) Calendar_SetCalendarColor(calendarID, hex string) error
 	return b.api.store.SetCalendarColor(calendarID, hex)
 }
 
+// Calendar_RenameSource changes a source's display name. Same source
+// row used by every source type (CalDAV, Google, Microsoft, Local).
+// Idempotent; rejects empty / overlong values at the API layer.
+func (b *CalendarBridge) Calendar_RenameSource(sourceID, name string) error {
+	if !b.gateEnabled() {
+		return errors.New("calendar: extension disabled")
+	}
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	return b.api.RenameSource(sourceID, name)
+}
+
 // Calendar_SetSyncInterval changes a source's poll interval (minutes).
 // Validates {5, 15, 30, 60, 120, 240, 720}; rejects other values.
 func (b *CalendarBridge) Calendar_SetSyncInterval(sourceID string, minutes int) error {
@@ -554,14 +603,19 @@ func (b *CalendarBridge) Calendar_ListGoogleCalendarsForAccount(accountID string
 // chosen calendars, then triggers an initial sync. Returns the new source
 // ID. Mirrors Calendar_AddCalDAVSource's post-add wiring (hooks the
 // syncer's per-source ticker + fires an immediate background sync).
-func (b *CalendarBridge) Calendar_AddGoogleSource(accountID, name string, selections []GoogleCalendarSelection) (string, error) {
+//
+// accountEmail is the bound mail account's primary email (looked up by
+// the frontend via accountStore). Stored as the source's organizer
+// identity so the event composer uses it as ORGANIZER for events on
+// this source's calendars.
+func (b *CalendarBridge) Calendar_AddGoogleSource(accountID, name, accountEmail string, selections []GoogleCalendarSelection) (string, error) {
 	if !b.gateEnabled() {
 		return "", errors.New("calendar: extension disabled")
 	}
 	if err := b.ensureInit(); err != nil {
 		return "", err
 	}
-	sourceID, err := b.api.AddGoogleSource(accountID, name, selections)
+	sourceID, err := b.api.AddGoogleSource(accountID, name, accountEmail, selections)
 	if err != nil {
 		return "", err
 	}
@@ -591,14 +645,17 @@ func (b *CalendarBridge) Calendar_ListMicrosoftCalendarsForAccount(accountID str
 // Calendar_AddMicrosoftSource persists a Microsoft-backed source + the
 // user's chosen calendars, then triggers an initial sync. Mirrors
 // Calendar_AddGoogleSource 1-for-1.
-func (b *CalendarBridge) Calendar_AddMicrosoftSource(accountID, name string, selections []MicrosoftCalendarSelection) (string, error) {
+//
+// accountEmail is the bound mail account's primary email (Microsoft UPN —
+// always email-shaped). Stored as the source's organizer identity.
+func (b *CalendarBridge) Calendar_AddMicrosoftSource(accountID, name, accountEmail string, selections []MicrosoftCalendarSelection) (string, error) {
 	if !b.gateEnabled() {
 		return "", errors.New("calendar: extension disabled")
 	}
 	if err := b.ensureInit(); err != nil {
 		return "", err
 	}
-	sourceID, err := b.api.AddMicrosoftSource(accountID, name, selections)
+	sourceID, err := b.api.AddMicrosoftSource(accountID, name, accountEmail, selections)
 	if err != nil {
 		return "", err
 	}

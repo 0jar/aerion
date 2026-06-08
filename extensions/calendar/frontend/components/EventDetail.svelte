@@ -82,13 +82,38 @@
 
   // Self-emails for AttendeeListDisplay "(you)" suffix + RSVP self-match.
   // Same predicate the backend's UpdateMyAttendeeStatus uses on its side.
-  // Identities (account aliases) live on AccountIdentityGroup not the
-  // plain Account; deferred until a follow-up — primary emails cover the
-  // common case.
+  //
+  // Union of two sources:
+  //   - Every configured Aerion mail account's primary email.
+  //   - Every calendar source's organizer identities (from
+  //     organizerIdentities populated at source-add time).
+  //
+  // The second part is critical for users whose CalDAV principal email
+  // isn't also a configured mail account (e.g., Nextcloud-only setups,
+  // or the user runs Mail under one address but the calendar under
+  // another). Without it, an event imported via the email-client's
+  // "Add to calendar" lands with the user as an attendee that the
+  // composer doesn't recognize → no RSVP options surface.
+  //
+  // Account aliases (Identity rows on AccountIdentityGroup) still
+  // require a separate GetAllAccountIdentities call; deferred — the
+  // calendar-source coverage closes the user-reported gap.
   const selfEmails = $derived.by(() => {
+    const seen = new Set<string>()
     const out: string[] = []
+    const push = (raw: string | undefined) => {
+      const v = (raw || '').toLowerCase().trim()
+      if (v === '' || seen.has(v)) return
+      seen.add(v)
+      out.push(v)
+    }
     for (const aw of accountStore.accounts) {
-      if (aw.account?.email) out.push(aw.account.email.toLowerCase())
+      push(aw.account?.email)
+    }
+    for (const src of calendarSources.sources) {
+      for (const email of src.organizerIdentities ?? []) {
+        push(email)
+      }
     }
     return out
   })

@@ -38,12 +38,12 @@ export function BroadcastThemeChange(arg1) {
   return window['go']['app']['App']['BroadcastThemeChange'](arg1);
 }
 
-export function Calendar_AddCalDAVSource(arg1, arg2, arg3, arg4) {
-  return window['go']['app']['App']['Calendar_AddCalDAVSource'](arg1, arg2, arg3, arg4);
+export function Calendar_AddCalDAVSource(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['app']['App']['Calendar_AddCalDAVSource'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function Calendar_AddGoogleSource(arg1, arg2, arg3) {
-  return window['go']['app']['App']['Calendar_AddGoogleSource'](arg1, arg2, arg3);
+export function Calendar_AddGoogleSource(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['Calendar_AddGoogleSource'](arg1, arg2, arg3, arg4);
 }
 
 export function Calendar_AddLocalCalendar(arg1, arg2, arg3) {
@@ -54,8 +54,8 @@ export function Calendar_AddLocalSource(arg1) {
   return window['go']['app']['App']['Calendar_AddLocalSource'](arg1);
 }
 
-export function Calendar_AddMicrosoftSource(arg1, arg2, arg3) {
-  return window['go']['app']['App']['Calendar_AddMicrosoftSource'](arg1, arg2, arg3);
+export function Calendar_AddMicrosoftSource(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['Calendar_AddMicrosoftSource'](arg1, arg2, arg3, arg4);
 }
 
 export function Calendar_CreateEvent(arg1) {
@@ -118,6 +118,14 @@ export function Calendar_QueryFreeBusy(arg1, arg2, arg3, arg4) {
   return window['go']['app']['App']['Calendar_QueryFreeBusy'](arg1, arg2, arg3, arg4);
 }
 
+export function Calendar_RenameSource(arg1, arg2) {
+  return window['go']['app']['App']['Calendar_RenameSource'](arg1, arg2);
+}
+
+export function Calendar_ReprobeCalDAVOrganizerIdentities(arg1) {
+  return window['go']['app']['App']['Calendar_ReprobeCalDAVOrganizerIdentities'](arg1);
+}
+
 export function Calendar_SearchContacts(arg1, arg2) {
   return window['go']['app']['App']['Calendar_SearchContacts'](arg1, arg2);
 }
@@ -128,6 +136,10 @@ export function Calendar_SetCalendarColor(arg1, arg2) {
 
 export function Calendar_SetCalendarVisible(arg1, arg2) {
   return window['go']['app']['App']['Calendar_SetCalendarVisible'](arg1, arg2);
+}
+
+export function Calendar_SetOrganizerIdentity(arg1, arg2) {
+  return window['go']['app']['App']['Calendar_SetOrganizerIdentity'](arg1, arg2);
 }
 
 export function Calendar_SetSyncInterval(arg1, arg2) {

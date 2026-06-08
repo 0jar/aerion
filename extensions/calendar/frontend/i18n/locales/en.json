@@ -104,7 +104,12 @@
       "makeGlobalDefault": "Set as global default",
       "providerLabelLocal": "Local calendars",
       "providerLabelGoogle": "Google",
-      "providerLabelMicrosoft": "Outlook"
+      "providerLabelMicrosoft": "Outlook",
+      "organizerEmailLabel": "Organizer email",
+      "organizerEmailPlaceholder": "you@example.com",
+      "organizerEmailPrompt": "Your server didn't publish a calendar user address. Enter the email Aerion should use as the meeting organizer for events on this source.",
+      "organizerEmailHelp": "This is the address that will appear as ORGANIZER on events you create here.",
+      "organizerEmailInvalid": "Enter a valid email address."
     },
     "toast": {
       "syncStarted": "Syncing {name}…",
@@ -164,7 +169,7 @@
       "deleteCalendarConfirmTitle": "Delete {name}?",
       "deleteCalendarConfirmDescription": "All events in this calendar will be removed. This cannot be undone.",
       "sourcesSection": "Sources",
-      "noSources": "No CalDAV sources yet — add one to start syncing.",
+      "noSources": "No sources yet — add one to start syncing.",
       "calendarCount": "{count} calendars",
       "calendarCountOne": "1 calendar",
       "lastSync": "Synced {time} ago",
@@ -230,7 +235,17 @@
       "addOutlookErrorPick": "Pick at least one calendar.",
       "addOutlookErrorName": "Source name is required.",
       "addOutlookToastSuccess": "Outlook calendars added — syncing now.",
-      "addOutlookToastError": "Failed to add Outlook calendar: {message}"
+      "addOutlookToastError": "Failed to add Outlook calendar: {message}",
+      "organizerEmailLabel": "Organizer email",
+      "organizerEmailPlaceholder": "you@example.com",
+      "organizerEmailSaved": "Organizer email updated",
+      "organizerEmailReprobed": "Found {count} address(es) on the server",
+      "organizerEmailReprobeEmpty": "Server still doesn't publish a calendar user address — type one above and Save.",
+      "organizerEmailReprobeTitle": "Re-probe server for calendar user addresses",
+      "renameTitle": "Rename source",
+      "renameToastSuccess": "Renamed to \"{name}\"",
+      "timezoneSection": "Display timezone",
+      "timezoneHelp": "Choose which timezone Aerion uses to render event times. Auto-detect uses your system timezone."
     },
     "localCalendar": {
       "title": "Add local calendar",
