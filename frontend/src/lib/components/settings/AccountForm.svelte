@@ -86,6 +86,11 @@
   let smtpUsername = $state('')
   let smtpPassword = $state('')
   let smtpUseSameAsIncoming = $state(true)
+  // Auto-mirror IMAP host into SMTP host for new Generic accounts: most
+  // providers use the same hostname or a near-identical subdomain swap,
+  // so typing the IMAP host pre-fills SMTP. Goes sticky-off the moment
+  // the user types directly into the SMTP field — manual edits stick.
+  let smtpHostMirrorsImap = $state(true)
   let replyForwardIdentityID = $state('')
   let availableIdentityGroups = $state<app.AccountIdentityGroup[]>([])
   // True only when the user explicitly picked Generic/Custom (or the
@@ -921,6 +926,12 @@
                   type="text"
                   placeholder="imap.example.com"
                   bind:value={imapHost}
+                  oninput={(e) => {
+                    const v = (e.target as HTMLInputElement).value
+                    if (isGenericProvider && !editAccount && smtpHostMirrorsImap) {
+                      smtpHost = v
+                    }
+                  }}
                   class={errors.imapHost ? 'border-destructive' : ''}
                 />
                 {#if errors.imapHost}
@@ -1025,6 +1036,7 @@
                   type="text"
                   placeholder="smtp.example.com"
                   bind:value={smtpHost}
+                  oninput={() => { smtpHostMirrorsImap = false }}
                   class={errors.smtpHost ? 'border-destructive' : ''}
                 />
                 {#if errors.smtpHost}
