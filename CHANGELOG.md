@@ -18,6 +18,7 @@
 - Fixed unified inbox actions - [#234](https://github.com/hkdb/aerion/issues/234)
 - Fixed Microsoft admin pre-approved oauth - [#29](https://github.com/hkdb/aerion/issues/29)
 - Fixed read/star polluting undo - [#243](https://github.com/hkdb/aerion/issues/243)
+- Fixed duplicate unified inbox freeze - [#241](https://github.com/hkdb/aerion/issues/241)
 
 
 **v0.2.5 - 05-27-2026**
