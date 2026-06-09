@@ -240,6 +240,11 @@
       // Find folder info for display
       const folderInfo = findFolderById(data.accountId, data.folderId)
 
+      // Switch the rail back to mail in case the user was on an extension
+      // tab when the notification fired — without this the message-list
+      // state below would update but stay hidden behind the extension pane.
+      setActiveExtension('mail')
+
       // Navigate to the folder (use 'unified' source to highlight under Unified Inbox)
       selectedAccountId = data.accountId
       selectedFolderId = data.folderId

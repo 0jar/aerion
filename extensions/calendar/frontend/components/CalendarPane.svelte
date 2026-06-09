@@ -57,13 +57,30 @@
     EventsOn('calendar:write-queued', () => {
       toasts.info($_('calendar.write.queued'))
     })
-    const pending = consumePendingDeepLink('calendar')
-    const prefix = '/event/'
-    if (pending && pending.startsWith(prefix)) {
-      const eventID = pending.slice(prefix.length)
-      if (eventID !== '') calendarView.selectEvent(eventID)
-    }
+
+    // Initial drain: a notification click that switched the rail to us
+    // stashed its path in the buffer before our mount. Handle it now.
+    handleCalendarDeepLink(consumePendingDeepLink('calendar'))
+
+    // Repeat-click subscription: when a calendar notification fires while
+    // we're already the active rail tab, setActiveExtension('calendar')
+    // is a no-op and onMount won't re-run. Listen for the host's
+    // extension-open event here so we still navigate to the new event.
+    EventsOn('extension:open', (data: { extensionId: string; path: string }) => {
+      if (data.extensionId !== 'calendar') return
+      // Drain the buffer so a future remount doesn't replay this path.
+      consumePendingDeepLink('calendar')
+      handleCalendarDeepLink(data.path)
+    })
   })
+
+  function handleCalendarDeepLink(path: string | null | undefined) {
+    if (!path) return
+    const prefix = '/event/'
+    if (!path.startsWith(prefix)) return
+    const eventID = path.slice(prefix.length)
+    if (eventID !== '') calendarView.selectEvent(eventID)
+  }
 
   // Auto-refetch events whenever the visible calendar set OR the visible
   // window changes. Uses fetchRange's lastFetchKey dedup so rapid state
