@@ -247,6 +247,7 @@
           <li>Fixed CardDav remove provider code path to not leave orphaned contacts in db</li>
           <li>Fixed Sent/Draft folder message listing - #227</li>
           <li>Fixed unified inbox actions - #234</li>
+          <li>Fixed Microsoft admin pre-approved oauth - #29</li>
         </ul>
       </description>
     </release>
