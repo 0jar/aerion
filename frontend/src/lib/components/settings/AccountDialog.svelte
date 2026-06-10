@@ -45,6 +45,15 @@
   // Tab state (for edit mode)
   let activeTab = $state('general')
 
+  // True when editing a generic-provider account (non-Gmail/Outlook/etc).
+  // Controls visibility of the SMTP-authentication UI on the Server tab
+  // and the corresponding hint on the General tab.
+  const KNOWN_PROVIDER_HOSTS = ['gmail.com', 'googlemail.com', 'outlook.com', 'office365.com', 'yahoo.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com']
+  const isGenericProvider = $derived(
+    (editAccount?.imapHost ?? '') !== ''
+    && !KNOWN_PROVIDER_HOSTS.some(h => (editAccount?.imapHost ?? '').includes(h))
+  )
+
   // Form state (for edit mode)
   let name = $state('')
   let displayName = $state('')
@@ -418,6 +427,7 @@
               bind:password
               bind:syncPeriodDays
               {authType}
+              {isGenericProvider}
               {errors}
               {reauthorizing}
               {reauthorizeSuccess}
@@ -453,7 +463,7 @@
               bind:smtpPassword
               bind:replyForwardIdentityID
               {availableIdentityGroups}
-              isGenericProvider={(editAccount?.imapHost ?? '') !== '' && !['gmail.com', 'googlemail.com', 'outlook.com', 'office365.com', 'yahoo.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com'].some(h => (editAccount?.imapHost ?? '').includes(h))}
+              {isGenericProvider}
               bind:syncInterval
               bind:readReceiptRequestPolicy
               bind:sentFolderPath

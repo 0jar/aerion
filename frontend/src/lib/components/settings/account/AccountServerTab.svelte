@@ -124,12 +124,25 @@
   }: Props = $props()
 
   // SMTP "Same as incoming server" toggle. Derived from the persisted
-  // smtpUsername (empty string = on). Tracked as its own state so the
-  // user can toggle off, type a username, toggle back on (clearing), and
-  // toggle off again without losing UI continuity. On save the parent
-  // reads the final smtpUsername — empty means SMTP uses IMAP creds,
-  // non-empty means use the separate-creds path.
-  let smtpUseSameAsIncoming = $state(smtpUsername === '')
+  // editAccount.smtpUsername (empty string = on). Tracked as its own
+  // state so the user can toggle off, type a username, toggle back on
+  // (clearing), and toggle off again without losing UI continuity. On
+  // save the parent reads the final smtpUsername — empty means SMTP
+  // uses IMAP creds, non-empty means use the separate-creds path.
+  //
+  // IMPORTANT: capture from editAccount.smtpUsername, NOT from the
+  // smtpUsername prop. bits-ui Tabs.Content always-renders its children
+  // (only hides via CSS), so this component mounts immediately when the
+  // dialog opens — BEFORE the parent dialog's $effect has had a chance
+  // to populate the form state `smtpUsername` from editAccount. Reading
+  // the form prop here captured the parent's initial empty default,
+  // which is why the toggle always appeared as "Same as IMAP" on reopen
+  // / restart even when separate creds were persisted. The const indirection
+  // is to suppress Svelte's "only captures initial value" warning —
+  // initial-only capture is exactly what we want here (editAccount is
+  // stable for the life of this mount; the dialog unmounts on close).
+  // svelte-ignore state_referenced_locally
+  let smtpUseSameAsIncoming = $state(editAccount.smtpUsername === '')
 
   function handleSmtpUseSameAsIncomingChange(v: boolean) {
     smtpUseSameAsIncoming = v
@@ -536,7 +549,7 @@
               <Input
                 id="smtpPassword"
                 type="password"
-                placeholder={$_('account.smtpPasswordPlaceholder')}
+                placeholder={$_('account.leaveEmptyToKeep')}
                 bind:value={smtpPassword}
                 oninput={(e) => onSmtpPasswordChange((e.target as HTMLInputElement).value)}
                 class={errors.smtpPassword ? 'border-destructive' : ''}

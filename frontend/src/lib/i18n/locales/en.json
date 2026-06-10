@@ -563,6 +563,7 @@
     "smtpUseSameAsIncoming": "Same as incoming server",
     "smtpUsernamePlaceholder": "smtp-user@example.com",
     "smtpPasswordPlaceholder": "SMTP password",
+    "smtpCredsNote": "If you set a different username and password for SMTP, you can modify it in the \"SMTP authentication\" section in the \"Server\" tab.",
     "trustedCertificates": "Trusted Certificates",
     "trustedCertsHelp": "Manually trusted TLS certificates for this account's servers.",
     "loadingCerts": "Loading certificates...",

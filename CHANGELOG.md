@@ -24,6 +24,7 @@
 - Fixed drag-n-drop inline image - [#224](https://github.com/hkdb/aerion/issues/224)
 - Fixed duplicate inline image rendering
 - Fixed post action blank conversation pane - [#271](https://github.com/hkdb/aerion/issues/271)
+- Fixed separate smtp creds persistence - [#270](https://github.com/hkdb/aerion/issues/270)
 
 
 **v0.2.5 - 05-27-2026**

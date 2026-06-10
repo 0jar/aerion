@@ -255,6 +255,7 @@
           <li>Fixed drag-n-drop inline image - #224</li>
           <li>Fixed duplicate inline image rendering</li>
           <li>Fixed post action blank conversation pane - #271</li>
+          <li>Fixed separate smtp creds persistence - #270</li>
         </ul>
       </description>
     </release>
