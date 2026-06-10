@@ -799,6 +799,13 @@
     "agreeLabel": "I have read and agree to the Terms of Use and Privacy Policy",
     "accept": "Accept & Continue"
   },
+  "oauthMissing": {
+    "title": "OAuth credentials missing",
+    "intro": "This build is missing Aerion OAuth credentials for:",
+    "implication": "This means the providers that have missing credentials will not work properly. This is likely because you did not install Aerion from an official source.",
+    "installInstruction": "To install Aerion from an official source, see:",
+    "dontShowAgain": "Don't show this again"
+  },
   "dialog": {
     "deletePermanently": "Delete Permanently?",
     "deleteDescription": "This will permanently delete the selected message(s). This action cannot be undone.",

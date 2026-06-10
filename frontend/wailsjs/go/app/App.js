@@ -490,6 +490,10 @@ export function GetLanguage() {
   return window['go']['app']['App']['GetLanguage']();
 }
 
+export function GetLastSeenVersion() {
+  return window['go']['app']['App']['GetLastSeenVersion']();
+}
+
 export function GetLinkedAccountsForContactSync() {
   return window['go']['app']['App']['GetLinkedAccountsForContactSync']();
 }
@@ -534,6 +538,10 @@ export function GetNativeTitleBar() {
   return window['go']['app']['App']['GetNativeTitleBar']();
 }
 
+export function GetOAuthBuildStatus() {
+  return window['go']['app']['App']['GetOAuthBuildStatus']();
+}
+
 export function GetOAuthCredsChoices(arg1, arg2) {
   return window['go']['app']['App']['GetOAuthCredsChoices'](arg1, arg2);
 }
@@ -544,6 +552,10 @@ export function GetOAuthCredsStatus(arg1) {
 
 export function GetOAuthStatus(arg1) {
   return window['go']['app']['App']['GetOAuthStatus'](arg1);
+}
+
+export function GetOAuthWarningDisabled() {
+  return window['go']['app']['App']['GetOAuthWarningDisabled']();
 }
 
 export function GetPGPEncryptPolicy(arg1) {
@@ -1038,6 +1050,10 @@ export function SetLanguage(arg1) {
   return window['go']['app']['App']['SetLanguage'](arg1);
 }
 
+export function SetLastSeenVersion(arg1) {
+  return window['go']['app']['App']['SetLastSeenVersion'](arg1);
+}
+
 export function SetMailtoMode(arg1) {
   return window['go']['app']['App']['SetMailtoMode'](arg1);
 }
@@ -1064,6 +1080,10 @@ export function SetOAuthCreds(arg1, arg2, arg3) {
 
 export function SetOAuthCredsChoice(arg1, arg2) {
   return window['go']['app']['App']['SetOAuthCredsChoice'](arg1, arg2);
+}
+
+export function SetOAuthWarningDisabled(arg1) {
+  return window['go']['app']['App']['SetOAuthWarningDisabled'](arg1);
 }
 
 export function SetPGPEncryptPolicy(arg1, arg2) {
