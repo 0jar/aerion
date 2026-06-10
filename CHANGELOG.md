@@ -8,6 +8,7 @@
 - Added Extension infrastructure
 - ALPHA: Added Contacts extension - shipped disabled
 - ALPHA: Added Calendar extension - shipped disabled
+- Added runtime config of client id/secret - [#138](https://github.com/hkdb/aerion/issues/138)
 - Added force re-sync of contacts
 - Added separate smtp credentials option - [#264](https://github.com/hkdb/aerion/issues/264)
 - Added no outgoing server option - [#132](https://github.com/hkdb/aerion/issues/132) [(#134)](https://github.com/hkdb/aerion/pull/134)
