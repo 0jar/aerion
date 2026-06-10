@@ -238,7 +238,7 @@
           <li>Prepared CardDav infra for extensibility</li>
           <li>Added Extension infrastructure</li>
           <li>ALPHA: Added Contacts extension - shipped disabled</li>
-          <li>ALPHA: Added Calendar extension - shipped disabled</li>
+          <li>ALPHA: Added Calendar extension - shipped disabled - #28</li>
           <li>Added runtime config of client id/secret - #138</li>
           <li>Added force re-sync of contacts</li>
           <li>Added separate smtp credentials option - #264</li>
