@@ -53,11 +53,14 @@ Although Linux is a first-class citizen here, it also works on:
     - Yahoo 
     - Proton Mail (via Proton Bridge)
     - iCloud Mail 
+    - Mailfence
+    - Murena
     - Fastmail 🧪
     - Zoho Mail 🧪
     - AOL Mail 🧪
     - GMX Mail 
     - Mail.com 🧪
+    - Mailbox.org
 - Unified Inbox (Color Code Accounts)
 - Conversation Threads
 - Basic Removal of Tracking Elements in Mail Content
@@ -69,9 +72,9 @@ Although Linux is a first-class citizen here, it also works on:
 - Auto-Sync when system wakes from suspend
 - Multiple color themes (More to come...)
 - PGP & S/MIME support
-- 1st party extension system with the following shipped disabled:
-    - Calendar (ALPHA)
-    - Contacts (ALPHA)
+- 1st party extension system with the following shipped:
+    - Calendar (ALPHA) - Disabled by Default
+    - Contacts (ALPHA) - Disabled by Default
 - [Keyboard Shortcuts](docs/KEYBOARD_SHORTCUTS.md)
 
 
