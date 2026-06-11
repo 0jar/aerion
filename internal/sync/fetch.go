@@ -331,10 +331,7 @@ func shouldChargeFailure(receivedBytes, reportedSize int64) bool {
 		return true
 	}
 	threshold := int64(float64(reportedSize) * bodyTruncationThreshold)
-	if receivedBytes < threshold {
-		return false
-	}
-	return true
+	return receivedBytes >= threshold
 }
 
 // markUnresolvedAsFailed persists messages.body_failed=1 for any requested ID

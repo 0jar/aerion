@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -103,7 +104,7 @@ func NewClient(config ClientConfig) *Client {
 
 // Connect establishes a connection to the IMAP server and logs in
 func (c *Client) Connect() error {
-	addr := fmt.Sprintf("%s:%d", c.config.Host, c.config.Port)
+	addr := net.JoinHostPort(c.config.Host, strconv.Itoa(c.config.Port))
 
 	c.log.Debug().
 		Str("host", c.config.Host).
