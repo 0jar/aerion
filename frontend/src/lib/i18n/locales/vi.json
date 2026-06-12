@@ -773,7 +773,9 @@
     "update": "Cập nhật",
     "linked": "đã liên kết",
     "autoName": "Danh bạ {name}",
-    "minutesFallback": "{value} phút"
+    "minutesFallback": "{value} phút",
+    "enableWriteAccess": "Bật quyền ghi cho nguồn này",
+    "enableWriteAccessDescription": "Cho phép chỉnh sửa, tạo và xóa danh bạ trên máy chủ CardDAV này sử dụng thông tin đăng nhập ở trên."
   },
   "certificate": {
     "title": "Chứng chỉ không đáng tin cậy",
